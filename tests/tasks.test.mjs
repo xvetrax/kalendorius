@@ -185,3 +185,40 @@ test("pagination is followed only for the same Graph task list", async (t) => {
   graph.request=async (url) => {if(url.startsWith("/me/todo/lists?"))return {value:[{id:"list-a"}]};calls++; return calls===1 ? {value:[{id:"a",title:"Pirma"}],"@odata.nextLink":"https://graph.microsoft.com/v1.0/me/todo/lists/list-a/tasks?$skiptoken=next"} : {value:[{id:"b",title:"Antra"}]};};
   const result=await service.list(); assert.equal(result.items.length,2); assert.deepEqual(result.warnings,[]); assert.equal(calls,2);
 });
+
+
+test("Microsoft source completion clears persisted schedule without reviving it on restore", async (t) => {
+  const {service,graph}=fixture(t); let task=(await service.list()).items[0];
+  task=await service.update({...ref(task),scheduled_at:start});const stale=ref(task);
+  graph.remote.get("1").status="completed";
+  task=(await service.list()).items[0];assert.equal(task.completed,1);assert.equal(task.scheduled_at,null);
+  await assert.rejects(service.update({...stale,scheduled_at:start}),e=>e.status===409);
+  graph.remote.get("1").status="notStarted";
+  task=(await service.list()).items[0];assert.equal(task.completed,0);assert.equal(task.scheduled_at,null);
+  assert.ok(graph.calls.every(c=>c.method==="GET"));
+});
+
+test("Microsoft multi-list discovery and creation use selected account-bound lists, preserving identical task ids",async t=>{
+  const {db,graph}=fixture(t);const writes=[];
+  graph.request=async (raw,init={})=>{
+    const u=new URL(raw,"https://fixture.invalid");
+    if(u.pathname==="/me/todo/lists")return u.searchParams.has("$skiptoken")?{value:[{id:"second",displayName:"Antras",wellknownListName:"none"},{id:"flagged",wellknownListName:"flaggedEmails"}]}:{value:[{id:"first",displayName:"Pirmas"}],"@odata.nextLink":"https://graph.microsoft.com/v1.0/me/todo/lists?$skiptoken=next"};
+    if(init.method==="POST"){writes.push({raw,body:JSON.parse(init.body)});return {id:"created",...JSON.parse(init.body)};}
+    return {value:[{id:"same",title:"Užduotis"}]};
+  };
+  const service=createTaskService(db,graph),result=await service.list();assert.equal(result.lists.length,3);assert.equal(new Set(result.items.map(t=>t.key)).size,3);
+  const task=await service.create({source:"microsoft",account_id:"account-a",list_id:"second",title:"Pasirinktas sąrašas"});
+  assert.equal(task.list_id,"second");assert.equal(writes[0].raw,"/me/todo/lists/second/tasks");
+  await assert.rejects(service.create({source:"microsoft",account_id:"account-a",list_id:"flagged",title:"Neleistina"}),e=>e.status===403);
+  assert.equal(writes.length,1);const locked=result.items.find(t=>t.list_id==="flagged");
+  await assert.rejects(service.update({...ref(locked),completed:true}),e=>e.status===403);
+  assert.equal((await service.update({...ref(locked),scheduled_at:start})).scheduled_at,start);
+});
+
+test("source completion marks an existing Outlook block for explicit cleanup and retries safely",async t=>{
+  const {service,graph}=fixture(t);let task=(await service.list()).items[0];
+  task=await service.update({...ref(task),scheduled_at:start,mirror_requested:true});
+  graph.remote.get("1").status="completed";graph.calls.length=0;
+  task=(await service.list()).items[0];assert.equal(task.scheduled_at,null);assert.ok(task.mirror_error);assert.ok(graph.calls.every(c=>c.method==="GET"));
+  task=await service.update({...ref(task),scheduled_at:null,mirror_requested:false});assert.equal(task.mirror_error,null);assert.equal(graph.events.size,0);
+});

@@ -77,3 +77,84 @@ test("in-flight sign-in cannot undo a newer disconnect",async () => {
   waiting.resolve(json({access_token:"new-access",refresh_token:"new-refresh"}));
   await assert.rejects(signingIn,/pasikeitė/);assert.equal(google.isGoogleConnected(),false);
 });
+
+const tasksScope="https://www.googleapis.com/auth/tasks",calendarScope="https://www.googleapis.com/auth/calendar";
+function allowTasks(){saveSetting("google_granted_scopes",`${calendarScope} ${tasksScope}`);}
+
+test("legacy Calendar connection requires explicit Tasks consent and never attempts Tasks requests",async()=>{
+  assert.equal(google.isGoogleConnected(),true);assert.equal(google.isGoogleTasksConnected(),false);assert.equal(google.googleTasksStatus(),"permission_required");
+  const url=new URL(google.googleAuthUrl("test-state"));
+  for(const [key,value] of Object.entries({include_granted_scopes:"true",prompt:"consent",access_type:"offline",state:"test-state",login_hint:"old-account"}))assert.equal(url.searchParams.get(key),value);
+  assert.ok(url.searchParams.get("scope").split(" ").includes(tasksScope));
+  await assert.rejects(google.googleTasksFetch("/users/@me/lists"),/Tasks leidimą/);
+});
+
+test("incremental grant without a refresh token reuses only the verified same account token",async()=>{
+  globalThis.fetch=async url=>url.includes("/token")?json({access_token:"new-access",scope:`${calendarScope} ${tasksScope}`}):json({sub:"old-account"});
+  assert.equal((await google.exchangeCode("consent")).tasksConnected,true);assert.equal(google.isGoogleTasksConnected(),true);
+  assert.equal(decrypt(setting("google_refresh_token")),"old-refresh");
+  const generation=setting("google_connection_generation");
+  globalThis.fetch=async url=>url.includes("/token")?json({access_token:"other-access",scope:tasksScope}):json({sub:"other-account"});
+  await assert.rejects(google.exchangeCode("other-account"),/refresh token/);
+  assert.equal(setting("google_connection_generation"),generation);assert.equal(setting("google_account_id"),"old-account");
+});
+
+test("partial Tasks consent preserves Calendar and missing scopes never invent a new grant",async()=>{
+  allowTasks();
+  globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access",refresh_token:"replacement",scope:calendarScope}):json({sub:"old-account"});
+  assert.equal((await google.exchangeCode("partial")).tasksConnected,false);assert.equal(google.isGoogleConnected(),true);
+  globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access"}):json({items:[]});
+  assert.deepEqual(await google.googleFetch("/calendars/primary/events"),{items:[]});
+  globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access",refresh_token:"new-refresh"}):json({sub:"new-account"});
+  assert.equal((await google.exchangeCode("no-scopes")).tasksConnected,false);assert.equal(setting("google_granted_scopes"),"");
+});
+
+test("refresh scope removal blocks Tasks but leaves Calendar usable; missing refresh scope preserves known grants",async()=>{
+  allowTasks();let apiCalls=0;
+  globalThis.fetch=async url=>{if(url.includes("/token"))return json({access_token:"access",scope:calendarScope});apiCalls++;return json({items:[]});};
+  await assert.rejects(google.googleTasksFetch("/users/@me/lists"),/Tasks leidimą/);assert.equal(apiCalls,0);
+  await google.googleFetch("/calendars/primary/events");assert.equal(apiCalls,1);
+  allowTasks();globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access"}):json({items:[]});
+  await google.googleTasksFetch("/users/@me/lists");assert.equal(google.googleTasksStatus(),"connected");
+});
+
+test("disabled Tasks API is distinct from denied scope and can recover without another consent",async()=>{
+  allowTasks();let failing=true;
+  globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access"}):failing?json({error:{details:[{reason:"SERVICE_DISABLED"}]}},403):json({items:[]});
+  await assert.rejects(google.googleTasksFetch("/users/@me/lists"),e=>e.status===403);
+  assert.equal(google.googleTasksStatus(),"api_unavailable");assert.equal(google.isGoogleTasksConnected(),true);
+  failing=false;await google.googleTasksFetch("/users/@me/lists");assert.equal(google.googleTasksStatus(),"connected");
+  globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access"}):json({error:{errors:[{reason:"insufficientPermissions"}]}},403);
+  await assert.rejects(google.googleTasksFetch("/users/@me/lists"));assert.equal(google.googleTasksStatus(),"permission_required");
+  google.disconnectGoogle();assert.equal(google.googleTasksStatus(),"disconnected");assert.equal(setting("google_tasks_status"),undefined);
+});
+
+test("quota errors never masquerade as missing consent and successful empty deletes are supported",async()=>{
+  allowTasks();globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access"}):json({error:{errors:[{reason:"rateLimitExceeded"}]}},403);
+  await assert.rejects(google.googleTasksFetch("/users/@me/lists"));assert.equal(google.googleTasksStatus(),"connected");
+  globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access"}):new Response(null,{status:200});
+  assert.equal(await google.googleTasksFetch("/lists/a/tasks/1",{method:"DELETE"}),null);
+});
+
+test("late Tasks failures cannot attach permission errors to a newly connected account",async()=>{
+  allowTasks();const waiting=deferred(),started=deferred();
+  globalThis.fetch=async url=>{if(url.includes("/token"))return json({access_token:"access"});started.resolve();return waiting.promise;};
+  const request=google.googleTasksFetch("/users/@me/lists");await started.promise;
+  saveSetting("google_connection_generation","new-generation");saveSetting("google_account_id","new-account");
+  waiting.resolve(json({error:{details:[{reason:"SERVICE_DISABLED"}]}},403));await assert.rejects(request);
+  assert.equal(google.googleTasksStatus(),"connected");assert.equal(setting("google_tasks_status"),undefined);
+});
+
+test("revoked refresh tokens require reconnection without exposing provider error details",async()=>{
+  allowTasks();globalThis.fetch=async()=>json({error:"invalid_grant",error_description:"DO_NOT_EXPOSE"},400);
+  await assert.rejects(google.googleTasksFetch("/users/@me/lists"),e=>e.status===401&&!e.message.includes("DO_NOT_EXPOSE"));
+  assert.equal(google.googleTasksStatus(),"permission_required");
+});
+
+test("incremental consent keeps a token rotated during the account lookup",async()=>{
+  const waiting=deferred(),started=deferred();
+  globalThis.fetch=async url=>{if(url.includes("/token"))return json({access_token:"access",scope:tasksScope});started.resolve();return waiting.promise;};
+  const exchange=google.exchangeCode("incremental");await started.promise;saveSetting("google_refresh_token",encrypt("rotated-during-consent"));
+  waiting.resolve(json({sub:"old-account"}));await exchange;
+  assert.equal(decrypt(setting("google_refresh_token")),"rotated-during-consent");
+});

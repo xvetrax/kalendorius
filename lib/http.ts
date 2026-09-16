@@ -45,7 +45,7 @@ export function apiError(error: unknown) {
   return Response.json({ error: "Nepavyko susisiekti su išorine paslauga. Bandyk dar kartą." }, { status: 502 });
 }
 
-export function oauthResultUrl(requestUrl: string, provider: "microsoft" | "google", result: "connected" | "error" | "not-configured") {
+export function oauthResultUrl(requestUrl: string, provider: "microsoft" | "google", result: "connected" | "error" | "not-configured" | "tasks-permission-required") {
   let origin: string;
   try { origin = appOrigin(requestUrl); }
   catch { origin = safeOrigin(new URL(requestUrl).origin); }

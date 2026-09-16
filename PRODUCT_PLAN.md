@@ -1,6 +1,6 @@
 # „Dienos planas“ — kelias iki kasdien naudojamo produkto
 
-Atnaujinta: 2026-09-15. Būsena: **tikslas aktyvus; auditas atliktas, produktas dar nebaigtas**.
+Atnaujinta: 2026-09-16. Būsena: **tikslas aktyvus; auditas atliktas, produktas dar nebaigtas**.
 
 ## Tikslas ir darbo principas
 
@@ -130,11 +130,14 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 
 ### E. Microsoft To Do, Google Tasks ir vietinės užduotys
 
-- [ ] Sąrašų pasirinkimas ir valdymas; visų sąrašų bei užduočių puslapiavimas.
-- [ ] Sukurti, redaguoti, užbaigti, atkurti ir ištrinti; pastabos, datos, projektai / žymos ir trukmė.
+- [x] Google / Microsoft sąrašų pasirinkimas, visų sąrašų bei užduočių puslapiavimas; saugūs paskyros ir sąrašo ryšiai.
+- [ ] Sąrašų kūrimas, pervadinimas ir šalinimas.
+- [x] Sukurti, redaguoti, užbaigti, atkurti ir ištrinti visų trijų šaltinių užduotis; pastabos, datos, vietiniai projektai / žymos ir trukmė (sintetinės API patikra).
 - [ ] Microsoft svarba, priminimai, kartojimas, žingsniai. „Mano diena“ tiksliai atskiriama nuo Microsoft „My Day“, jei vieša API jo nesinchronizuoja.
-- [ ] Google užduotys ir pavaldžios užduotys, eilės tvarka, perkėlimas tarp palaikomų sąrašų; papildomi Tasks API OAuth leidimai ir pakartotinis sutikimas.
-- [ ] Vienodas vietinis planavimas visų šaltinių užduotims, būsenos pasikeitimo sinchronizacija, šaltinio nuoroda.
+- [x] Google užduočių ir pavaldžių užduočių skaitymas bei bendras planavimas; papildomas Tasks OAuth leidimas ir pakartotinio sutikimo eiga (imitacinė patikra).
+- [ ] Google hierarchijos ir eilės tvarkos keitimas, perkėlimas tarp palaikomų sąrašų.
+- [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
+- [ ] Gyvų paskyrų patikra ir šaltinyje ištrintų užduočių pasirenkamų Outlook blokų sutvarkymas.
 - [ ] Fokusavimo sesijos su išsaugomu pradžios laiku, pauze ir užduoties ryšiu; po perkrovimo laikmatis nepraranda būsenos.
 
 Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti, perkelti, užbaigti ir atkurti; persikrovus bei pasikeitus duomenims šaltinyje rodoma teisinga būsena. Nepalaikomi laukai nepateikiami kaip tariamai sinchronizuojami.
@@ -195,3 +198,14 @@ Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, pr
 Tikram OAuth prisijungimui ir paskyrų patikrai reikės naudotojo veiksmų oficialiuose prisijungimo puslapiuose. Tai netrukdo įgyvendinti ir imituotomis API tikrinti integracijas. Viešas publikavimas, tikrų susitikimų siuntimas ir tiekėjų paskyrų konfigūravimas nėra atliekami vien audito metu.
 
 AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio naudotojų sistema ir papildomos integracijos lieka po šių pagrindinių funkcijų. Jų nereikia tam, kad veiktų prašomas asmeninis kalendorius ir užduočių valdymas.
+
+
+## 2026-09-16 — E etapo bendras užduočių planavimas ir Google sutikimas
+
+- Tęstas jau commit’e buvęs trijų šaltinių adapteris: Google `due_date` saugoma kaip diena, `scheduled_at` ir trukmė lieka SQLite. Planavimas, perkėlimas ir trukmė nekeičia tiekėjo datos ir nesiunčia užduočių ar kalendorių rašymo užklausų be atskiro Outlook bloko pasirinkimo.
+- Patikrinti kelių sąrašų / užduočių puslapiai, vienodi ID skirtinguose sąrašuose, paskyros pasikeitimas, dalinis ryšio sutrikimas, plano išlikimas po DB atidarymo iš naujo, visi CRUD veiksmai ir tikri API maršrutai su tinklo pakaitalu.
+- Šaltinyje užbaigtos užduoties vietinis planas pašalinamas; atkūrimas seno bloko negrąžina. Esamo Outlook bloko pašalinimas atliekamas aiškiai išsaugant užduotį, su pakartojimo pranešimu.
+- Sąsajoje pridėtas atnaujinimas, ištrynimas su šaltinio patvirtinimu, vietinių projekto / žymų redagavimas, šaltinio nuorodos ir Google pavaldžios užduoties žyma.
+- Google OAuth naudoja papildomą Tasks leidimą, pakartotinį sutikimą ir tik faktiškai grąžintus leidimus. Dalinis / atmestas sutikimas nesunaikina ankstesnio Calendar ryšio. Trūkstamas refresh token pakartotinai naudojamas tik tai pačiai patvirtintai paskyrai. Atskiriamos leidimo ir išjungtos API būsenos, įjungus API galima pakartoti skaitymą.
+- Patikra: `npm run typecheck`, 81/81 `npm test`, `npm run build`, `test:smoke`, `test:calendars` ir `test:tasks` praėjo. Produkcinėje sintetinėje kopijoje naršykle patikrintas Google užduoties kūrimas, atskiras dienos ir darbo laiko įvedimas, plano / žymų išlikimas po perkrovimo, užbaigimas, atkūrimas ir leidimo būsena; konsolėje klaidų nebuvo.
+- Ribos: tikros paskyros nebuvo keičiamos ar autorizuojamos. Visas E etapas dar nebaigtas: lieka sąrašų administravimas, hierarchijos / eilės keitimas, To Do priminimai / kartojimas / žingsniai, fokusavimo išlikimas ir gyvų integracijų patvirtinimas. Docs / Chat priskirtos Google užduotys neįtraukiamos.

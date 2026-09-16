@@ -1,6 +1,6 @@
 # Dienos planas
 
-Nemokama, vieno naudotojo, savarankiškai talpinama „Morgen“ alternatyva. Pagrindinė integracija yra „Outlook Calendar“ + „Microsoft To Do“, o „Google Calendar“ galima prijungti papildomai.
+Nemokama, vieno naudotojo, savarankiškai talpinama „Morgen“ alternatyva. Vienoje darbo erdvėje sujungiami „Outlook Calendar“, „Google Calendar“, „Microsoft To Do“, „Google Tasks“ ir vietinės užduotys.
 
 ## Ką jau moka
 
@@ -12,13 +12,13 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 - visos dienos įvykius rodyti atskiroje kalendoriaus juostoje, įvykių paiešką taikyti dienos / savaitės / mėnesio kalendoriui;
 - naudoti visas 24 valandas, persidengiančius įvykius ir užduotis rodyti greta, naktinius blokus skaidyti per dienas ir matyti dabartinio laiko liniją;
 - kurti tikrus „Outlook“ įvykius, siųsti kvietimus ir pridėti „Teams“ nuorodą;
-- skaityti, kurti bei užbaigti „Microsoft To Do“ užduotis;
+- pasirinkti Google Tasks arba Microsoft To Do sąrašą, skaityti visus puslapius, kurti, redaguoti, užbaigti, atkurti ir ištrinti užduotis;
 - pasirinktinai kurti „Google Calendar“ susitikimus su „Google Meet“;
-- planuoti vietines ir „Microsoft To Do“ užduotis atskirai nuo termino, nekeičiant Outlook `Free/Busy`;
+- planuoti vietines, „Microsoft To Do“ ir „Google Tasks“ užduotis bendrame kalendoriuje; darbo laikas saugomas vietoje, atskirai nuo tiekėjo datos;
 - pasirinktinai susieti užduotį su Outlook `Show as: Free` bloku, jį atnaujinti perplanuojant ir pašalinti užbaigus užduotį šioje programėlėje;
 - tempti neplanuotas užduotis į dienos / savaitės kalendorių, perkelti suplanuotas tarp dienų ir keisti trukmę tempiant apatinį kraštą;
 - redaguoti užduoties pavadinimą, pastabas, terminą, prioritetą ir planą; trukmę keisti ir klaviatūros rodyklėmis;
-- rodyti vietines užduotis ir prijungus Microsoft; pasirinkti naujos užduoties šaltinį;
+- rodyti vietines užduotis ir prijungus abi išorines paskyras; pasirinkti naujos užduoties šaltinį bei sąrašą;
 - naudoti dienos, darbo savaitės, savaitės ir mėnesio rodinius;
 - suskleisti dešinę užduočių juostą, pasirinkti šviesią / tamsią / įrenginio temą ir išsaugoti pasirinkimus naršyklėje;
 - telefone iškart matyti dienos kalendorių, perjungti užduotis / fokusą / nustatymus apatine navigacija ir planuoti užduotį redaktoriumi;
@@ -36,7 +36,7 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 1. „Microsoft Entra admin center“ užregistruok aplikaciją ir pridėk Web redirect URI `http://localhost:3000/api/microsoft/callback`.
 2. Pridėk delegated leidimus: `User.Read`, `Calendars.ReadWrite`, `Tasks.ReadWrite` ir `offline_access`; sukurk Client Secret.
 3. Nukopijuok `.env.example` į `.env`, įrašyk Microsoft Client ID, Client Secret ir 64 simbolių šifravimo raktą (`openssl rand -hex 32`).
-4. Jei nori ir Google, „Google Cloud Console“ įjunk Calendar API, sukurk Web OAuth klientą ir redirect URI `http://localhost:3000/api/google/callback`.
+4. Jei nori ir Google, „Google Cloud Console“ tame pačiame projekte įjunk Calendar API ir Tasks API, sukurk Web OAuth klientą ir redirect URI `http://localhost:3000/api/google/callback`.
 5. Paleisk `docker compose up --build` ir atidaryk `http://localhost:3000`.
 
 `APP_ORIGIN`, `GOOGLE_REDIRECT_URI` ir `MICROSOFT_REDIRECT_URI` turi naudoti tą pačią kilmę bei tikslius callback kelius. HTTP leidžiamas tik `localhost` / `127.0.0.1`; viešam adresui naudok HTTPS. Programa visur naudoja 3000 prievadą, nebent tą pačią alternatyvą nuosekliai pakeiti visuose trijuose kintamuosiuose ir Docker portų susiejime.
@@ -51,14 +51,25 @@ npm run typecheck
 npm run build
 npm run test:smoke
 npm run test:calendars
+npm run test:tasks
 npm start
 ```
 
-`npm test` turi 53 automatinius testus, įskaitant tikrą SQLite migraciją ir plano išlikimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą ir nepasiekiamą naršyklės saugyklą. Testai nenaudoja tikrų paskyrų ar raktų.
+`npm test` apima automatinius regresinius testus, įskaitant tikrą SQLite migraciją ir plano išlikimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą ir nepasiekiamą naršyklės saugyklą. Testai nenaudoja tikrų paskyrų ar raktų.
 
 `test:smoke` paleidžia tik lokalią produkcinę kopiją su laikina DB ir neprijungtomis integracijomis. Tikrina CSS / JS / favicon, OAuth klaidas, CSRF, atjungimo API bei užduoties sukūrimą, planavimą, perkėlimą, trukmę, išplanavimą ir užbaigimą. Tikrina, kad terminas nekinta ir pasenusi plano versija atmetama. Užbaigęs pašalina savo testinę DB.
 
 `test:calendars` tikrina produkcinius kalendorių HTTP maršrutus su atskira laikina DB ir sintetiniu Google / Microsoft pakaitalu. Išorinės užklausos nepatenka pas tikrus tiekėjus. `node tests/calendar-smoke.mjs --preview` po tų patikrų palieka testinę programėlę `http://127.0.0.1:3101` naršyklės bandymams iki Ctrl+C. Šis pakaitalas įjungiamas tik atskiru Node testiniu paleidimu, ne programėlės nustatymu. Tai nėra tikrų integracijų veikimo įrodymas.
+
+`test:tasks` tikrina produkcinius vietinių, Google Tasks ir Microsoft To Do užduočių maršrutus: kūrimą, planavimą, perkėlimą, trukmę, užbaigimą, atkūrimą ir ištrynimą. Naudojama laikina DB ir tik sintetiniai tiekėjai; išorinis tinklas užblokuotas. `node tests/tasks-smoke.mjs --preview` palieka tą kopiją `http://127.0.0.1:3102` naršyklės patikrai iki Ctrl+C.
+
+## Google Tasks leidimas
+
+Google OAuth sutikimo ekrane pridėk `https://www.googleapis.com/auth/tasks` prie naudojamo Calendar leidimo. Jei projektas yra testavimo režimu, pridėk savo paskyrą prie testinių naudotojų. Tasks API įjungimas projekte ir naudotojo suteiktas Tasks leidimas yra du atskiri reikalavimai.
+
+Anksčiau prijungtai Google paskyrai atverk **Nustatymai → Suteikti Tasks leidimą**. Prisijunk prie tos pačios paskyros ir pažymėk užduočių leidimą. Programa prašo pakartotinio sutikimo (`prompt=consent`) bei ankstesnių leidimų įtraukimo (`include_granted_scopes=true`) ir tikrina iš tikrųjų grąžintus leidimus. Atmetus papildomą sutikimą, ankstesnis ryšys lieka išsaugotas; suteikus tik Calendar leidimą, Google užduotys nerodomos kaip prijungtos. Jei Google negrąžina naujo atnaujinimo žetono, turimas panaudojamas tik patikrinus, kad tai ta pati paskyra.
+
+Nustatymai atskiria trūkstamą leidimą nuo išjungtos Tasks API. Įjungęs API Google Cloud projekte paspausk **Atnaujinti duomenis** — pakartotinis sutikimas tam nereikalingas. Leidimų atšaukimas ar nebegaliojantis žetonas reikalauja prisijungti iš naujo. Gyvi OAuth scenarijai dar turi būti patikrinti su tikra paskyra. [Oficiali OAuth eiga](https://developers.google.com/identity/protocols/oauth2/web-server).
 
 ## Sąsaja ir pasirinkimai
 
@@ -82,18 +93,20 @@ API pagrindas: [Google PATCH](https://developers.google.com/workspace/calendar/a
 
 ## Užduoties terminas ir planas
 
-Terminas (`due_at`) ir suplanuoto darbo pradžia (`scheduled_at`) yra nepriklausomi. Užduotis su terminu iš pradžių lieka neplanuota. Tempimas ir trukmės keitimas saugomi serverio SQLite lentelėje `task_plans`; Microsoft užduoties terminas keičiamas tik aiškiai redaguojant termino lauką. Nuotolinės užduoties ryšys apima tiekėją, paskyrą, sąrašą ir ID.
+Vietinis / Microsoft terminas (`due_at`), Google užduoties diena (`due_date`) ir suplanuoto darbo pradžia (`scheduled_at`) yra nepriklausomi. Google Tasks API grąžina tik dieną; jos `due` laukas nėra tikslus darbo laikas ir nėra pristatomas kaip termino laikas. Google darbo pradžia, trukmė ir prioritetas saugomi tik čia. Projektai ir žymos visiems šaltiniams taip pat vietiniai. [Google užduoties modelis](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks). Užduotis su terminu iš pradžių lieka neplanuota. Tempimas ir trukmės keitimas saugomi serverio SQLite lentelėje `task_plans`; Microsoft užduoties terminas keičiamas tik aiškiai redaguojant termino lauką. Nuotolinės užduoties ryšys apima tiekėją, paskyrą, sąrašą ir ID.
 
 Spustelėk užduotį redagavimui. Apatinis kalendoriaus bloko kraštas keičia trukmę po 15 minučių; sufokusavus jį veikia ↑ / ↓. Planavimą galima panaikinti redaktoriuje arba grąžinti bloką į neplanuotų užduočių sritį. Užduotis ir jos terminas išlieka.
 
-Papildomas Outlook blokas kuriamas tik pasirinkus. Programėlė saugo jo ID ir kūrimo `transactionId`, todėl perplanavimas atnaujina susietą bloką. Blokas visada `free`, be dalyvių ir priminimo. Sutrikus ryšiui vietinis planas lieka išsaugotas, o redaktorius rodo pakartojimo klaidą. Pakartojimui turi būti prijungta ta pati paskyra. Microsoft pusėje užbaigtų / ištrintų užduočių automatinis susietų blokų sutvarkymas dar kuriamas.
+Papildomas Outlook blokas kuriamas tik pasirinkus. Programėlė saugo jo ID ir kūrimo `transactionId`, todėl perplanavimas atnaujina susietą bloką. Blokas visada `free`, be dalyvių ir priminimo. Sutrikus ryšiui vietinis planas lieka išsaugotas, o redaktorius rodo pakartojimo klaidą. Pakartojimui turi būti prijungta ta pati paskyra. Šaltinyje užbaigus Google ar Microsoft užduotį, duomenų atnaujinimas panaikina vietinį planą; atkūrus užduotį senas laikas negrąžinamas. Jei ji turi Outlook bloką, redaktorius pasiūlo išsaugoti ir pakartoti jo pašalinimą. Skaitymas pats išorinių įvykių nekeičia. Šaltinyje ištrintų užduočių susietų Outlook blokų automatinis sutvarkymas lieka neįgyvendintas.
 
 Pirmo paleidimo migracija senų vietinių užduočių dviprasmišką `due_at` išsaugo ir kaip terminą, ir kaip ankstesnį planą, pažymėdama jį redaktoriuje. Patikrink abi reikšmes. Ankstesnių Microsoft terminų atkurti automatiškai negalima, nes jų pradinės reikšmės MVP nesaugojo.
+
+Tiekėjų duomenys atnaujinami mygtuku **Atnaujinti duomenis** arba perkrovus puslapį. Nepavykus užklausai paskutiniai išsaugoti to sąrašo duomenys pažymimi kaip pasenę; vietinis planavimas veikia, kai ta pati paskyra tebėra prijungta ir turi reikiamą leidimą. Pakeitus paskyrą ankstesnių užduočių duomenys nerodomi. Google pavaldžios užduotys matomos ir planuojamos atskirai, jų hierarchija keičiama Google Tasks. Priskirtos Docs / Chat užduotys šiame etape neįtraukiamos. Google nuoroda atveria tiekėjo grąžintą užduotį arba Tasks programą; Microsoft nuoroda atveria To Do programą.
 
 ## Artimiausias funkcijų etapas
 
 - platesnis Google / Outlook įvykių redaktorius ir pasikartojimų valdymas;
-- Google Tasks ir keli Microsoft To Do sąrašai;
+- užduočių sąrašų kūrimas / valdymas, Google hierarchijos ir eilės keitimas, perkėlimas tarp sąrašų, To Do priminimai / kartojimas / žingsniai;
 - kelių dienų tempimas, automatinis slinkimas tempiant ir pilnas DST laiko pasirinkimas;
 - išsamesnis klaviatūros ir jutiklinis valdymas;
 - prieigos žetonų galiojimo talpykla bei tikrų abiejų paskyrų patikra;

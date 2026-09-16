@@ -5,7 +5,7 @@ export type RemoteTaskSource = "microsoft" | "google";
 export type TaskList = { key: string; source: RemoteTaskSource; account_id: string; list_id: string; name: string; writable: boolean; stale?: boolean };
 export type Task = {
   id: number | string; source: "local" | RemoteTaskSource; account_id?: string; list_id?: string; list_name?: string;
-  due_date?: string | null; readonly_reason?: string;
+  due_date?: string | null; readonly_reason?: string; source_url?: string; parent_id?: string;
   key: string; title: string; notes: string; due_at: string | null; scheduled_at: string | null;
   duration_minutes: number; completed: number; project: string; priority: "low" | "normal" | "high";
   tags: string; energy: string; schedule_version: number; legacy_schedule: number;
@@ -69,6 +69,15 @@ function dateOnly(value: unknown): string | null {
   return value;
 }
 function localKey(id: string | number) { return `local:${id}`; }
+function googleTaskLink(value: unknown) {
+  if (typeof value === "string") {
+    try {
+      const url = new URL(value);
+      if (url.origin === "https://tasks.google.com" && !url.username && !url.password) return url.href;
+    } catch { /* Fall back to the provider's task list. */ }
+  }
+  return "https://tasks.google.com/";
+}
 
 // Called after the original tasks schema/migrations. This migration is atomic
 // and preserves the original ambiguous due_at value as a deadline AND snapshot.
@@ -156,6 +165,8 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     const due = task.dueDateTime?.dateTime;
     return { id: identifier(task.id), key: remoteKey(list.account_id, list.list_id, task.id, list.source), source: list.source,
       account_id: list.account_id, list_id: list.list_id, list_name: list.name,
+      source_url: isGoogle ? googleTaskLink(task.webViewLink) : "https://to-do.office.com/tasks/",
+      ...(isGoogle && typeof task.parent === "string" ? {parent_id:task.parent} : {}),
       ...(list.writable ? {} : {readonly_reason:"Šis specialus sąrašas rodomas tik skaitymui. Darbo laiką galima planuoti vietoje."}),
       title: task.title || "Be pavadinimo", notes: isGoogle ? task.notes || "" : task.body?.content || "",
       due_at: !isGoogle && due ? new Date(/(Z|[+-]\d{2}:\d{2})$/i.test(due) ? due : `${due}Z`).toISOString() : null,
@@ -231,7 +242,17 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
           db.prepare("INSERT INTO remote_task_lists(list_key,source,account_id,list_json) VALUES (?,?,?,?)").run(entry.list.key,source,account,JSON.stringify(entry.list));
           if (entry.fresh) {
             db.prepare("DELETE FROM remote_tasks WHERE source=? AND account_id=? AND list_id=?").run(source,account,entry.list.list_id);
-            for (const task of entry.tasks) cache(task);
+            for (const task of entry.tasks) {
+              // A completion observed at the source must not resurrect the old
+              // work block when that task is later reopened. Failed reads never
+              // enter this branch, so an outage cannot erase a local plan.
+              if (task.completed) db.prepare(`UPDATE task_plans SET scheduled_at=NULL, mirror_requested=0,
+                schedule_version=schedule_version+1,
+                mirror_error=CASE WHEN mirror_event_id IS NOT NULL OR mirror_transaction_id IS NOT NULL
+                  THEN 'Užduotis užbaigta šaltinyje. Atverk ją ir išsaugok, kad pašalintum susietą Outlook bloką.' ELSE mirror_error END
+                WHERE task_key=? AND (scheduled_at IS NOT NULL OR mirror_requested<>0)`).run(task.key);
+              cache(task);
+            }
           }
         }
         for (const task of cachedTasks(account,source)) if (!available.some(list=>list.list_id === task.list_id)) db.prepare("DELETE FROM remote_tasks WHERE task_key=?").run(task.key);
