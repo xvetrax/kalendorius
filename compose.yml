@@ -1,0 +1,12 @@
+services:
+  planner:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    volumes:
+      - planner-data:/app/data
+
+volumes:
+  planner-data:

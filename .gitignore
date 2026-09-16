@@ -1,0 +1,16 @@
+node_modules
+.next
+.env
+.env.*
+!.env.example
+data/*.db*
+.sites-runtime
+*.tsbuildinfo
+node_modules/
+.next/
+.env
+.env.local
+.env*.local
+*.db
+*.sqlite
+.DS_Store
