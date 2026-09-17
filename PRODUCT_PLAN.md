@@ -131,7 +131,7 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 ### E. Microsoft To Do, Google Tasks ir vietinės užduotys
 
 - [x] Google / Microsoft sąrašų pasirinkimas, visų sąrašų bei užduočių puslapiavimas; saugūs paskyros ir sąrašo ryšiai.
-- [ ] Sąrašų kūrimas, pervadinimas ir šalinimas.
+- [x] Google / Microsoft sąrašų kūrimas, pervadinimas ir šalinimas su peržiūra bei pavadinimo patvirtinimu (imitacinė patikra; įtaisyti / svetimi Microsoft sąrašai ir sąrašai su Outlook blokais ar Docs / Chat užduotimis saugomi nuo šalinimo).
 - [x] Sukurti, redaguoti, užbaigti, atkurti ir ištrinti visų trijų šaltinių užduotis; pastabos, datos, vietiniai projektai / žymos ir trukmė (sintetinės API patikra).
 - [ ] Microsoft svarba, priminimai, kartojimas, žingsniai. „Mano diena“ tiksliai atskiriama nuo Microsoft „My Day“, jei vieša API jo nesinchronizuoja.
 - [x] Google užduočių ir pavaldžių užduočių skaitymas bei bendras planavimas; papildomas Tasks OAuth leidimas ir pakartotinio sutikimo eiga (imitacinė patikra).
@@ -209,3 +209,12 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - Google OAuth naudoja papildomą Tasks leidimą, pakartotinį sutikimą ir tik faktiškai grąžintus leidimus. Dalinis / atmestas sutikimas nesunaikina ankstesnio Calendar ryšio. Trūkstamas refresh token pakartotinai naudojamas tik tai pačiai patvirtintai paskyrai. Atskiriamos leidimo ir išjungtos API būsenos, įjungus API galima pakartoti skaitymą.
 - Patikra: `npm run typecheck`, 81/81 `npm test`, `npm run build`, `test:smoke`, `test:calendars` ir `test:tasks` praėjo. Produkcinėje sintetinėje kopijoje naršykle patikrintas Google užduoties kūrimas, atskiras dienos ir darbo laiko įvedimas, plano / žymų išlikimas po perkrovimo, užbaigimas, atkūrimas ir leidimo būsena; konsolėje klaidų nebuvo.
 - Ribos: tikros paskyros nebuvo keičiamos ar autorizuojamos. Visas E etapas dar nebaigtas: lieka sąrašų administravimas, hierarchijos / eilės keitimas, To Do priminimai / kartojimas / žingsniai, fokusavimo išlikimas ir gyvų integracijų patvirtinimas. Docs / Chat priskirtos Google užduotys neįtraukiamos.
+
+## 2026-09-17 — E etapo užduočių sąrašų valdymas
+
+- Pridėtas `/api/task-lists` ir langas „Tvarkyti sąrašus“ užduočių juostoje bei nustatymuose. Google / Microsoft sąrašą galima sukurti, pasirinkti naujoms užduotims ir pervadinti, išsaugant vietinius planus.
+- Prieš šalinimą serveris perskaito visus užduočių puslapius, sąsaja rodo skaičių ir reikalauja tikslaus sąrašo pavadinimo. Prieš DELETE iš naujo tikrinama paskyra, sąrašo versija ir užduočių turinys. Nesėkmingas šalinimas vietinių planų nenaikina; sėkmingas valo tik to tiekėjo, paskyros ir sąrašo duomenis.
+- Microsoft įtaisyti, neatpažinti ir ne savininko sąrašai neadministruojami. Google Docs / Chat priskirtos užduotys aptinkamos ir sustabdo sąrašo šalinimą. Bet kuris esamas ar nebaigtas Outlook susiejimas, įskaitant šaltinyje dingusios užduoties planą, taip pat sustabdo šalinimą.
+- Sąsaja blokuoja konkuruojančius veiksmus; yra rankinis atnaujinimas, pasenusių duomenų paaiškinimas ir pakartotinis pavadinimo įvedimas po konflikto. Neaiški kūrimo baigtis reikalauja atnaujinti sąrašus prieš bandant dar kartą.
+- Patikra: `npm run typecheck`, 102/102 `npm test`, `npm run build`, `test:smoke`, `test:calendars` ir `test:tasks` praėjo. Naršyklėje su sintetinėmis paskyromis sukurti abiejų tiekėjų sąrašai, Google sąrašas pervadintas, patikrinta paskirties pasirinkimo būsena, trynimo peržiūra / tikslaus pavadinimo reikalavimas / atšaukimas, atnaujinimas ir išlikimas po perkrovimo. 390 px lange sąrašų valdymas pasiekiamas iš nustatymų, konsolės klaidų nebuvo. Galutinį DELETE vykdė HTTP testai.
+- Ribos: gyvos API ir Google sąrašo `If-Match` elgsena nepatvirtintos; išorinis pakeitimas tarp paskutinio perskaitymo ir DELETE nėra atomiškai užkertamas. Praradus sėkmingo DELETE atsakymą, vietiniai planai paliekami; našlaičių sutvarkymas lieka kitam etapui. Visas E etapas dar nebaigtas: lieka To Do priminimai / kartojimas / žingsniai, Google hierarchijos / eilės keitimas ir perkėlimas, fokusavimo būsenos išlikimas bei gyvų integracijų patikra.

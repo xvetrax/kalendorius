@@ -1,8 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 export type RemoteTaskSource = "microsoft" | "google";
-export type TaskList = { key: string; source: RemoteTaskSource; account_id: string; list_id: string; name: string; writable: boolean; stale?: boolean };
+export type TaskList = { key: string; source: RemoteTaskSource; account_id: string; list_id: string; name: string; writable: boolean; stale?: boolean;
+  version?: string; can_rename?: boolean; can_delete?: boolean; management_reason?: string; etag?: string };
 export type Task = {
   id: number | string; source: "local" | RemoteTaskSource; account_id?: string; list_id?: string; list_name?: string;
   due_date?: string | null; readonly_reason?: string; source_url?: string; parent_id?: string;
@@ -69,6 +70,15 @@ function dateOnly(value: unknown): string | null {
   return value;
 }
 function localKey(id: string | number) { return `local:${id}`; }
+function listName(value: unknown) {
+  if (typeof value !== "string" || !value.trim() || value.length > 255) throw new TaskError("Įvesk sąrašo pavadinimą (iki 255 simbolių).");
+  return value.trim();
+}
+function fingerprint(value: unknown): string {
+  const stable = (item: any): any => Array.isArray(item) ? item.map(stable) : item && typeof item === "object"
+    ? Object.fromEntries(Object.keys(item).sort().map(key=>[key,stable(item[key])])) : item;
+  return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
+}
 function googleTaskLink(value: unknown) {
   if (typeof value === "string") {
     try {
@@ -200,18 +210,117 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     }
     return values;
   }
+  function mappedList(raw: any, source: RemoteTaskSource, account: string): TaskList {
+    const builtin = source === "microsoft" && raw.wellknownListName !== "none";
+    const managed = source === "google" || (!builtin && raw.isOwner === true);
+    const list: TaskList = {
+      key: JSON.stringify([source,account,identifier(raw.id)]), source, account_id:account, list_id:raw.id,
+      name:String(source === "google" ? raw.title || "Google Tasks" : raw.displayName || "Microsoft To Do"),
+      writable:source === "google" || !raw.wellknownListName || ["none","defaultList"].includes(raw.wellknownListName),
+      can_rename:managed,can_delete:managed,
+      ...(!managed ? {management_reason:builtin ? "Įtaisytų arba neatpažintų Microsoft sąrašų pervadinti ir šalinti negalima." : "Šį sąrašą gali valdyti tik jo savininkas."} : {}),
+      ...(typeof raw.etag === "string" ? {etag:raw.etag} : {}),
+    };
+    return {...list,version:fingerprint(list)};
+  }
   async function fetchLists(source: RemoteTaskSource, account: string): Promise<TaskList[]> {
     const raw = await pages(source, source === "google" ? "/users/@me/lists" : "/me/todo/lists", source === "google" ? "?maxResults=1000" : "?$top=100");
     requireAccount(account, source);
-    const lists = raw.map(list => ({
-      key: JSON.stringify([source, account, identifier(list.id)]), source, account_id:account, list_id:list.id as string,
-      name:String(source === "google" ? list.title || "Google Tasks" : list.displayName || "Microsoft To Do"),
-      writable:source === "google" || !list.wellknownListName || ["none","defaultList"].includes(list.wellknownListName),
-    }));
+    const lists = raw.map(list => mappedList(list,source,account));
     return [...new Map(lists.map(list=>[list.key,list])).values()];
   }
   function cachedLists(source: RemoteTaskSource, account: string): TaskList[] {
     return (db.prepare("SELECT list_json FROM remote_task_lists WHERE source=? AND account_id=?").all(source,account) as {list_json:string}[]).map(row=>JSON.parse(row.list_json));
+  }
+  function saveList(list: TaskList) {
+    db.prepare("INSERT INTO remote_task_lists(list_key,source,account_id,list_json) VALUES (?,?,?,?) ON CONFLICT(list_key) DO UPDATE SET list_json=excluded.list_json")
+      .run(list.key,list.source,list.account_id,JSON.stringify(list));
+  }
+  function listReference(input: Input): {source:RemoteTaskSource;account:string} {
+    if (input.source !== "google" && input.source !== "microsoft") throw new TaskError("Pasirink Google arba Microsoft sąrašą.");
+    const source = input.source, account = identifier(input.account_id);
+    requireAccount(account,source);
+    return {source,account};
+  }
+  async function currentList(input: Input) {
+    const {source,account} = listReference(input), id=identifier(input.list_id);
+    const list=(await fetchLists(source,account)).find(list=>list.list_id===id);
+    if (!list) throw new TaskError("Sąrašas neberastas. Atnaujink duomenis.",404);
+    return list;
+  }
+  const listPath = (source:RemoteTaskSource,id?:string) => (source === "google" ? "/users/@me/lists" : "/me/todo/lists") + (id ? "/"+encodeURIComponent(id) : "");
+  function matchingPlans(list: TaskList) {
+    return (db.prepare("SELECT * FROM task_plans").all() as Plan[]).filter(plan=>{
+      try {const parts=JSON.parse(plan.task_key);return Array.isArray(parts) && parts.length===4 && parts[0]===list.source && parts[1]===list.account_id && parts[2]===list.list_id;}
+      catch {return false;}
+    });
+  }
+  async function listCatalog() {
+    const results=await Promise.all((["google","microsoft"] as const).map(source=>serial("task-provider:"+source,async()=>{
+      const provider=source === "google" ? google : microsoft;
+      if (!provider?.connected()) return {lists:[] as TaskList[],accounts:[] as {source:RemoteTaskSource;account_id:string}[],warnings:[] as string[]};
+      let account=provider.cachedAccountId();
+      try {
+        account=await provider.accountId();const lists=await fetchLists(source,account);
+        for (const list of lists) saveList(list);
+        return {lists,accounts:[{source,account_id:account}],warnings:[]};
+      } catch {
+        const same=account && provider.connected() && provider.cachedAccountId()===account;
+        return {lists:same ? cachedLists(source,account!).map(list=>({...list,stale:true})) : [],accounts:[],warnings:[`${source === "google" ? "Google Tasks" : "Microsoft To Do"} sąrašų atnaujinti nepavyko. Bandyk atnaujinti dar kartą.`]};
+      }
+    })));
+    return {lists:results.flatMap(r=>r.lists),accounts:results.flatMap(r=>r.accounts),warnings:results.flatMap(r=>r.warnings)};
+  }
+  async function createList(input: Input) {
+    const {source,account}=listReference(input),name=listName(input.name);
+    const result=await gateway(source).request(listPath(source),{method:"POST",body:JSON.stringify(source === "google" ? {title:name} : {displayName:name})});
+    requireAccount(account,source);
+    const list=mappedList(result,source,account);saveList(list);return list;
+  }
+  async function renameList(input: Input) {
+    const name=listName(input.name),list=await currentList(input);
+    if (!list.can_rename) throw new TaskError(list.management_reason!,403);
+    if (input.version !== list.version) throw new TaskError("Sąrašas jau pakeistas. Atnaujink duomenis.",409);
+    const result=await gateway(list.source).request(listPath(list.source,list.list_id),{method:"PATCH",
+      ...(list.etag ? {headers:{"If-Match":list.etag}} : {}),body:JSON.stringify(list.source === "google" ? {title:name} : {displayName:name})});
+    requireAccount(list.account_id,list.source);
+    if (result?.id !== list.list_id) throw new TaskError("Paslauga grąžino kitą sąrašą. Atnaujink duomenis.",502);
+    const updated=mappedList(result,list.source,list.account_id);
+    db.exec("BEGIN IMMEDIATE");
+    try {saveList(updated);for (const task of cachedTasks(list.account_id,list.source,list.list_id)) cache({...task,list_name:updated.name});db.exec("COMMIT");}
+    catch(error){db.exec("ROLLBACK");throw error;}
+    return updated;
+  }
+  async function previewListDeletion(input: Input) {
+    const list=await currentList(input);
+    if (!list.can_delete) return {list,task_count:0,confirmation:null,blocked_reason:list.management_reason};
+    const path=list.source === "google" ? `/lists/${encodeURIComponent(list.list_id)}/tasks` : `/me/todo/lists/${encodeURIComponent(list.list_id)}/tasks`;
+    // Include hidden, completed and assigned Google tasks: deleting a list also
+    // deletes Docs/Chat originals, even though normal planning excludes them.
+    const raw=await pages(list.source,path,list.source === "google" ? "?maxResults=100&showCompleted=true&showHidden=true&showDeleted=false&showAssigned=true" : "?$top=100");
+    requireAccount(list.account_id,list.source);
+    const tasks=raw.filter(task=>!task.deleted).sort((a,b)=>identifier(a.id).localeCompare(identifier(b.id)));
+    const plans=matchingPlans(list);
+    const blocked=tasks.some(task=>task.assignmentInfo) ? "Sąraše yra iš Docs / Chat priskirtų užduočių. Šį sąrašą tvarkyk Google Tasks, nes šalinimas paliestų ir originalus."
+      : plans.some(plan=>plan.mirror_requested || plan.mirror_event_id || plan.mirror_transaction_id || plan.mirror_create_payload) ? "Sąrašas turi susietų arba nebaigtų kurti Outlook blokų. Pirmiausia pašalink jų susiejimą užduočių redaktoriuose." : undefined;
+    return {list,task_count:tasks.length,confirmation:blocked ? null : fingerprint({version:list.version,tasks}),...(blocked ? {blocked_reason:blocked} : {})};
+  }
+  async function deleteList(input: Input) {
+    if (typeof input.confirmation !== "string" || !input.confirmation || typeof input.confirm_name !== "string") throw new TaskError("Pirmiausia peržiūrėk šalinimą ir įvesk sąrašo pavadinimą.");
+    const preview=await previewListDeletion(input),{list}=preview;
+    if (preview.blocked_reason) throw new TaskError(preview.blocked_reason,409);
+    if (input.confirm_name !== list.name || input.version !== list.version || input.confirmation !== preview.confirmation) throw new TaskError("Sąrašas arba jo užduotys pasikeitė. Peržiūrėk šalinimą iš naujo.",409);
+    requireAccount(list.account_id,list.source);
+    await gateway(list.source).request(listPath(list.source,list.list_id),{method:"DELETE",...(list.etag ? {headers:{"If-Match":list.etag}} : {})});
+    requireAccount(list.account_id,list.source);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const plan of matchingPlans(list)) db.prepare("DELETE FROM task_plans WHERE task_key=?").run(plan.task_key);
+      db.prepare("DELETE FROM remote_tasks WHERE source=? AND account_id=? AND list_id=?").run(list.source,list.account_id,list.list_id);
+      db.prepare("DELETE FROM remote_task_lists WHERE list_key=?").run(list.key);
+      if (list.source === "microsoft") db.prepare("DELETE FROM settings WHERE key='microsoft_task_list_id' AND value=?").run(list.list_id);
+      db.exec("COMMIT");
+    } catch(error){db.exec("ROLLBACK");throw error;}
   }
   async function listProvider(source: RemoteTaskSource) {
     const items: Task[] = [], lists: TaskList[] = [], warnings: string[] = [];
@@ -431,5 +540,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
   }
   // Prevent a slow read from replacing a just-written remote cache snapshot.
   function mutation<T>(input: Input, operation: () => Promise<T>) {return input.source === "google" || input.source === "microsoft" ? serial("task-provider:" + input.source,operation) : operation();}
-  return { list, create:(input:Input)=>mutation(input,()=>create(input)), update:(input:Input)=>mutation(input,()=>update(input)), remove:(input:Input)=>mutation(input,()=>remove(input)) };
+  return { list, listCatalog, createList:(input:Input)=>mutation(input,()=>createList(input)), renameList:(input:Input)=>mutation(input,()=>renameList(input)),
+    previewListDeletion:(input:Input)=>mutation(input,()=>previewListDeletion(input)), deleteList:(input:Input)=>mutation(input,()=>deleteList(input)),
+    create:(input:Input)=>mutation(input,()=>create(input)), update:(input:Input)=>mutation(input,()=>update(input)), remove:(input:Input)=>mutation(input,()=>remove(input)) };
 }

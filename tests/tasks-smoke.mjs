@@ -36,7 +36,21 @@ try {
     const query=new URLSearchParams({id:String(task.id),source,...(remote?{account_id:task.account_id,list_id:task.list_id}:{})});
     assert.equal((await fetch(api+"?"+query,{method:"DELETE",headers})).status,200);
   }
+  const listsApi=`${origin}/api/task-lists`;
+  const catalog=await (await fetch(listsApi)).json();assert.equal(catalog.lists.length,2);assert.equal(catalog.accounts.length,2);assert.deepEqual(catalog.warnings,[]);
+  const microsoftDefault=catalog.lists.find(list=>list.source==="microsoft"),googleDefault=catalog.lists.find(list=>list.source==="google");
+  assert.equal(microsoftDefault.can_delete,false);assert.equal(googleDefault.can_delete,true);
+  assert.equal((await fetch(listsApi,{method:"POST",headers:{...headers,Origin:"https://attacker.example"},body:JSON.stringify({source:"google",account_id:"google-account",name:"Užblokuota"})})).status,403);
+  for(const source of ["google","microsoft"]){
+    const account_id=`${source}-account`;
+    const createdResponse=await fetch(listsApi,{method:"POST",headers,body:JSON.stringify({source,account_id,name:`HTTP ${source} sąrašas`})});assert.equal(createdResponse.status,201);const created=await createdResponse.json();
+    const renamedResponse=await fetch(listsApi,{method:"PATCH",headers,body:JSON.stringify({source,account_id,list_id:created.list_id,version:created.version,name:`HTTP ${source} pervadintas`})});assert.equal(renamedResponse.status,200);const renamed=await renamedResponse.json();
+    assert.equal((await fetch(listsApi,{method:"PATCH",headers,body:JSON.stringify({source,account_id,list_id:created.list_id,version:created.version,name:"Pasenęs"})})).status,409);
+    const deletion=await (await fetch(`${listsApi}?${new URLSearchParams({source,account_id,list_id:renamed.list_id})}`)).json();assert.equal(deletion.task_count,0);assert.equal(typeof deletion.confirmation,"string");
+    const deleted=await fetch(listsApi,{method:"DELETE",headers,body:JSON.stringify({source,account_id,list_id:renamed.list_id,version:renamed.version,confirmation:deletion.confirmation,confirm_name:renamed.name})});assert.equal(deleted.status,200);
+  }
+  const afterLists=await (await fetch(listsApi)).json();assert.ok(afterLists.lists.some(list=>list.list_id===microsoftDefault.list_id));assert.ok(afterLists.lists.some(list=>list.list_id===googleDefault.list_id));
   assert.equal((await (await fetch(origin+"/api/google/status")).json()).tasksConnected,true);
-  console.log(`OK: vietinių, Google ir Microsoft užduočių HTTP kūrimas, planavimas, perkėlimas, trukmė, užbaigimas, atkūrimas ir trynimas. ${origin}`);
+  console.log(`OK: vietinių, Google ir Microsoft užduočių bei sąrašų HTTP kūrimas, planavimas, pervadinimas, peržiūra ir trynimas. ${origin}`);
   if(preview)await new Promise(resolve=>{process.once("SIGINT",resolve);process.once("SIGTERM",resolve);});
 } finally {child.kill("SIGTERM");await stopped;rmSync(temp,{recursive:true,force:true});}

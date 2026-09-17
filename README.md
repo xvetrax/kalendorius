@@ -103,10 +103,20 @@ Pirmo paleidimo migracija senų vietinių užduočių dviprasmišką `due_at` i�
 
 Tiekėjų duomenys atnaujinami mygtuku **Atnaujinti duomenis** arba perkrovus puslapį. Nepavykus užklausai paskutiniai išsaugoti to sąrašo duomenys pažymimi kaip pasenę; vietinis planavimas veikia, kai ta pati paskyra tebėra prijungta ir turi reikiamą leidimą. Pakeitus paskyrą ankstesnių užduočių duomenys nerodomi. Google pavaldžios užduotys matomos ir planuojamos atskirai, jų hierarchija keičiama Google Tasks. Priskirtos Docs / Chat užduotys šiame etape neįtraukiamos. Google nuoroda atveria tiekėjo grąžintą užduotį arba Tasks programą; Microsoft nuoroda atveria To Do programą.
 
+## Užduočių sąrašai
+
+Užduočių juostoje arba nustatymuose pasirink **Tvarkyti sąrašus**. Galima sukurti Google Tasks arba Microsoft To Do sąrašą ir pervadinti valdomą sąrašą. Naują sąrašą pasirinkus kaip paskirties vietą, kitos užduotys kuriamos jame. Vietinės užduotys laikomos viename vietiniame sąraše.
+
+Prieš šalinimą rodoma dabartinė užduočių suma, reikia tiksliai įvesti sąrašo pavadinimą. Šalinamas sąrašas su jo užduotimis ir vietiniais planais; pervadinimas planus išsaugo. Serveris prieš pakeitimą iš naujo perskaito sąrašą, prieš šalinimą — ir visus užduočių puslapius. Pasikeitus duomenims reikia naujos peržiūros. Jei užklausos baigtis neaiški, pirmiausia atnaujink sąrašus ir patikrink rezultatą prieš kartodamas kūrimą.
+
+Įtaisytų ir ne savo Microsoft sąrašų administravimas išjungtas. Google sąrašai su priskirtomis Docs / Chat užduotimis netrinami, nes tiekėjas pašalintų ir originalus. Sąrašai su esamais ar nebaigtais kurti Outlook blokais taip pat netrinami: pirmiausia panaikink susiejimus užduočių redaktoriuose. Jei užduotis jau ištrinta šaltinyje ir redaktorius nebeprieinamas, jos bloko sutvarkymas lieka kitam etapui. [Microsoft sąrašo teisės](https://learn.microsoft.com/en-us/graph/api/resources/todotasklist?view=graph-rest-1.0), [Google sąrašo šalinimas](https://developers.google.com/workspace/tasks/reference/rest/v1/tasklists/delete).
+
+Patikra atliekama su izoliuotomis imitacinėmis API. Tai negarantuoja atominio šalinimo, jei kitoje programoje sąrašas pasikeičia tarp paskutinio perskaitymo ir tiekėjo DELETE; gyvų paskyrų ir Google sąrašo `If-Match` elgsena dar nepatvirtinta. Jei tiekėjas pašalina sąrašą, bet atsakymas prarandamas, vietiniai planai išsaugomi, kol rezultatas nėra patvirtintas; našlaičių valymas lieka nebaigtas.
+
 ## Artimiausias funkcijų etapas
 
 - platesnis Google / Outlook įvykių redaktorius ir pasikartojimų valdymas;
-- užduočių sąrašų kūrimas / valdymas, Google hierarchijos ir eilės keitimas, perkėlimas tarp sąrašų, To Do priminimai / kartojimas / žingsniai;
+- Google hierarchijos ir eilės keitimas, perkėlimas tarp sąrašų, To Do priminimai / kartojimas / žingsniai;
 - kelių dienų tempimas, automatinis slinkimas tempiant ir pilnas DST laiko pasirinkimas;
 - išsamesnis klaviatūros ir jutiklinis valdymas;
 - prieigos žetonų galiojimo talpykla bei tikrų abiejų paskyrų patikra;
