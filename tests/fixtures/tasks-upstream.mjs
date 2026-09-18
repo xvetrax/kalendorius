@@ -5,6 +5,7 @@ if (process.env.TASKS_TEST_FIXTURE !== "isolated") throw new Error("Test-only pr
 const clone = value => structuredClone(value);
 const microsoftSeed = () => new Map([["shared-id", {
   id: "shared-id", title: "Microsoft užduotis", status: "notStarted", importance: "high",
+  isReminderOn:false, reminderDateTime:null, "@odata.etag":"reminder-v1",
   body: {contentType: "text", content: "Microsoft pastaba"},
   dueDateTime: {dateTime: "2026-10-25T08:00:00.0000000", timeZone: "UTC"},
 }]]);
@@ -37,7 +38,7 @@ function taskApi(source, url, init) {
   const match = source === "google"
     ? url.pathname.match(/^\/tasks\/v1\/lists\/([^/]+)\/tasks(?:\/(.*))?$/)
     : url.pathname.match(/^\/v1\.0\/me\/todo\/lists\/([^/]+)\/tasks(?:\/(.*))?$/);
-  upstream.calls.push({source, method, path: url.pathname + url.search, body: body(init)});
+  upstream.calls.push({source, method, path: url.pathname + url.search, body: body(init),ifMatch:new Headers(init?.headers).get("If-Match")});
   if (!match) return Response.json({error: "Unknown fixture endpoint"}, {status: 404});
   const listId=decodeURIComponent(match[1]), map=taskMap(source,listId);
   if (!map) return Response.json({error: "Missing task list"}, {status: 404});
@@ -46,14 +47,21 @@ function taskApi(source, url, init) {
     const id = `${source}-created-${map.size + 1}`;
     const created = source === "google"
       ? {id, status: "needsAction", ...body(init)}
-      : {id, status: "notStarted", ...body(init)};
+      : {id, status: "notStarted",isReminderOn:false,reminderDateTime:null, ...body(init)};
     map.set(id, created); return taskResponse(created);
   }
   if (!match[2]) return Response.json({error: "Unsupported fixture operation"}, {status: 405});
   const id = decodeURIComponent(match[2]);
   const task = map.get(id);
   if (!task) return Response.json({error: "Missing task"}, {status: 404});
-  if (method === "PATCH") { Object.assign(task, body(init)); return taskResponse(task); }
+  if (method === "GET") return taskResponse(task);
+  if (method === "PATCH") {
+    const ifMatch=new Headers(init?.headers).get("If-Match");
+    if (ifMatch && ifMatch !== task["@odata.etag"]) return Response.json({error:"Version mismatch"},{status:412});
+    Object.assign(task, body(init));
+    if(source === "microsoft") task["@odata.etag"]=`reminder-v${upstream.calls.length}`;
+    return taskResponse(task);
+  }
   if (method === "DELETE") { map.delete(id); return new Response(null, {status: 204}); }
   return Response.json({error: "Unsupported fixture operation"}, {status: 405});
 }

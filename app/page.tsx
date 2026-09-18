@@ -10,6 +10,7 @@ import { dateAtMinute, dayBounds, layoutDay, minuteOfDay, segmentStyle, touchesD
 import {Icon, type IconName} from "@/app/icons";
 import {usePreferences} from "@/app/ui-preferences";
 import {TaskListManager} from "@/app/task-list-manager";
+import { MicrosoftTaskReminder } from "@/app/microsoft-task-reminder";
 
 type View = "calendar" | "tasks" | "focus";
 type Mode = "day" | "workweek" | "week" | "month";
@@ -398,9 +399,9 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
 
 
 function TaskEditor({ task, outlook, onClose, onSave, onDelete }: {task:Task;outlook:boolean;onClose:()=>void;onDelete:()=>Promise<void>;onSave:(patch:Record<string,unknown>)=>Promise<void>}) {
-  const [saving,setSaving] = useState(false); const [error,setError] = useState("");
+  const [saving,setSaving] = useState(false); const [reminderBusy,setReminderBusy] = useState(false); const [error,setError] = useState("");
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); const data = new FormData(event.currentTarget); setSaving(true); setError("");
+    event.preventDefault(); if (saving || reminderBusy) return; const data = new FormData(event.currentTarget); setSaving(true); setError("");
     try {
       const metadata: Record<string, unknown> = {};
       for (const field of ["title", "notes", "priority"] as const) if (!task.readonly_reason && data.get(field) !== task[field]) metadata[field] = data.get(field);
@@ -418,7 +419,7 @@ function TaskEditor({ task, outlook, onClose, onSave, onDelete }: {task:Task;out
     finally {setSaving(false);}
   }
   async function unschedule() {
-    setSaving(true);
+    if (saving || reminderBusy) return; setSaving(true);
     try {await onSave({scheduled_at:null,mirror_requested:false});}
     catch(error) {setError(error instanceof Error ? error.message : "Nepavyko išsaugoti.");}
     finally {setSaving(false);}
@@ -438,9 +439,12 @@ function TaskEditor({ task, outlook, onClose, onSave, onDelete }: {task:Task;out
       <div className="formRow"><label>Suplanuota pradžia<input name="scheduled" type="datetime-local" disabled={Boolean(task.completed)} defaultValue={task.scheduled_at ? localInput(new Date(task.scheduled_at)) : ""}/></label><label>Trukmė minutėmis<input name="duration" type="number" min="5" max="1440" step="5" required defaultValue={task.duration_minutes}/></label></div>
       <p className="formHint">{task.source === "google" ? "Google diena ir vietinis darbo laikas yra atskiri. Prioritetas taip pat saugomas tik čia." : "Planavimas nekeičia užduoties termino. Laikas saugomas šioje programėlėje."}</p>
       <label className="onlineSwitch"><input name="mirror" type="checkbox" disabled={!outlook && !task.mirror_requested} defaultChecked={Boolean(task.mirror_requested)}/><i/>Papildomas Outlook blokas · laisvas laikas</label>
-      <div className="modalActions">{task.scheduled_at && <button type="button" disabled={saving} onClick={unschedule}>Pašalinti planavimą</button>}<button className="newButton" disabled={saving}>{saving ? "Saugoma…" : "Išsaugoti"}</button></div>
+      <div className="modalActions">{task.scheduled_at && <button type="button" disabled={saving || reminderBusy} onClick={unschedule}>Pašalinti planavimą</button>}<button className="newButton" disabled={saving || reminderBusy}>{saving ? "Saugoma…" : "Išsaugoti"}</button></div>
     </form>
-    <div className="modalActions"><button type="button" disabled={saving || Boolean(task.readonly_reason)} onClick={async()=>{if(!window.confirm(`Ištrinti „${task.title}“${task.source === "local" ? "" : " ir jos šaltinyje"}?`))return;setSaving(true);setError("");try{await onDelete();}catch(error){setError(error instanceof Error ? error.message : "Nepavyko ištrinti.");}finally{setSaving(false);}}}>Ištrinti užduotį</button></div>
+    {task.source === "microsoft" && (
+      <MicrosoftTaskReminder key={task.key} task={task} disabled={saving} onBusyChange={setReminderBusy}/>
+    )}
+    <div className="modalActions"><button type="button" disabled={saving || reminderBusy || Boolean(task.readonly_reason)} onClick={async()=>{if(saving || reminderBusy)return;if(!window.confirm(`Ištrinti „${task.title}“${task.source === "local" ? "" : " ir jos šaltinyje"}?`))return;setSaving(true);setError("");try{await onDelete();}catch(error){setError(error instanceof Error ? error.message : "Nepavyko ištrinti.");}finally{setSaving(false);}}}>Ištrinti užduotį</button></div>
   </Modal>;
 }
 

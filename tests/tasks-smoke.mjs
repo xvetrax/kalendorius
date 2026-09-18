@@ -36,6 +36,11 @@ try {
     const query=new URLSearchParams({id:String(task.id),source,...(remote?{account_id:task.account_id,list_id:task.list_id}:{})});
     assert.equal((await fetch(api+"?"+query,{method:"DELETE",headers})).status,200);
   }
+  const reminderApi=`${origin}/api/tasks/reminder`,reminderRef={source:"microsoft",account_id:"microsoft-account",list_id:"microsoft-list",id:"shared-id"};
+  const reminderBefore=await (await fetch(`${reminderApi}?${new URLSearchParams(reminderRef)}`)).json();assert.equal(reminderBefore.enabled,false);
+  const setReminder=await fetch(reminderApi,{method:"PATCH",headers,body:JSON.stringify({...reminderRef,version:reminderBefore.version,enabled:true,at:"2026-10-25T10:30:00+02:00"})});assert.equal(setReminder.status,200);const reminderOn=await setReminder.json();assert.equal(reminderOn.at,"2026-10-25T08:30:00.000Z");
+  assert.equal((await fetch(reminderApi,{method:"PATCH",headers,body:JSON.stringify({...reminderRef,version:reminderBefore.version,enabled:false})})).status,409);
+  const clearReminder=await fetch(reminderApi,{method:"PATCH",headers,body:JSON.stringify({...reminderRef,version:reminderOn.version,enabled:false})});assert.equal(clearReminder.status,200);assert.equal((await clearReminder.json()).enabled,false);
   const listsApi=`${origin}/api/task-lists`;
   const catalog=await (await fetch(listsApi)).json();assert.equal(catalog.lists.length,2);assert.equal(catalog.accounts.length,2);assert.deepEqual(catalog.warnings,[]);
   const microsoftDefault=catalog.lists.find(list=>list.source==="microsoft"),googleDefault=catalog.lists.find(list=>list.source==="google");
@@ -51,6 +56,6 @@ try {
   }
   const afterLists=await (await fetch(listsApi)).json();assert.ok(afterLists.lists.some(list=>list.list_id===microsoftDefault.list_id));assert.ok(afterLists.lists.some(list=>list.list_id===googleDefault.list_id));
   assert.equal((await (await fetch(origin+"/api/google/status")).json()).tasksConnected,true);
-  console.log(`OK: vietinių, Google ir Microsoft užduočių bei sąrašų HTTP kūrimas, planavimas, pervadinimas, peržiūra ir trynimas. ${origin}`);
+  console.log(`OK: vietinių, Google ir Microsoft užduočių bei sąrašų HTTP veiksmai, Microsoft priminimo laikas, išjungimas ir konfliktas. ${origin}`);
   if(preview)await new Promise(resolve=>{process.once("SIGINT",resolve);process.once("SIGTERM",resolve);});
 } finally {child.kill("SIGTERM");await stopped;rmSync(temp,{recursive:true,force:true});}

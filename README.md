@@ -103,6 +103,14 @@ Pirmo paleidimo migracija senų vietinių užduočių dviprasmišką `due_at` i�
 
 Tiekėjų duomenys atnaujinami mygtuku **Atnaujinti duomenis** arba perkrovus puslapį. Nepavykus užklausai paskutiniai išsaugoti to sąrašo duomenys pažymimi kaip pasenę; vietinis planavimas veikia, kai ta pati paskyra tebėra prijungta ir turi reikiamą leidimą. Pakeitus paskyrą ankstesnių užduočių duomenys nerodomi. Google pavaldžios užduotys matomos ir planuojamos atskirai, jų hierarchija keičiama Google Tasks. Priskirtos Docs / Chat užduotys šiame etape neįtraukiamos. Google nuoroda atveria tiekėjo grąžintą užduotį arba Tasks programą; Microsoft nuoroda atveria To Do programą.
 
+## Microsoft To Do priminimai
+
+Microsoft užduoties redaktoriaus apačioje yra atskiras priminimo valdymas: įjungimas, data ir laikas, išjungimas. Spausk **Išsaugoti priminimą**. Priminimo pakeitimas neįrašo neišsaugotų pagrindinio redaktoriaus laukų ir nekeičia termino, vietinio plano, kartojimo ar pasirenkamo Outlook bloko. Pranešimus pristato Microsoft; programėlė nesiunčia naršyklės pranešimų. Naudojamas jau suteiktas `Tasks.ReadWrite` leidimas. [Microsoft užduoties atnaujinimo API](https://learn.microsoft.com/en-us/graph/api/todotask-update?view=graph-rest-1.0).
+
+Įvedamas šalia lauko nurodytos naršyklės laiko zonos laikas; serveriui perduodamas tikslus UTC momentas. Neegzistuojanti arba pasikartojanti DST valanda atmetama. Jei Microsoft grąžina laiką be UTC poslinkio su šiuo metu nekonvertuojama zona, rodomas originalus laikas ir zona; norint jį pakeisti reikia įvesti naują laiką. Išjungimas išsaugo ankstesnę tiekėjo datos reikšmę, bet nustato `isReminderOn=false`.
+
+Serveris prieš pakeitimą perskaito dabartinę užduotį ir tikrina paskyrą bei versiją. Pasikeitus duomenims ar nutrūkus ryšiui, prieš kartodamas spausk **Atnaujinti** priminimo skiltyje. Automatinio pakartojimo nėra. Užbaigtų ir specialių tik skaitymui skirtų sąrašų užduočių priminimo keitimas išjungtas. Patikrinta sintetinėmis API; tikrų Microsoft pranešimų pristatymas ir Graph `If-Match` elgsena lieka gyvų paskyrų patikrai. Be tiekėjo sąlyginio pakeitimo garantijos išlieka išorinio pakeitimo tarp GET ir PATCH galimybė.
+
 ## Užduočių sąrašai
 
 Užduočių juostoje arba nustatymuose pasirink **Tvarkyti sąrašus**. Galima sukurti Google Tasks arba Microsoft To Do sąrašą ir pervadinti valdomą sąrašą. Naują sąrašą pasirinkus kaip paskirties vietą, kitos užduotys kuriamos jame. Vietinės užduotys laikomos viename vietiniame sąraše.
@@ -116,7 +124,7 @@ Patikra atliekama su izoliuotomis imitacinėmis API. Tai negarantuoja atominio �
 ## Artimiausias funkcijų etapas
 
 - platesnis Google / Outlook įvykių redaktorius ir pasikartojimų valdymas;
-- Google hierarchijos ir eilės keitimas, perkėlimas tarp sąrašų, To Do priminimai / kartojimas / žingsniai;
+- Google hierarchijos ir eilės keitimas, perkėlimas tarp sąrašų, To Do kartojimas / žingsniai;
 - kelių dienų tempimas, automatinis slinkimas tempiant ir pilnas DST laiko pasirinkimas;
 - išsamesnis klaviatūros ir jutiklinis valdymas;
 - prieigos žetonų galiojimo talpykla bei tikrų abiejų paskyrų patikra;

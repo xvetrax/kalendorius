@@ -322,6 +322,58 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       db.exec("COMMIT");
     } catch(error){db.exec("ROLLBACK");throw error;}
   }
+  function reminderSnapshot(raw: any, list: TaskList) {
+    if (!raw || typeof raw.isReminderOn !== "boolean") throw new TaskError("Nepavyko perskaityti Microsoft priminimo. Atnaujink duomenis.",502);
+    const sourceTime = raw.reminderDateTime && typeof raw.reminderDateTime.dateTime === "string" && typeof raw.reminderDateTime.timeZone === "string"
+      ? {dateTime:raw.reminderDateTime.dateTime,timeZone:raw.reminderDateTime.timeZone} : null;
+    let at: string | null = null;
+    if (sourceTime) {
+      const explicitOffset = /(Z|[+-]\d{2}:\d{2})$/i.test(sourceTime.dateTime);
+      // Never treat an unrecognised provider wall-clock zone as UTC.
+      if (explicitOffset || ["UTC","Etc/UTC","Etc/GMT","GMT"].includes(sourceTime.timeZone)) {
+        try {at=reminderInstant(sourceTime.dateTime + (explicitOffset ? "" : "Z"));} catch { /* Show the original provider value instead. */ }
+      }
+    }
+    const readonlyReason = !list.writable ? "Šio specialaus sąrašo priminimo keisti negalima."
+      : raw.status === "completed" ? "Užbaigtos užduoties priminimą keisk atkūręs užduotį." : undefined;
+    return {enabled:raw.isReminderOn,at,source_time:sourceTime,recurring:Boolean(raw.recurrence),
+      version:fingerprint({key:remoteKey(list.account_id,list.list_id,identifier(raw.id)),enabled:raw.isReminderOn,time:raw.reminderDateTime ?? null,
+        modified:raw.lastModifiedDateTime ?? null,etag:raw["@odata.etag"] ?? null,status:raw.status,recurrence:raw.recurrence ?? null}),
+      ...(readonlyReason ? {readonly_reason:readonlyReason} : {})};
+  }
+  function reminderInstant(value: unknown) {
+    if (typeof value !== "string") throw new TaskError("Nurodyk tikslų priminimo laiką su laiko zona.");
+    const parts=/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,7})?(Z|[+-](\d{2}):(\d{2}))$/i.exec(value);
+    if (!parts || Number(parts[2])>23 || Number(parts[3])>59 || Number(parts[4])>59 || Number(parts[6]||0)>23 || Number(parts[7]||0)>59)
+      throw new TaskError("Nurodyk tikslų priminimo laiką su laiko zona.");
+    dateOnly(parts[1]);
+    return dateValue(value,true)!;
+  }
+  async function currentReminder(input: Input) {
+    if (input.source !== "microsoft") throw new TaskError("Priminimai palaikomi tik Microsoft To Do užduotims.");
+    const id=identifier(input.id),list=await currentList(input);
+    const path=`/me/todo/lists/${encodeURIComponent(list.list_id)}/tasks/${encodeURIComponent(id)}`;
+    const raw=await microsoft.request(path);
+    requireAccount(list.account_id);
+    if (raw?.id !== id) throw new TaskError("Paslauga grąžino kitą užduotį. Atnaujink duomenis.",502);
+    return {raw,list,path,snapshot:reminderSnapshot(raw,list)};
+  }
+  async function readReminder(input: Input) {return (await currentReminder(input)).snapshot;}
+  async function updateReminder(input: Input) {
+    if (typeof input.enabled !== "boolean" || typeof input.version !== "string" || !input.version) throw new TaskError("Pirmiausia perskaityk priminimą ir pasirink jo būseną.");
+    const at=input.enabled ? reminderInstant(input.at) : null;
+    const {raw,list,path,snapshot}=await currentReminder(input);
+    if (snapshot.readonly_reason) throw new TaskError(snapshot.readonly_reason,403);
+    if (input.version !== snapshot.version) throw new TaskError("Microsoft priminimas arba užduotis jau pakeisti. Atnaujink priminimą ir patikrink laiką.",409);
+    requireAccount(list.account_id);
+    const updated=await microsoft.request(path,{method:"PATCH",
+      ...(typeof raw["@odata.etag"] === "string" ? {headers:{"If-Match":raw["@odata.etag"]}} : {}),
+      body:JSON.stringify(input.enabled ? {isReminderOn:true,reminderDateTime:{dateTime:at!.replace(/Z$/,""),timeZone:"UTC"}} : {isReminderOn:false})});
+    requireAccount(list.account_id);
+    if (updated?.id !== raw.id) throw new TaskError("Priminimo rezultato patvirtinti nepavyko. Atnaujink duomenis prieš kartodamas.",502);
+    // A reminder never alters the local plan, cached task metadata or Outlook mirror.
+    return reminderSnapshot(updated,list);
+  }
   async function listProvider(source: RemoteTaskSource) {
     const items: Task[] = [], lists: TaskList[] = [], warnings: string[] = [];
     const provider = source === "microsoft" ? microsoft : google;
@@ -540,7 +592,8 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
   }
   // Prevent a slow read from replacing a just-written remote cache snapshot.
   function mutation<T>(input: Input, operation: () => Promise<T>) {return input.source === "google" || input.source === "microsoft" ? serial("task-provider:" + input.source,operation) : operation();}
-  return { list, listCatalog, createList:(input:Input)=>mutation(input,()=>createList(input)), renameList:(input:Input)=>mutation(input,()=>renameList(input)),
+  return { list, listCatalog, readReminder:(input:Input)=>mutation(input,()=>readReminder(input)), updateReminder:(input:Input)=>mutation(input,()=>updateReminder(input)),
+    createList:(input:Input)=>mutation(input,()=>createList(input)), renameList:(input:Input)=>mutation(input,()=>renameList(input)),
     previewListDeletion:(input:Input)=>mutation(input,()=>previewListDeletion(input)), deleteList:(input:Input)=>mutation(input,()=>deleteList(input)),
     create:(input:Input)=>mutation(input,()=>create(input)), update:(input:Input)=>mutation(input,()=>update(input)), remove:(input:Input)=>mutation(input,()=>remove(input)) };
 }

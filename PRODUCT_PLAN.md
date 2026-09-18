@@ -133,7 +133,8 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [x] Google / Microsoft sąrašų pasirinkimas, visų sąrašų bei užduočių puslapiavimas; saugūs paskyros ir sąrašo ryšiai.
 - [x] Google / Microsoft sąrašų kūrimas, pervadinimas ir šalinimas su peržiūra bei pavadinimo patvirtinimu (imitacinė patikra; įtaisyti / svetimi Microsoft sąrašai ir sąrašai su Outlook blokais ar Docs / Chat užduotimis saugomi nuo šalinimo).
 - [x] Sukurti, redaguoti, užbaigti, atkurti ir ištrinti visų trijų šaltinių užduotis; pastabos, datos, vietiniai projektai / žymos ir trukmė (sintetinės API patikra).
-- [ ] Microsoft svarba, priminimai, kartojimas, žingsniai. „Mano diena“ tiksliai atskiriama nuo Microsoft „My Day“, jei vieša API jo nesinchronizuoja.
+- [x] Microsoft svarba ir atskiras priminimo įjungimas, laiko keitimas bei išjungimas su versijos / paskyros patikra (imitacinė API).
+- [ ] Microsoft kartojimas ir žingsniai. „Mano diena“ tiksliai atskiriama nuo Microsoft „My Day“, jei vieša API jo nesinchronizuoja.
 - [x] Google užduočių ir pavaldžių užduočių skaitymas bei bendras planavimas; papildomas Tasks OAuth leidimas ir pakartotinio sutikimo eiga (imitacinė patikra).
 - [ ] Google hierarchijos ir eilės tvarkos keitimas, perkėlimas tarp palaikomų sąrašų.
 - [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
@@ -218,3 +219,12 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - Sąsaja blokuoja konkuruojančius veiksmus; yra rankinis atnaujinimas, pasenusių duomenų paaiškinimas ir pakartotinis pavadinimo įvedimas po konflikto. Neaiški kūrimo baigtis reikalauja atnaujinti sąrašus prieš bandant dar kartą.
 - Patikra: `npm run typecheck`, 102/102 `npm test`, `npm run build`, `test:smoke`, `test:calendars` ir `test:tasks` praėjo. Naršyklėje su sintetinėmis paskyromis sukurti abiejų tiekėjų sąrašai, Google sąrašas pervadintas, patikrinta paskirties pasirinkimo būsena, trynimo peržiūra / tikslaus pavadinimo reikalavimas / atšaukimas, atnaujinimas ir išlikimas po perkrovimo. 390 px lange sąrašų valdymas pasiekiamas iš nustatymų, konsolės klaidų nebuvo. Galutinį DELETE vykdė HTTP testai.
 - Ribos: gyvos API ir Google sąrašo `If-Match` elgsena nepatvirtintos; išorinis pakeitimas tarp paskutinio perskaitymo ir DELETE nėra atomiškai užkertamas. Praradus sėkmingo DELETE atsakymą, vietiniai planai paliekami; našlaičių sutvarkymas lieka kitam etapui. Visas E etapas dar nebaigtas: lieka To Do priminimai / kartojimas / žingsniai, Google hierarchijos / eilės keitimas ir perkėlimas, fokusavimo būsenos išlikimas bei gyvų integracijų patikra.
+
+## 2026-09-18 — E etapo Microsoft To Do priminimai
+
+- Microsoft užduoties redaktoriuje pridėtas atskiras priminimo įjungimas, datos / laiko keitimas ir išjungimas. Priminimą pristato Microsoft; jis nekeičia termino, vietinio darbo plano, kartojimo, žingsnių ar Outlook bloko.
+- Serveris prieš PATCH iš naujo perskaito užduotį, susieja ją su tiekėju, paskyra, sąrašu ir ID, tikrina visos aktualios užduoties versiją bei siunčia tik `isReminderOn` ir, įjungiant, `reminderDateTime`. Kai tiekėjas grąžina ETag, siunčiamas `If-Match`.
+- Neatpažintas Microsoft sieninis laikas nerodomas kaip UTC: sąsaja rodo originalų laiką ir zoną, o pakeitimui reikia įvesti naują laiką. Naršyklės laiko zona rodoma šalia lauko; neegzistuojanti ir pasikartojanti DST valanda atmetama.
+- Patikra: `npm run typecheck`, 112/112 `npm test`, `npm run build`, `test:smoke`, `test:calendars` ir `test:tasks` praėjo. Testai apima įjungimą, laiko pakeitimą, išjungimą, paskyros / sąrašo / ID ryšį, CSRF, ETag konfliktą, dvigubą pakeitimą, neaiškią atsakymo baigtį, vietinių duomenų neliečiamumą ir Vilniaus bei pusvalandžio DST perėjimus.
+- Naršyklėje su sintetine Microsoft paskyra priminimas įjungtas ir perkeltas į 2026-10-26 11:15 Vilniaus laiku; po perkrovimo būsena išliko, o pagrindinio redaktoriaus pavadinimo juodraštis nebuvo išsaugotas. 2026-10-25 03:30 dviprasmiška Vilniaus valanda atmesta. Tikra paskyra ir tikras pranešimo pristatymas netikrinti.
+- Ribos: Graph `If-Match` elgsena su To Do užduotimis gyvai nepatvirtinta, todėl išorinio pakeitimo tarp paskutinio GET ir PATCH pilnai atmesti negalima. Kartojimo taisyklės ir žingsniai šiame žingsnyje tik išsaugomi ir nekeičiami; jų valdymas lieka tolesniems atskiriems commit’ams.
