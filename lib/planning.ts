@@ -9,6 +9,7 @@ export type OutlookEventInput = {
   showAs?: unknown;
   visibility?: unknown;
   isReminderOn?: unknown;
+  reminderMinutes?: unknown;
   addMeet?: unknown;
   kind?: unknown;
 };
@@ -51,6 +52,7 @@ export function buildOutlookEvent(body: OutlookEventInput) {
     showAs: taskBlock ? "free" : (SHOW_AS.has(requestedShowAs) ? requestedShowAs : "busy"),
     ...(body.visibility === "private" ? { sensitivity: "private" } : {}),
     isReminderOn: taskBlock ? false : body.isReminderOn !== false,
+    ...(body.reminderMinutes !== undefined && Number.isFinite(Number(body.reminderMinutes)) && Number(body.reminderMinutes) >= 0 ? { reminderMinutesBeforeStart: Number(body.reminderMinutes) } : {}),
     isOnlineMeeting: !taskBlock && Boolean(body.addMeet),
     ...(!taskBlock && body.addMeet ? { onlineMeetingProvider: "teamsForBusiness" } : {}),
   };

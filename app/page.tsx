@@ -425,7 +425,8 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
         body = { ...common, allDay: true, start: sd, end: nextDay.toISOString().slice(0, 10) };
       } else {
         const from = new Date(String(f.get("start"))); const end = new Date(from.getTime() + Number(f.get("duration")) * 60000);
-        body = { ...common, start: from.toISOString(), end: end.toISOString(), attendees: f.get("attendees"), addMeet: f.get("online") === "on" };
+        const rm = f.get("reminderMinutes"); const reminderMinutes = rm !== null && rm !== "" ? Number(rm) : undefined;
+        body = { ...common, start: from.toISOString(), end: end.toISOString(), attendees: f.get("attendees"), addMeet: f.get("online") === "on", ...(reminderMinutes !== undefined ? { reminderMinutes } : {}) };
       }
       const response = await fetch(`/api/${provider === "outlook" ? "microsoft" : "google"}/events`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       await responseJson(response); await onSave();
@@ -440,6 +441,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
       <label className="onlineSwitch"><input type="checkbox" checked={allDay} onChange={e=>setAllDay(e.target.checked)}/><i/>Visos dienos įvykis</label>
       {allDay ? <div className="formRow"><label>Pradžia<input name="startDate" type="date" required defaultValue={startDate}/></label><label>Pabaiga<input name="endDate" type="date" defaultValue={startDate}/></label></div> : <label>Pradžia<input name="start" type="datetime-local" required defaultValue={localInput(start)}/></label>}
       <div className="formRow"><label>Laisvas / užimtas<select name="showAs"><option value="busy">Užimtas</option><option value="free">Laisvas</option></select></label><label>Matomumas<select name="visibility"><option value="">Numatytasis</option><option value="private">Privatus</option></select></label></div>
+      {!allDay && <label>Priminimas<select name="reminderMinutes"><option value="">Numatytasis</option><option value="0">Įvykio metu</option><option value="5">5 min. prieš</option><option value="10">10 min. prieš</option><option value="15">15 min. prieš</option><option value="30">30 min. prieš</option><option value="60">1 val. prieš</option><option value="1440">1 d. prieš</option></select></label>}
       <label>Vieta<input name="location" maxLength={1000} placeholder="Kabinetas, miestas arba nuoroda…"/></label>
       {!allDay && <label>Dalyviai<input name="attendees" placeholder="el. paštai, atskirti kableliais"/></label>}
       <label>Aprašymas<textarea name="description" placeholder="Darbotvarkė…"/></label>
