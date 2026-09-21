@@ -35,7 +35,16 @@ export function assertSameOrigin(request: Request) {
 export function apiError(error: unknown) {
   if (error instanceof SyntaxError) return Response.json({error:"Neteisingi užklausos duomenys."},{status:400});
   const status=error instanceof Error && "status" in error ? Number(error.status) : 0;
-  const messages:Record<number,string>={400:"Paslauga atmetė pakeitimą. Patikrink įvykio duomenis.",401:"Prisijungimas nebegalioja. Prijunk paskyrą iš naujo.",403:"Nepakanka leidimų šiam veiksmui.",404:"Įvykis arba užduotis neberasta. Atnaujink duomenis.",409:"Duomenys pasikeitė. Atnaujink ir bandyk dar kartą.",412:"Įvykis jau pakeistas kitur. Atnaujink kalendorių.",429:"Pasiekta paslaugos užklausų riba. Palauk ir bandyk dar kartą."};
+  const provider=error instanceof Error && "provider" in error && typeof (error as {provider:unknown}).provider==="string" ? (error as {provider:string}).provider : "";
+  const messages:Record<number,string>={
+    400:"Paslauga atmetė pakeitimą. Patikrink įvykio duomenis.",
+    401:provider ? `${provider} sesija baigėsi. Atjunk ir vėl prijunk paskyrą.` : "Prisijungimas nebegalioja. Prijunk paskyrą iš naujo.",
+    403:provider ? `Nėra teisių šiam veiksmui. Patikrink ${provider} paskyros leidimus.` : "Nepakanka leidimų šiam veiksmui.",
+    404:"Įvykis arba užduotis neberasta. Atnaujink duomenis.",
+    409:"Duomenys pasikeitė. Atnaujink ir bandyk dar kartą.",
+    412:"Įvykis jau pakeistas kitur. Atnaujink kalendorių.",
+    429:"Pasiekta paslaugos užklausų riba. Palauk ir bandyk dar kartą.",
+  };
   if (messages[status]) return Response.json({error:messages[status]},{status:status===412 ? 409 : status});
   const message = error instanceof Error ? error.message : "";
   if (message === "CSRF") return Response.json({ error: "Užklausa atmesta dėl saugumo patikros. Atnaujink puslapį ir bandyk dar kartą." }, { status: 403 });
