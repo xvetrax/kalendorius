@@ -161,7 +161,7 @@ export default function Planner() {
   }
   async function moveEvent(event:CalEvent,start:Date,end:Date) {
     if(event.attendeeCount) {setEditingEvent({event,start:start.toISOString(),end:end.toISOString()});return;}
-    try {await saveEvent(event,{start:start.toISOString(),end:end.toISOString()});} catch(error) {report(error);}
+    try {await saveEvent(event,{start:start.toISOString(),end:end.toISOString()});setToast(`„${event.summary}" perkeltas.`);} catch(error) {report(error);}
   }
   async function quickAdd(event: FormEvent) {
     event.preventDefault(); if (!quickTitle.trim()) return;
@@ -463,6 +463,7 @@ function ExistingEventEditor({value,onClose,onSave}:{value:{event:CalEvent;start
   const safeLink=event.htmlLink?.startsWith("https://") ? event.htmlLink : undefined;
   return <Modal eyebrow={event.provider==="outlook"?"OUTLOOK":"GOOGLE CALENDAR"} title="Kalendoriaus įvykis" onClose={()=>{if(!saving)onClose();}}>
     {!event.editable && <p className="formHint">{event.readOnlyReason}</p>}
+    {event.recurring && event.editable && <p className="formHint">↻ Kartojamas įvykis. Keičiamas tik šis egzempliorius — serija lieka nepakeista.</p>}
     {event.attendeeCount>0 && <p className="formHint">Susitikimo dalyvių įrašų skaičius: {event.attendeeCount}. Išsaugotas pakeitimas bus perduotas dalyviams.</p>}
     {error && <p className="formError" role="alert">{error}</p>}
     <form className="modalForm" onSubmit={submit}>
