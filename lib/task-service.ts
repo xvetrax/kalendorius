@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { graphRecurrence, parseTaskRecurrence, providerRecurrence, sameTaskRecurrence, taskRecurrenceDate } from "./task-recurrence.ts";
+import { ProviderError } from "./provider-error.ts";
 
 export type RemoteTaskSource = "microsoft" | "google";
 export type TaskList = { key: string; source: RemoteTaskSource; account_id: string; list_id: string; name: string; writable: boolean; stale?: boolean;
@@ -455,6 +456,18 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
         for (const task of cachedTasks(account,source)) if (!available.some(list=>list.list_id === task.list_id)) db.prepare("DELETE FROM remote_tasks WHERE task_key=?").run(task.key);
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
+      // Mark orphaned plans for lists that were refreshed successfully:
+      // tasks deleted externally will have no matching remote_tasks row.
+      const orphanMsg = "Užduotis pašalinta šaltinyje. Outlook blokas gali likti. Atjunk ir prijunk paskyrą, jei blokas neišnyksta.";
+      for (const entry of staged) {
+        if (!entry.fresh) continue;
+        const orphans = (db.prepare("SELECT tp.task_key FROM task_plans tp WHERE tp.task_key NOT IN (SELECT task_key FROM remote_tasks WHERE source=? AND account_id=? AND list_id=?) AND (tp.mirror_event_id IS NOT NULL OR tp.mirror_requested<>0 OR tp.mirror_transaction_id IS NOT NULL)").all(source, account, entry.list.list_id) as {task_key:string}[]).filter(row => {
+          try { const parts = JSON.parse(row.task_key); return Array.isArray(parts) && parts.length === 4 && parts[0] === source && parts[1] === account && parts[2] === entry.list.list_id; } catch { return false; }
+        });
+        for (const orphan of orphans) {
+          db.prepare("UPDATE task_plans SET mirror_error=? WHERE task_key=?").run(orphanMsg, orphan.task_key);
+        }
+      }
       for (const entry of staged) {lists.push(entry.list);items.push(...entry.tasks.map(decorate));}
     } catch {
       if (account && provider.connected() && provider.cachedAccountId() === account) {
@@ -486,7 +499,13 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
           current.mirror_event_id = recovered.id;
           db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=?").run(recovered.id, task.key);
         }
-        if (current.mirror_event_id) await microsoft.request(`/me/events/${encodeURIComponent(current.mirror_event_id)}`, { method: "DELETE" });
+        if (current.mirror_event_id) {
+          try {
+            await microsoft.request(`/me/events/${encodeURIComponent(current.mirror_event_id)}`, { method: "DELETE" });
+          } catch (e) {
+            if (!(e instanceof ProviderError && e.status === 404)) throw e;
+          }
+        }
         db.prepare("UPDATE task_plans SET mirror_event_id=NULL, mirror_account_id=NULL, mirror_transaction_id=NULL, mirror_create_payload=NULL, mirror_error=NULL WHERE task_key=?").run(task.key);
         return;
       }
