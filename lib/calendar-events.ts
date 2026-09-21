@@ -1,7 +1,7 @@
 export type CalendarProvider = "google" | "outlook";
 export type CalendarEvent = {
   id:string; provider:CalendarProvider; connectionId:string; version:string;
-  summary:string; start:{dateTime?:string;date?:string}; end:{dateTime?:string;date?:string};
+  summary:string; location?:string; start:{dateTime?:string;date?:string}; end:{dateTime?:string;date?:string};
   htmlLink?:string; hangoutLink?:string; editable:boolean; readOnlyReason:string;
   attendeeCount:number; recurring:boolean; allDay:boolean;
 };
@@ -37,7 +37,9 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
   const special=google && ((raw.eventType && raw.eventType !== "default") || raw.locked);
   const cancelled=google ? raw.status === "cancelled" : raw.isCancelled;
   const readOnlyReason=cancelled ? "Įvykis atšauktas." : !owner ? "Šiame etape redaguojami tik tavo organizuojami įvykiai." : special ? "Šio tipo įvykį redaguok originaliame kalendoriuje." : allDay ? "Visos dienos įvykio redagavimas dar ruošiamas." : recurring ? "Pasikartojančius įvykius kol kas redaguok originaliame kalendoriuje." : !version ? "Nėra įvykio versijos. Atnaujink kalendorių." : "";
+  const location:string|undefined=google ? (raw.location || undefined) : (raw.location?.displayName || undefined);
   return {id:raw.id,provider,connectionId,version,summary:(google ? raw.summary : raw.subject) || "Be pavadinimo",
+    ...(location ? {location} : {}),
     start:google ? raw.start : {dateTime:graphTime(raw.start)},end:google ? raw.end : {dateTime:graphTime(raw.end)},
     htmlLink:google ? raw.htmlLink : raw.webLink,hangoutLink:google ? raw.hangoutLink : raw.onlineMeeting?.joinUrl,
     editable:!readOnlyReason,readOnlyReason,attendeeCount:raw.attendees?.length || 0,recurring,allDay};
@@ -71,7 +73,7 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
   }
   async function update(input:Record<string,unknown>) {
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new CalendarError("Neteisingi įvykio duomenys.");
-    const allowed=new Set(["id","connectionId","version","start","end","summary","confirmAttendees"]);
+    const allowed=new Set(["id","connectionId","version","start","end","summary","location","confirmAttendees"]);
     if (Object.keys(input).some(key=>!allowed.has(key))) throw new CalendarError("Pateikti nepalaikomi įvykio laukai.");
     if (typeof input.id !== "string" || !input.id || input.id === "." || input.id === ".." || input.id.length>2048 || typeof input.version !== "string" || !input.version || typeof input.connectionId !== "string") throw new CalendarError("Trūksta įvykio ID, paskyros arba versijos.");
     const times=eventTimes(input.start,input.end);
@@ -86,7 +88,8 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       if (!current.editable) throw new CalendarError(current.readOnlyReason,403);
       if (current.version !== input.version) throw new CalendarError("Įvykis jau pakeistas kitur. Atnaujink kalendorių ir peržiūrėk laiką.",409);
       if (current.attendeeCount && input.confirmAttendees !== true) throw new CalendarError("Laiko pakeitimas išsiųs atnaujinimą dalyviams. Patvirtink pakeitimą.",409);
-      const patch=google ? {start:{dateTime:times.start,timeZone:raw.start?.timeZone || "UTC"},end:{dateTime:times.end,timeZone:raw.end?.timeZone || "UTC"},...(input.summary !== undefined ? {summary:input.summary} : {})} : {start:{dateTime:times.start.replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:times.end.replace(/Z$/,""),timeZone:"UTC"},...(input.summary !== undefined ? {subject:input.summary} : {})};
+      const locPatch=input.location !== undefined ? (google ? {location:String(input.location||"").slice(0,1000)||null} : {location:{displayName:String(input.location||"").slice(0,1000)}}) : {};
+      const patch=google ? {start:{dateTime:times.start,timeZone:raw.start?.timeZone || "UTC"},end:{dateTime:times.end,timeZone:raw.end?.timeZone || "UTC"},...(input.summary !== undefined ? {summary:input.summary} : {}),...locPatch} : {start:{dateTime:times.start.replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:times.end.replace(/Z$/,""),timeZone:"UTC"},...(input.summary !== undefined ? {subject:input.summary} : {}),...locPatch};
       const updated=await gateway.request(base+(google ? "?sendUpdates=all&conferenceDataVersion=1" : ""),{method:"PATCH",headers:{...headers,...((google || raw["@odata.etag"]) ? {"If-Match":current.version} : {})},body:JSON.stringify(patch)});
       connected(connectionId);
       return normalizeEvent(provider,updated,connectionId);

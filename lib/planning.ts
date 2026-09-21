@@ -1,6 +1,7 @@
 export type OutlookEventInput = {
   summary: unknown;
   description?: unknown;
+  location?: unknown;
   start: unknown;
   end: unknown;
   attendees?: unknown;
@@ -24,6 +25,7 @@ export function buildOutlookEvent(body: OutlookEventInput) {
   return {
     subject: String(body.summary).trim(),
     body: { contentType: "text", content: String(body.description || "") },
+    ...(body.location ? { location: { displayName: String(body.location).slice(0, 1000) } } : {}),
     start: { dateTime: utcDateTime(body.start), timeZone: "UTC" },
     end: { dateTime: utcDateTime(body.end), timeZone: "UTC" },
     attendees: String(body.attendees || "").split(",").map((email) => email.trim()).filter(Boolean).map((address) => ({ emailAddress: { address }, type: "required" })),

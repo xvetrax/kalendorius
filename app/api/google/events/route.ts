@@ -24,6 +24,7 @@ export async function POST(request: Request) {
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return Response.json({ error: "Neteisingas įvykio laikas" }, { status: 400 });
     const event: Record<string, unknown> = {
       summary: String(body.summary).trim(), description: String(body.description || ""),
+      ...(body.location ? { location: String(body.location).slice(0, 1000) } : {}),
       start: { dateTime: start.toISOString(), timeZone: "UTC" }, end: { dateTime: end.toISOString(), timeZone: "UTC" },
       attendees: String(body.attendees || "").split(",").map((email) => email.trim()).filter(Boolean).map((email) => ({ email })),
     };
