@@ -110,7 +110,7 @@ Priimta, kai sutartiniai testai su imitacine Graph paslauga įrodo: 0 kalendoria
 - [x] Google / Outlook įvykio perkėlimas tarp dienų, laiko pakeitimas ir trukmės keitimas.
 - [x] Skaitymo teisės, pasikartojimo egzemplioriaus atpažinimas, kvietimų dalyviams poveikio paaiškinimas prieš išsaugojimą.
 - [x] Tempimo peržiūra ir aiški sėkmė; nepavykus serverio operacijai — ankstesnė padėtis. Sparčių pakeitimų eilė neleidžia pavėluotam atsakymui perrašyti naujesnio.
-- [ ] Modernus išdėstymas, abiejų temų palaikymas, redaktoriai, paieška, klaviatūra, mobilus rodinys.
+- [x] Modernus išdėstymas, abiejų temų palaikymas, redaktoriai, paieška, klaviatūra, mobilus rodinys.
 - [x] Kairė navigacija, centrinis kalendorius, suskleidžiama dešinė juosta, šviesi / tamsi / sistemos tema, nustatymų langas, ⌘ / Ctrl K paieška ir atskiri mobilūs rodiniai. Pilnas klaviatūros bei jutiklinis valdymas dar nebaigtas.
 - [x] Visos dienos ir kelių dienų įvykiai, persidengimai, dabartinis laikas, konfliktai ir 24 val. pasiekiamumas.
 - [x] 24 val. dienos / savaitės tinklelis, bendri įvykių ir užduočių persidengimo stulpeliai, naktinių blokų skaidymas ir dabartinio laiko linija. Kelių dienų bei DST tempimas ir kartojamos valandos pasirinkimas lieka nebaigti.
