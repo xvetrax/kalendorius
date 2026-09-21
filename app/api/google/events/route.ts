@@ -20,17 +20,24 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const body = await request.json();
     if (!String(body.summary || "").trim() || !body.start || !body.end) return Response.json({ error: "Trūksta pavadinimo arba laiko" }, { status: 400 });
-    const start = new Date(String(body.start)); const end = new Date(String(body.end));
-    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return Response.json({ error: "Neteisingas įvykio laikas" }, { status: 400 });
-    const event: Record<string, unknown> = {
+    const common: Record<string, unknown> = {
       summary: String(body.summary).trim(), description: String(body.description || ""),
       ...(body.location ? { location: String(body.location).slice(0, 1000) } : {}),
       ...(body.showAs === "free" ? { transparency: "transparent" } : {}),
       ...(body.visibility === "private" ? { visibility: "private" } : {}),
-      start: { dateTime: start.toISOString(), timeZone: "UTC" }, end: { dateTime: end.toISOString(), timeZone: "UTC" },
-      attendees: String(body.attendees || "").split(",").map((email) => email.trim()).filter(Boolean).map((email) => ({ email })),
     };
-    if (body.addMeet) event.conferenceData = { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } } };
+    let event: Record<string, unknown>;
+    if (body.allDay) {
+      const startDate = String(body.start).slice(0, 10);
+      const endDate = String(body.end).slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate <= startDate) return Response.json({ error: "Neteisingas įvykio laikas" }, { status: 400 });
+      event = { ...common, start: { date: startDate }, end: { date: endDate } };
+    } else {
+      const start = new Date(String(body.start)); const end = new Date(String(body.end));
+      if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return Response.json({ error: "Neteisingas įvykio laikas" }, { status: 400 });
+      event = { ...common, start: { dateTime: start.toISOString(), timeZone: "UTC" }, end: { dateTime: end.toISOString(), timeZone: "UTC" }, attendees: String(body.attendees || "").split(",").map((email) => email.trim()).filter(Boolean).map((email) => ({ email })) };
+      if (body.addMeet) event.conferenceData = { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } } };
+    }
     const data = await googleFetch("/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all", { method: "POST", body: JSON.stringify(event) });
     return Response.json(data, { status: 201 });
   } catch (error) { return apiError(error); }

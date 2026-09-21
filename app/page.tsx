@@ -406,7 +406,48 @@ function TaskModal({onClose,onSave,lists,destination,onDestination}:{onClose:()=
     </form>
   </Modal>;
 }
-function EventModal({ initial, outlook, google, outlookReady, googleReady, onClose, onSave }: { initial: Date; outlook: boolean; google: boolean; outlookReady: boolean; googleReady: boolean; onClose: () => void; onSave: () => void }) { const start = new Date(initial); const [saving, setSaving] = useState(false); const [error,setError]=useState(""); async function submit(e: FormEvent<HTMLFormElement>) { e.preventDefault(); setSaving(true); setError(""); try {const f = new FormData(e.currentTarget); const from = new Date(String(f.get("start"))); const end = new Date(from.getTime() + Number(f.get("duration")) * 60000); const provider = String(f.get("provider")); const response = await fetch(`/api/${provider === "outlook" ? "microsoft" : "google"}/events`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ summary: f.get("summary"), description: f.get("description"), location: f.get("location") || undefined, showAs: f.get("showAs") || undefined, visibility: f.get("visibility") || undefined, start: from.toISOString(), end: end.toISOString(), attendees: f.get("attendees"), addMeet: f.get("online") === "on" }) }); await responseJson(response); await onSave(); } catch(error) {setError(error instanceof Error ? error.message : "Įvykio sukurti nepavyko.");} finally {setSaving(false);} } return <Modal eyebrow="KALENDORIUS" title="Naujas įvykis" onClose={onClose}>{error && <p className="formError" role="alert">{error}</p>}{!outlook && !google ? <div className="connectPrompt"><p>{outlookReady || googleReady ? "Prijunk kalendorių ir kurk tikrus susitikimus." : "Įrašyk OAuth nustatymus į .env failą pagal README."}</p>{outlookReady && <a href="/api/microsoft/connect">Prijungti Outlook</a>}{googleReady && <a href="/api/google/connect">Prijungti Google</a>}</div> : <form className="modalForm" onSubmit={submit}><label>Pavadinimas<input name="summary" required autoFocus placeholder="Susitikimo pavadinimas"/></label><div className="formRow"><label>Kalendorius<select name="provider" defaultValue={outlook ? "outlook" : "google"}>{outlook && <option value="outlook">Outlook Calendar</option>}{google && <option value="google">Google Calendar</option>}</select></label><label>Trukmė<select name="duration" defaultValue="30"><option value="15">15 min.</option><option value="30">30 min.</option><option value="60">1 val.</option><option value="90">1,5 val.</option></select></label></div><div className="formRow"><label>Laisvas / užimtas<select name="showAs"><option value="busy">Užimtas</option><option value="free">Laisvas</option></select></label><label>Matomumas<select name="visibility"><option value="">Numatytasis</option><option value="private">Privatus</option></select></label></div><label>Pradžia<input name="start" type="datetime-local" required defaultValue={localInput(start)}/></label><label>Vieta<input name="location" maxLength={1000} placeholder="Kabinetas, miestas arba nuoroda…"/></label><label>Dalyviai<input name="attendees" placeholder="el. paštai, atskirti kableliais"/></label><label>Aprašymas<textarea name="description" placeholder="Darbotvarkė…"/></label><label className="onlineSwitch"><input name="online" type="checkbox" defaultChecked/><i/>Sukurti Teams / Google Meet nuorodą</label><div className="modalActions"><button type="button" onClick={onClose}>Atšaukti</button><button className="newButton" disabled={saving}>{saving ? "Kuriama…" : "Sukurti įvykį"}</button></div></form>}</Modal>; }
+function EventModal({ initial, outlook, google, outlookReady, googleReady, onClose, onSave }: { initial: Date; outlook: boolean; google: boolean; outlookReady: boolean; googleReady: boolean; onClose: () => void; onSave: () => void }) {
+  const start = new Date(initial);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [allDay, setAllDay] = useState(false);
+  const startDate = localInput(start).slice(0, 10);
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setSaving(true); setError("");
+    try {
+      const f = new FormData(e.currentTarget);
+      const provider = String(f.get("provider"));
+      const common = { summary: f.get("summary"), description: f.get("description"), location: f.get("location") || undefined, showAs: f.get("showAs") || undefined, visibility: f.get("visibility") || undefined };
+      let body: Record<string, unknown>;
+      if (allDay) {
+        const sd = String(f.get("startDate")); const ed = String(f.get("endDate")) || sd;
+        const nextDay = new Date(ed); nextDay.setDate(nextDay.getDate() + 1);
+        body = { ...common, allDay: true, start: sd, end: nextDay.toISOString().slice(0, 10) };
+      } else {
+        const from = new Date(String(f.get("start"))); const end = new Date(from.getTime() + Number(f.get("duration")) * 60000);
+        body = { ...common, start: from.toISOString(), end: end.toISOString(), attendees: f.get("attendees"), addMeet: f.get("online") === "on" };
+      }
+      const response = await fetch(`/api/${provider === "outlook" ? "microsoft" : "google"}/events`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      await responseJson(response); await onSave();
+    } catch(error) { setError(error instanceof Error ? error.message : "Įvykio sukurti nepavyko."); } finally { setSaving(false); }
+  }
+  return <Modal eyebrow="KALENDORIUS" title="Naujas įvykis" onClose={onClose}>
+    {error && <p className="formError" role="alert">{error}</p>}
+    {!outlook && !google ? <div className="connectPrompt"><p>{outlookReady || googleReady ? "Prijunk kalendorių ir kurk tikrus susitikimus." : "Įrašyk OAuth nustatymus į .env failą pagal README."}</p>{outlookReady && <a href="/api/microsoft/connect">Prijungti Outlook</a>}{googleReady && <a href="/api/google/connect">Prijungti Google</a>}</div> :
+    <form className="modalForm" onSubmit={submit}>
+      <label>Pavadinimas<input name="summary" required autoFocus placeholder="Susitikimo pavadinimas"/></label>
+      <div className="formRow"><label>Kalendorius<select name="provider" defaultValue={outlook ? "outlook" : "google"}>{outlook && <option value="outlook">Outlook Calendar</option>}{google && <option value="google">Google Calendar</option>}</select></label>{!allDay && <label>Trukmė<select name="duration" defaultValue="30"><option value="15">15 min.</option><option value="30">30 min.</option><option value="60">1 val.</option><option value="90">1,5 val.</option></select></label>}</div>
+      <label className="onlineSwitch"><input type="checkbox" checked={allDay} onChange={e=>setAllDay(e.target.checked)}/><i/>Visos dienos įvykis</label>
+      {allDay ? <div className="formRow"><label>Pradžia<input name="startDate" type="date" required defaultValue={startDate}/></label><label>Pabaiga<input name="endDate" type="date" defaultValue={startDate}/></label></div> : <label>Pradžia<input name="start" type="datetime-local" required defaultValue={localInput(start)}/></label>}
+      <div className="formRow"><label>Laisvas / užimtas<select name="showAs"><option value="busy">Užimtas</option><option value="free">Laisvas</option></select></label><label>Matomumas<select name="visibility"><option value="">Numatytasis</option><option value="private">Privatus</option></select></label></div>
+      <label>Vieta<input name="location" maxLength={1000} placeholder="Kabinetas, miestas arba nuoroda…"/></label>
+      {!allDay && <label>Dalyviai<input name="attendees" placeholder="el. paštai, atskirti kableliais"/></label>}
+      <label>Aprašymas<textarea name="description" placeholder="Darbotvarkė…"/></label>
+      {!allDay && <label className="onlineSwitch"><input name="online" type="checkbox" defaultChecked/><i/>Sukurti Teams / Google Meet nuorodą</label>}
+      <div className="modalActions"><button type="button" onClick={onClose}>Atšaukti</button><button className="newButton" disabled={saving}>{saving ? "Kuriama…" : "Sukurti įvykį"}</button></div>
+    </form>}
+  </Modal>;
+}
 
 
 function TaskEditor({ task, outlook, onClose, onSave, onDelete }: {task:Task;outlook:boolean;onClose:()=>void;onDelete:()=>Promise<void>;onSave:(patch:Record<string,unknown>)=>Promise<void>}) {

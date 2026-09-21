@@ -4,6 +4,7 @@ export type OutlookEventInput = {
   location?: unknown;
   start: unknown;
   end: unknown;
+  allDay?: unknown;
   attendees?: unknown;
   showAs?: unknown;
   visibility?: unknown;
@@ -23,6 +24,23 @@ function utcDateTime(value: unknown) {
 export function buildOutlookEvent(body: OutlookEventInput) {
   const taskBlock = body.kind === "task-time-block";
   const requestedShowAs = String(body.showAs || "busy");
+  if (body.allDay) {
+    const startDate = String(body.start).slice(0, 10);
+    const endDate = String(body.end).slice(0, 10);
+    return {
+      subject: String(body.summary).trim(),
+      body: { contentType: "text", content: String(body.description || "") },
+      ...(body.location ? { location: { displayName: String(body.location).slice(0, 1000) } } : {}),
+      isAllDay: true,
+      start: { dateTime: `${startDate}T00:00:00`, timeZone: "UTC" },
+      end: { dateTime: `${endDate}T00:00:00`, timeZone: "UTC" },
+      attendees: [],
+      showAs: "free",
+      ...(body.visibility === "private" ? { sensitivity: "private" } : {}),
+      isReminderOn: false,
+      isOnlineMeeting: false,
+    };
+  }
   return {
     subject: String(body.summary).trim(),
     body: { contentType: "text", content: String(body.description || "") },
