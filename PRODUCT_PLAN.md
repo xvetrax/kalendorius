@@ -106,10 +106,10 @@ Priimta, kai sutartiniai testai su imitacine Graph paslauga įrodo: 0 kalendoria
 
 - [x] Dienos / savaitės užduoties tempimas į laiką, suplanuoto bloko perkėlimas pele, apatinio krašto tempimas trukmei keisti, klaviatūros trukmės valdymas ir datos redaktorius.
 - [x] Savo organizuojamų nepasikartojančių Google / Outlook įvykių perkėlimas ir trukmė; pavadinimo / laiko redaktorius, dalyvių patvirtinimas, konflikto pranešimas. Naršyklėje ir API patikrinta su imitaciniais tiekėjais.
-- [ ] Užduoties perkėlimas iš sąrašo į bet kurią dieną / laiką, suplanuotos užduoties perkėlimas, grąžinimas į neplanuotas.
-- [ ] Google / Outlook įvykio perkėlimas tarp dienų, laiko pakeitimas ir trukmės keitimas.
-- [ ] Skaitymo teisės, pasikartojimo egzemplioriaus atpažinimas, kvietimų dalyviams poveikio paaiškinimas prieš išsaugojimą.
-- [ ] Tempimo peržiūra ir aiški sėkmė; nepavykus serverio operacijai — ankstesnė padėtis. Sparčių pakeitimų eilė neleidžia pavėluotam atsakymui perrašyti naujesnio.
+- [x] Užduoties perkėlimas iš sąrašo į bet kurią dieną / laiką, suplanuotos užduoties perkėlimas, grąžinimas į neplanuotas.
+- [x] Google / Outlook įvykio perkėlimas tarp dienų, laiko pakeitimas ir trukmės keitimas.
+- [x] Skaitymo teisės, pasikartojimo egzemplioriaus atpažinimas, kvietimų dalyviams poveikio paaiškinimas prieš išsaugojimą.
+- [x] Tempimo peržiūra ir aiški sėkmė; nepavykus serverio operacijai — ankstesnė padėtis. Sparčių pakeitimų eilė neleidžia pavėluotam atsakymui perrašyti naujesnio.
 - [ ] Modernus išdėstymas, abiejų temų palaikymas, redaktoriai, paieška, klaviatūra, mobilus rodinys.
 - [x] Kairė navigacija, centrinis kalendorius, suskleidžiama dešinė juosta, šviesi / tamsi / sistemos tema, nustatymų langas, ⌘ / Ctrl K paieška ir atskiri mobilūs rodiniai. Pilnas klaviatūros bei jutiklinis valdymas dar nebaigtas.
 - [ ] Visos dienos ir kelių dienų įvykiai, persidengimai, dabartinis laikas, konfliktai ir 24 val. pasiekiamumas.
