@@ -4,13 +4,13 @@ import type {CalendarEvent} from "@/lib/calendar-events";
 import {dateAtMinute, segmentStyle, type DaySegment} from "@/lib/calendar-layout";
 
 export const EventActions=createContext<{report:(error:unknown)=>void;edit:(event:CalendarEvent)=>void;move:(event:CalendarEvent,start:Date,end:Date)=>Promise<void>}>({report:()=>{},edit:()=>{},move:async()=>{}});
-export function EventBlock({event,compact=false,segment}:{event:CalendarEvent;compact?:boolean;segment?:DaySegment}) {
+export function EventBlock({event,compact=false,segment,continuesBefore=false,continuesAfter=false}:{event:CalendarEvent;compact?:boolean;segment?:DaySegment;continuesBefore?:boolean;continuesAfter?:boolean}) {
   const actions=useContext(EventActions),start=new Date(event.start.dateTime || event.start.date || 0),end=new Date(event.end.dateTime || event.end.date || 0);
   const duration=(end.getTime()-start.getTime())/60000;
   const [offset,setOffset]=useState<{x:number;y:number}|null>(null),[preview,setPreview]=useState<number|null>(null),[saving,setSaving]=useState(false);
   const gesture=useRef<{x:number;y:number;resize:boolean;next:number;grab:number}|null>(null),moved=useRef(false);
   async function commit(from:Date,to:Date) {setSaving(true);try {await actions.move(event,from,to);} finally {setSaving(false);setOffset(null);setPreview(null);}}
-  if (compact) return <button className={`allDayEvent ${event.provider}`} onClick={()=>actions.edit(event)} title={event.summary}>{event.recurring ? "↻ " : ""}{event.summary}</button>;
+  if (compact) return <button className={`allDayEvent ${event.provider}${continuesBefore?" cont-before":""}${continuesAfter?" cont-after":""}`} onClick={()=>actions.edit(event)} title={event.summary}>{continuesBefore ? "← " : ""}{event.recurring ? "↻ " : ""}{event.summary}{continuesAfter ? " →" : ""}</button>;
   if (!segment) return null;
   const gestureSafe=event.editable && segment.gestureSafe;
   return <div className={`eventBlock calendarEvent ${event.provider} ${event.editable ? "editable" : "readOnly"}`} data-short={segment.height<45 || undefined} data-tiny={segment.height<24 || undefined} style={{...segmentStyle(segment,preview),transform:offset ? `translate(${offset.x}px,${offset.y}px)` : undefined,zIndex:offset ? 12 : undefined,pointerEvents:offset ? "none" : undefined}}>

@@ -293,7 +293,15 @@ function TimeGrid({ days, events, tasks, onDrop, onCreate }: { days: Date[]; eve
       const bounds=dayBounds(day), dayHours=(bounds.end.getTime()-bounds.start.getTime())/3600000;
       return <button className={`dayHead ${now && sameDay(day,now) ? "today" : ""}`} onClick={()=>{const d=new Date(day);d.setHours(9);onCreate(d);}} key={day.toISOString()}><span>{dayNames[(day.getDay()+6)%7]}{dayHours!==24 ? ` · ${dayHours} val.` : ""}</span><strong>{day.getDate()}</strong></button>;
     })}
-    <div className="allDayLabel">Visa diena</div>{days.map(day=><div className="allDayCell" key={`all-${day.toISOString()}`}>{events.filter(event=>event.allDay && (event.start.date || localInput(new Date(event.start.dateTime!)).slice(0,10))<=localInput(day).slice(0,10) && (event.end.date || localInput(new Date(event.end.dateTime!)).slice(0,10))>localInput(day).slice(0,10)).map(event=><EventBlock compact event={event} key={`${event.provider}-${event.id}`}/>)}</div>)}
+    <div className="allDayLabel">Visa diena</div>{days.map(day=>{
+      const dayStr=localInput(day).slice(0,10),nextStr=localInput(new Date(day.getTime()+86400000)).slice(0,10);
+      const allDay=events.filter(event=>event.allDay && (event.start.date||localInput(new Date(event.start.dateTime!)).slice(0,10))<=dayStr && (event.end.date||localInput(new Date(event.end.dateTime!)).slice(0,10))>dayStr);
+      const visible=allDay.slice(0,3),overflow=allDay.length-3;
+      return <div className="allDayCell" key={`all-${day.toISOString()}`}>
+        {visible.map(event=>{const start=event.start.date||localInput(new Date(event.start.dateTime!)).slice(0,10);const end=event.end.date||localInput(new Date(event.end.dateTime!)).slice(0,10);return <EventBlock compact event={event} continuesBefore={start<dayStr} continuesAfter={end>nextStr} key={`${event.provider}-${event.id}`}/>;})}
+        {overflow>0 && <button className="allDayOverflow" onClick={()=>actions.edit(visible[0])}>+{overflow} daugiau</button>}
+      </div>;
+    })}
     <div className="hourLabels">{hours.map(hour=><span key={hour}>{String(hour).padStart(2,"0")}:00</span>)}</div>
     {days.map(day=><div className="dayLane" data-day={localInput(day).slice(0,10)} onDragOver={e=>e.preventDefault()} onDrop={e=>onDrop(e,day)} key={day.toISOString()}>
       {hours.map(hour=><button className="slot" aria-label={`${localInput(day).slice(0,10)} ${String(hour).padStart(2,"0")}:00 – naujas įvykis`} onDoubleClick={()=>{try {onCreate(dateAtMinute(day,hour*60));} catch(error) {actions.report(error);}}} key={hour}/>)}
