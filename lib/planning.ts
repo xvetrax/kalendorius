@@ -6,6 +6,7 @@ export type OutlookEventInput = {
   end: unknown;
   attendees?: unknown;
   showAs?: unknown;
+  visibility?: unknown;
   isReminderOn?: unknown;
   addMeet?: unknown;
   kind?: unknown;
@@ -30,6 +31,7 @@ export function buildOutlookEvent(body: OutlookEventInput) {
     end: { dateTime: utcDateTime(body.end), timeZone: "UTC" },
     attendees: String(body.attendees || "").split(",").map((email) => email.trim()).filter(Boolean).map((address) => ({ emailAddress: { address }, type: "required" })),
     showAs: taskBlock ? "free" : (SHOW_AS.has(requestedShowAs) ? requestedShowAs : "busy"),
+    ...(body.visibility === "private" ? { sensitivity: "private" } : {}),
     isReminderOn: taskBlock ? false : body.isReminderOn !== false,
     isOnlineMeeting: !taskBlock && Boolean(body.addMeet),
     ...(!taskBlock && body.addMeet ? { onlineMeetingProvider: "teamsForBusiness" } : {}),

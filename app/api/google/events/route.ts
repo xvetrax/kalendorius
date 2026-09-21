@@ -25,6 +25,8 @@ export async function POST(request: Request) {
     const event: Record<string, unknown> = {
       summary: String(body.summary).trim(), description: String(body.description || ""),
       ...(body.location ? { location: String(body.location).slice(0, 1000) } : {}),
+      ...(body.showAs === "free" ? { transparency: "transparent" } : {}),
+      ...(body.visibility === "private" ? { visibility: "private" } : {}),
       start: { dateTime: start.toISOString(), timeZone: "UTC" }, end: { dateTime: end.toISOString(), timeZone: "UTC" },
       attendees: String(body.attendees || "").split(",").map((email) => email.trim()).filter(Boolean).map((email) => ({ email })),
     };
