@@ -304,7 +304,7 @@ function TimeGrid({ days, events, tasks, onDrop, onCreate }: { days: Date[]; eve
     })}
     <div className="hourLabels">{hours.map(hour=><span key={hour}>{String(hour).padStart(2,"0")}:00</span>)}</div>
     {days.map(day=><div className="dayLane" data-day={localInput(day).slice(0,10)} onDragOver={e=>e.preventDefault()} onDrop={e=>onDrop(e,day)} key={day.toISOString()}>
-      {hours.map(hour=><button className="slot" aria-label={`${localInput(day).slice(0,10)} ${String(hour).padStart(2,"0")}:00 – naujas įvykis`} onDoubleClick={()=>{try {onCreate(dateAtMinute(day,hour*60));} catch(error) {actions.report(error);}}} key={hour}/>)}
+      {hours.map(hour=>{function open(){try{onCreate(dateAtMinute(day,hour*60));}catch(error){actions.report(error);}}return <button className="slot" aria-label={`${localInput(day).slice(0,10)} ${String(hour).padStart(2,"0")}:00 – naujas įvykis`} onDoubleClick={open} onKeyDown={e=>{if(e.key==="Enter")open();}} key={hour}/>;})}
       {layoutDay(timed,day).map(segment=>{
         const item=timed.find(item=>item.key===segment.key)!;
         return item.event ? <EventBlock event={item.event} segment={segment} key={segment.key}/> : <TaskBlock task={item.task!} segment={segment} key={segment.key}/>;
