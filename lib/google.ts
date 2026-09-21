@@ -90,11 +90,13 @@ export async function exchangeCode(code: string) {
 }
 
 let tokenRefresh: {generation: string | undefined; promise: Promise<string>} | null = null;
+let cachedToken: {token: string; expiresAt: number; generation: string} | null = null;
 
 async function accessToken() {
   const stored = setting("google_refresh_token");
   const generation = setting("google_connection_generation");
   if (!stored) throw new Error("Google Calendar neprijungtas");
+  if (cachedToken !== null && cachedToken.generation === generation && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.token;
   if (tokenRefresh && tokenRefresh.generation === generation) return tokenRefresh.promise;
   const pending = { generation, promise: refreshAccessToken(stored, generation) };
   tokenRefresh = pending;
@@ -135,9 +137,11 @@ async function refreshAccessToken(stored: string, generation: string | undefined
       throw error;
     }
   }
+  cachedToken = {token: body.access_token as string, expiresAt: Date.now() + (body.expires_in ?? 3600) * 1000, generation: generation as string};
   return body.access_token as string;
 }
 
+export function _clearCachedTokenForTest() { cachedToken = null; tokenRefresh = null; }
 export function isGoogleConnected() {
   return Boolean(setting("google_refresh_token"));
 }
@@ -166,6 +170,7 @@ export function isGoogleTasksConnected() {
 }
 
 export function disconnectGoogle() {
+  cachedToken = null;
   deleteSettings("google_refresh_token", "google_account", "google_account_id", "google_granted_scopes", tasksStatusSetting);
   saveSetting("google_connection_generation", randomUUID());
 }

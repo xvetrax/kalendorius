@@ -50,10 +50,13 @@ export async function exchangeMicrosoftCode(code: string) {
 }
 
 let tokenRefresh: {generation: string | undefined; promise: Promise<string>} | null = null;
+let cachedToken: {token: string; expiresAt: number; generation: string} | null = null;
+
 async function accessToken() {
   const stored = setting("microsoft_refresh_token");
   const generation = setting("microsoft_connection_generation");
   if (!stored) throw new Error("Outlook neprijungtas");
+  if (cachedToken !== null && cachedToken.generation === generation && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.token;
   if (tokenRefresh?.generation === generation && tokenRefresh) return tokenRefresh.promise;
   const pending = {generation,promise:refreshAccessToken(stored,generation)};
   tokenRefresh=pending;
@@ -71,9 +74,11 @@ async function refreshAccessToken(stored: string, generation: string | undefined
   if (setting("microsoft_refresh_token") !== stored || setting("microsoft_connection_generation") !== generation) throw new Error("Microsoft prisijungimas pasikeitė. Pakartok veiksmą.");
   if (!body.access_token) throw new Error("Microsoft prieigos atnaujinti nepavyko");
   if (body.refresh_token) saveSetting("microsoft_refresh_token", encrypt(body.refresh_token));
+  cachedToken = {token: body.access_token as string, expiresAt: Date.now() + (body.expires_in ?? 3600) * 1000, generation: generation as string};
   return body.access_token as string;
 }
 
+export function _clearCachedTokenForTest() { cachedToken = null; tokenRefresh = null; }
 export function isMicrosoftConnected() { return Boolean(setting("microsoft_refresh_token")); }
 export function microsoftAccount() { return setting("microsoft_account") || null; }
 export function cachedMicrosoftAccountId() { return setting("microsoft_account_id") || null; }
@@ -87,7 +92,7 @@ export async function microsoftAccountId() {
   saveSetting("microsoft_account_id", String(profile.id));
   return String(profile.id);
 }
-export function disconnectMicrosoft() { deleteSettings("microsoft_refresh_token", "microsoft_task_list_id", "microsoft_account", "microsoft_account_id"); saveSetting("microsoft_connection_generation", randomUUID()); }
+export function disconnectMicrosoft() { cachedToken = null; deleteSettings("microsoft_refresh_token", "microsoft_task_list_id", "microsoft_account", "microsoft_account_id"); saveSetting("microsoft_connection_generation", randomUUID()); }
 export function isMicrosoftConfigured() {
   try { config(); return isTokenEncryptionConfigured(); } catch { return false; }
 }

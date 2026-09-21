@@ -24,6 +24,7 @@ const google=await import("../lib/google.ts");
 const originalFetch=globalThis.fetch;
 after(() => {globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 beforeEach(() => {
+  google._clearCachedTokenForTest();
   db.exec("DELETE FROM settings");
   saveSetting("google_refresh_token",encrypt("old-refresh"));
   saveSetting("google_account_id","old-account");
@@ -157,4 +158,31 @@ test("incremental consent keeps a token rotated during the account lookup",async
   const exchange=google.exchangeCode("incremental");await started.promise;saveSetting("google_refresh_token",encrypt("rotated-during-consent"));
   waiting.resolve(json({sub:"old-account"}));await exchange;
   assert.equal(decrypt(setting("google_refresh_token")),"rotated-during-consent");
+});
+
+test("cached token is reused for sequential API calls without hitting the token endpoint again",async()=>{
+  let refreshes=0;let apiCalls=0;
+  globalThis.fetch=async(url,init)=>{
+    if(url.includes("/token")){refreshes++;return json({access_token:"cached-access",expires_in:3600});}
+    apiCalls++;assert.equal(init.headers.authorization,"Bearer cached-access");return json({items:[]});
+  };
+  await google.googleFetch("/calendars/primary/events");
+  await google.googleFetch("/calendars/primary/events");
+  await google.googleFetch("/calendars/primary");
+  assert.equal(refreshes,1,"token endpoint must be called only once for three sequential requests");
+  assert.equal(apiCalls,3);
+});
+
+test("disconnect clears the token cache so the next call triggers a fresh refresh",async()=>{
+  let refreshes=0;
+  globalThis.fetch=async url=>{
+    if(url.includes("/token")){refreshes++;return json({access_token:"access-"+refreshes,expires_in:3600});}
+    return json({items:[]});
+  };
+  await google.googleFetch("/calendars/primary/events");
+  assert.equal(refreshes,1);
+  google.disconnectGoogle();
+  saveSetting("google_refresh_token",encrypt("new-refresh"));
+  await google.googleFetch("/calendars/primary/events");
+  assert.equal(refreshes,2,"after disconnect+reconnect the token endpoint must be called again");
 });

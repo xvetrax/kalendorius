@@ -24,6 +24,7 @@ const ms=await import("../lib/microsoft.ts");
 const originalFetch=globalThis.fetch;
 after(() => {globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 beforeEach(() => {
+  ms._clearCachedTokenForTest();
   db.exec("DELETE FROM settings");
   saveSetting("microsoft_refresh_token",encrypt("old-refresh"));
   saveSetting("microsoft_account_id","old-account");
@@ -88,4 +89,31 @@ test("a list response arriving after an account switch cannot poison the new acc
   ms.disconnectMicrosoft();saveSetting("microsoft_refresh_token",encrypt("new-refresh"));saveSetting("microsoft_account_id","new-account");
   waiting.resolve(json({value:[{id:"old-list",wellknownListName:"defaultList"}]}));
   await assert.rejects(request,/pasikeitė/);assert.equal(setting("microsoft_task_list_id"),undefined);
+});
+
+test("cached token is reused for sequential API calls without hitting the token endpoint again",async () => {
+  let refreshes=0;let graphCalls=0;
+  globalThis.fetch=async (url,init) => {
+    if (url.includes("/token")) {refreshes++;return json({access_token:"cached-access",refresh_token:"rotated-refresh",expires_in:3600});}
+    graphCalls++;assert.equal(init.headers.authorization,"Bearer cached-access");return json({value:[]});
+  };
+  await ms.graphFetch("/me/events");
+  await ms.graphFetch("/me/todo/lists");
+  await ms.graphFetch("/me/calendars");
+  assert.equal(refreshes,1,"token endpoint must be called only once for three sequential requests");
+  assert.equal(graphCalls,3);
+});
+
+test("disconnect clears the token cache so the next call triggers a fresh refresh",async () => {
+  let refreshes=0;
+  globalThis.fetch=async (url) => {
+    if (url.includes("/token")) {refreshes++;return json({access_token:"access-"+refreshes,expires_in:3600});}
+    return json({value:[]});
+  };
+  await ms.graphFetch("/me/events");
+  assert.equal(refreshes,1);
+  ms.disconnectMicrosoft();
+  saveSetting("microsoft_refresh_token",encrypt("new-refresh"));
+  await ms.graphFetch("/me/events");
+  assert.equal(refreshes,2,"after disconnect+reconnect the token endpoint must be called again");
 });
