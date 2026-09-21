@@ -14,8 +14,9 @@ export function EventBlock({event,compact=false,segment,continuesBefore=false,co
   if (!segment) return null;
   const gestureSafe=event.editable && segment.gestureSafe;
   return <div className={`eventBlock calendarEvent ${event.provider} ${event.editable ? "editable" : "readOnly"}`} data-short={segment.height<45 || undefined} data-tiny={segment.height<24 || undefined} style={{...segmentStyle(segment,preview),transform:offset ? `translate(${offset.x}px,${offset.y}px)` : undefined,zIndex:offset ? 12 : undefined,pointerEvents:offset ? "none" : undefined}}>
-    <button className="eventDetails" disabled={saving} aria-label={`Redaguoti įvykį: ${event.summary}`} title={gestureSafe ? "Tempk perkelti arba paspausk redaguoti" : event.editable ? "Kelių dienų ar laiko keitimo dienos įvykį keisk paspaudęs redaguoti" : event.readOnlyReason}
+    <button className="eventDetails" disabled={saving} aria-label={`Redaguoti įvykį: ${event.summary}`} title={gestureSafe ? "Tempk perkelti arba paspausk redaguoti. Shift+↑↓ — laikas, Shift+←→ — diena." : event.editable ? "Kelių dienų ar laiko keitimo dienos įvykį keisk paspaudęs redaguoti" : event.readOnlyReason}
       onClick={(e)=>{if (e.detail===0 || !moved.current) actions.edit(event);}}
+      onKeyDown={(e)=>{if(!gestureSafe||!e.shiftKey)return;const steps:Record<string,number>={ArrowDown:15,ArrowUp:-15,ArrowRight:1440,ArrowLeft:-1440};const step=steps[e.key];if(!step)return;e.preventDefault();const ns=new Date(start.getTime()+step*60000);void commit(ns,new Date(ns.getTime()+duration*60000));}}
       onPointerDown={(e)=>{moved.current=false;if(!gestureSafe || e.button!==0) return;gesture.current={x:e.clientX,y:e.clientY,resize:false,next:duration,grab:e.clientY-e.currentTarget.closest(".eventBlock")!.getBoundingClientRect().top};e.currentTarget.setPointerCapture(e.pointerId);}}
       onPointerMove={(e)=>{const g=gesture.current;if(!g) return;const dx=e.clientX-g.x,dy=e.clientY-g.y;if(moved.current || Math.hypot(dx,dy)>5){moved.current=true;setOffset({x:dx,y:dy});}}}
       onPointerCancel={()=>{gesture.current=null;setOffset(null);}}
