@@ -93,12 +93,12 @@ Priimta, kai `npm run build && npm start` pateikia HTML, CSS, JS ir favicon, nau
 - [x] Vietinės ir Microsoft užduotys vienu metu; aiškus pasirinkimas, kur kurti užduotį.
 - [x] Planavimas / perplanavimas / trukmė / išplanavimas nekeičia To Do termino ir nesikreipia į kalendoriaus API be atskiro pasirinkimo.
 - [x] Pasirenkamo `free` bloko sukūrimas, išsaugotas ryšys, atnaujinimas ir pašalinimas atliekant veiksmus programėlėje; sutartiniai testai su imitacine API.
-- [ ] Susietų blokų sutvarkymas po išorinio užduoties užbaigimo / pašalinimo; jau pašalinto įvykio 404 apdorojimas; tikro Graph pakartojimo patikra.
+- [x] Susietų blokų sutvarkymas po išorinio užduoties užbaigimo / pašalinimo; jau pašalinto įvykio 404 apdorojimas; tikro Graph pakartojimo patikra.
 - [x] Microsoft lygiagretūs veiksmai dalinasi žetono atnaujinimu; rotacija, atjungimas ir paskyros keitimas apsaugoti nuo pavėluotų atsakymų, patikrinti imitaciniais testais.
 - [x] Tokia pati Google apsauga: bendras lygiagretus atnaujinimas, užšifruota rotacija, paskyros ir žetono pakeitimas vienoje transakcijoje, atjungimo lenktynių testai.
-- [ ] Prieigos žetono galiojimas, vienas lygiagretus atnaujinimas, rotacija, atjungimo ir vykstančio atnaujinimo lenktynių apsauga.
+- [x] Prieigos žetono galiojimas, vienas lygiagretus atnaujinimas, rotacija, atjungimo ir vykstančio atnaujinimo lenktynių apsauga.
 - [x] Dalinis kalendorių / užduočių atnaujinimas, vietinių užduočių prieinamumas ir paskutinė Microsoft talpykla nepavykus užklausai; lietuviškos užduočių veiksmų klaidos.
-- [ ] Vieningas įvykių redaktorių klaidų ir 401/403/429 apdorojimas.
+- [x] Vieningas įvykių redaktorių klaidų ir 401/403/429 apdorojimas.
 
 Priimta, kai sutartiniai testai su imitacine Graph paslauga įrodo: 0 kalendoriaus rašymų įprastai planuojant; nepasikeitęs terminas; išlikęs laikas ir trukmė po perkrovimo; pasirinktas blokas `free`; jokio dublikato kartojant; atjungimas negali būti panaikintas vėluojančiu žetono atnaujinimu.
 
