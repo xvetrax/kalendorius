@@ -139,7 +139,7 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [ ] Google hierarchijos ir eilės tvarkos keitimas, perkėlimas tarp palaikomų sąrašų.
 - [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
 - [ ] Gyvų paskyrų patikra ir šaltinyje ištrintų užduočių pasirenkamų Outlook blokų sutvarkymas.
-- [ ] Fokusavimo sesijos su išsaugomu pradžios laiku, pauze ir užduoties ryšiu; po perkrovimo laikmatis nepraranda būsenos.
+- [x] Fokusavimo sesijos su išsaugomu pradžios laiku, pauze ir užduoties ryšiu; po perkrovimo laikmatis nepraranda būsenos.
 
 Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti, perkelti, užbaigti ir atkurti; persikrovus bei pasikeitus duomenims šaltinyje rodoma teisinga būsena. Nepalaikomi laukai nepateikiami kaip tariamai sinchronizuojami.
 
