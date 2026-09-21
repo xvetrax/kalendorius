@@ -37,16 +37,20 @@ for(const provider of ["google","outlook"]) {
     for(const extra of [{patch:{attendees:[]}},{showAs:"free"},{recurrence:[]},{attendees:[]},{start:"2026-10-25T10:00"},{end:from},{summary:" "}])await assert.rejects(service.update({...input,...extra}),e=>e.status===400);
     assert.equal(calls.length,0);
   });
-  test(`${provider}: account changes, read-only events, all-day and recurring events are protected`,async()=>{
+  test(`${provider}: account changes, non-owner, all-day, and series master are blocked; instances are editable`,async()=>{
     const {service,input,raw,state,calls}=fixture(provider);
     state.connection="account-b";await assert.rejects(service.update(input),e=>e.status===409);assert.equal(calls.length,0);state.connection="account-a";
     if(provider==="google") raw.organizer.self=false;else raw.isOrganizer=false;
     await assert.rejects(service.update(input),e=>e.status===403);
+    // recurring INSTANCE is now editable
     if(provider==="google") {raw.organizer.self=true;raw.recurringEventId="series";}else {raw.isOrganizer=true;raw.type="occurrence";}
-    await assert.rejects(service.update(input),e=>e.status===403);
-    if(provider==="google") {delete raw.recurringEventId;raw.start={date:"2026-10-25"};raw.end={date:"2026-10-26"};}else {raw.type="singleInstance";raw.isAllDay=true;}
-    await assert.rejects(service.update(input),e=>e.status===403);
-    assert.ok(calls.every(c=>!c.method));
+    const instanceResult=await service.update(input);assert.ok(instanceResult.recurring);assert.ok(instanceResult.editable);
+    // series MASTER is still blocked
+    if(provider==="google") {delete raw.recurringEventId;raw.recurrence=["RRULE:FREQ=DAILY"];}else {raw.type="seriesMaster";delete raw.seriesMasterId;}
+    await assert.rejects(service.update({...input,version:instanceResult.version}),e=>e.status===403);
+    // all-day events are still blocked
+    if(provider==="google") {delete raw.recurrence;raw.start={date:"2026-10-25"};raw.end={date:"2026-10-26"};}else {raw.type="singleInstance";raw.isAllDay=true;}
+    await assert.rejects(service.update({...input,version:instanceResult.version}),e=>e.status===403);
   });
   test(`${provider}: serial edits cannot apply an older version after the first accepted move`,async()=>{
     const {service,input,calls}=fixture(provider);

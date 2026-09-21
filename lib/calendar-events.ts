@@ -31,12 +31,14 @@ function graphTime(value:any) {
 export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:string):CalendarEvent {
   const google=provider === "google";
   const allDay=google ? Boolean(raw.start?.date) : Boolean(raw.isAllDay);
-  const recurring=google ? Boolean(raw.recurringEventId || raw.recurrence) : Boolean(raw.seriesMasterId || (raw.type && raw.type !== "singleInstance"));
+  const recurringMaster=google ? Boolean(raw.recurrence && !raw.recurringEventId) : raw.type === "seriesMaster";
+  const recurringInstance=google ? Boolean(raw.recurringEventId) : Boolean(raw.seriesMasterId || (raw.type === "occurrence" || raw.type === "exception"));
+  const recurring=recurringMaster || recurringInstance;
   const version=String((google ? raw.etag : raw["@odata.etag"] || raw.changeKey) || "");
   const owner=google ? raw.organizer?.self === true : raw.isOrganizer === true;
   const special=google && ((raw.eventType && raw.eventType !== "default") || raw.locked);
   const cancelled=google ? raw.status === "cancelled" : raw.isCancelled;
-  const readOnlyReason=cancelled ? "Įvykis atšauktas." : !owner ? "Šiame etape redaguojami tik tavo organizuojami įvykiai." : special ? "Šio tipo įvykį redaguok originaliame kalendoriuje." : allDay ? "Visos dienos įvykio redagavimas dar ruošiamas." : recurring ? "Pasikartojančius įvykius kol kas redaguok originaliame kalendoriuje." : !version ? "Nėra įvykio versijos. Atnaujink kalendorių." : "";
+  const readOnlyReason=cancelled ? "Įvykis atšauktas." : !owner ? "Šiame etape redaguojami tik tavo organizuojami įvykiai." : special ? "Šio tipo įvykį redaguok originaliame kalendoriuje." : allDay ? "Visos dienos įvykio redagavimas dar ruošiamas." : recurringMaster ? "Pasikartojančių įvykių serija redaguojama originaliame kalendoriuje." : !version ? "Nėra įvykio versijos. Atnaujink kalendorių." : "";
   const location:string|undefined=google ? (raw.location || undefined) : (raw.location?.displayName || undefined);
   const description:string|undefined=google ? (raw.description || undefined) : (raw.body?.content || undefined);
   return {id:raw.id,provider,connectionId,version,summary:(google ? raw.summary : raw.subject) || "Be pavadinimo",
