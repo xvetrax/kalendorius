@@ -3,7 +3,7 @@ export type CalendarEvent = {
   id:string; provider:CalendarProvider; connectionId:string; version:string;
   summary:string; description?:string; location?:string; start:{dateTime?:string;date?:string}; end:{dateTime?:string;date?:string};
   htmlLink?:string; hangoutLink?:string; editable:boolean; readOnlyReason:string;
-  attendeeCount:number; recurring:boolean; allDay:boolean;
+  attendeeCount:number; attendees?:{email:string;name?:string;self?:boolean;responseStatus:string}[]; recurring:boolean; allDay:boolean;
 };
 export class CalendarError extends Error {
   status:number;
@@ -41,12 +41,18 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
   const readOnlyReason=cancelled ? "Įvykis atšauktas." : !owner ? "Šiame etape redaguojami tik tavo organizuojami įvykiai." : special ? "Šio tipo įvykį redaguok originaliame kalendoriuje." : allDay ? "Visos dienos įvykio redagavimas dar ruošiamas." : recurringMaster ? "Pasikartojančių įvykių serija redaguojama originaliame kalendoriuje." : !version ? "Nėra įvykio versijos. Atnaujink kalendorių." : "";
   const location:string|undefined=google ? (raw.location || undefined) : (raw.location?.displayName || undefined);
   const description:string|undefined=google ? (raw.description || undefined) : (raw.body?.content || undefined);
+  const rawAttendees:any[]=Array.isArray(raw.attendees) ? raw.attendees : [];
+  const attendees=rawAttendees.length ? rawAttendees.map((a:any)=>google
+    ? {email:String(a.email||""),name:a.displayName||undefined,self:Boolean(a.self),responseStatus:a.responseStatus||"needsAction"}
+    : {email:String(a.emailAddress?.address||""),name:a.emailAddress?.name||undefined,self:false,responseStatus:a.status?.response==="accepted"?"accepted":a.status?.response==="declined"?"declined":a.status?.response==="tentativelyAccepted"?"tentative":"needsAction"}) : undefined;
   return {id:raw.id,provider,connectionId,version,summary:(google ? raw.summary : raw.subject) || "Be pavadinimo",
     ...(description ? {description} : {}),
     ...(location ? {location} : {}),
     start:google ? raw.start : {dateTime:graphTime(raw.start)},end:google ? raw.end : {dateTime:graphTime(raw.end)},
     htmlLink:google ? raw.htmlLink : raw.webLink,hangoutLink:google ? raw.hangoutLink : raw.onlineMeeting?.joinUrl,
-    editable:!readOnlyReason,readOnlyReason,attendeeCount:raw.attendees?.length || 0,recurring,allDay};
+    editable:!readOnlyReason,readOnlyReason,attendeeCount:rawAttendees.length,
+    ...(attendees ? {attendees} : {}),
+    recurring,allDay};
 }
 export function createCalendarService(provider:CalendarProvider,gateway:Gateway) {
   const google=provider === "google";
@@ -77,11 +83,16 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
   }
   async function update(input:Record<string,unknown>) {
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new CalendarError("Neteisingi įvykio duomenys.");
-    const allowed=new Set(["id","connectionId","version","start","end","summary","description","location","confirmAttendees"]);
+    const allowed=new Set(["id","connectionId","version","start","end","summary","description","location","attendees","confirmAttendees"]);
     if (Object.keys(input).some(key=>!allowed.has(key))) throw new CalendarError("Pateikti nepalaikomi įvykio laukai.");
     if (typeof input.id !== "string" || !input.id || input.id === "." || input.id === ".." || input.id.length>2048 || typeof input.version !== "string" || !input.version || typeof input.connectionId !== "string") throw new CalendarError("Trūksta įvykio ID, paskyros arba versijos.");
     const times=eventTimes(input.start,input.end);
     if (input.summary !== undefined && (typeof input.summary !== "string" || !input.summary.trim() || input.summary.length>1024)) throw new CalendarError("Įvesk pavadinimą iki 1024 simbolių.");
+    if (input.attendees !== undefined) {
+      if (!Array.isArray(input.attendees)) throw new CalendarError("Neteisingas dalyvių sąrašas.");
+      const emails=(input.attendees as any[]).map(a=>typeof a?.email==="string" ? a.email.toLowerCase().trim() : "");
+      if (emails.some(e=>!e||!e.includes("@")||e.length>256)) throw new CalendarError("Neteisingas dalyvio el. paštas.");
+    }
     const connectionId=connected(input.connectionId),key=JSON.stringify([provider,connectionId,input.id]);
     const previous=locks.get(key) || Promise.resolve();
     const operation=previous.catch(()=>{}).then(async ()=>{
@@ -91,10 +102,16 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       const current=normalizeEvent(provider,raw,connectionId);
       if (!current.editable) throw new CalendarError(current.readOnlyReason,403);
       if (current.version !== input.version) throw new CalendarError("Įvykis jau pakeistas kitur. Atnaujink kalendorių ir peržiūrėk laiką.",409);
-      if (current.attendeeCount && input.confirmAttendees !== true) throw new CalendarError("Laiko pakeitimas išsiųs atnaujinimą dalyviams. Patvirtink pakeitimą.",409);
+      const curStart=current.start.dateTime ? new Date(current.start.dateTime).getTime() : NaN;
+      const curEnd=current.end.dateTime ? new Date(current.end.dateTime).getTime() : NaN;
+      const timeChanged=!Number.isNaN(curStart)&&(curStart!==new Date(times.start).getTime()||curEnd!==new Date(times.end).getTime());
+      if (timeChanged && current.attendeeCount && input.confirmAttendees !== true) throw new CalendarError("Laiko pakeitimas išsiųs atnaujinimą dalyviams. Patvirtink pakeitimą.",409);
       const locPatch=input.location !== undefined ? (google ? {location:String(input.location||"").slice(0,1000)||null} : {location:{displayName:String(input.location||"").slice(0,1000)}}) : {};
       const descPatch=input.description !== undefined ? (google ? {description:String(input.description||"").slice(0,10000)} : {body:{contentType:"text",content:String(input.description||"").slice(0,10000)}}) : {};
-      const patch=google ? {start:{dateTime:times.start,timeZone:raw.start?.timeZone || "UTC"},end:{dateTime:times.end,timeZone:raw.end?.timeZone || "UTC"},...(input.summary !== undefined ? {summary:input.summary} : {}),...locPatch,...descPatch} : {start:{dateTime:times.start.replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:times.end.replace(/Z$/,""),timeZone:"UTC"},...(input.summary !== undefined ? {subject:input.summary} : {}),...locPatch,...descPatch};
+      const attendeePatch=input.attendees !== undefined ? (google
+        ? {attendees:(input.attendees as any[]).map(a=>({email:String(a.email).toLowerCase().trim()}))}
+        : {attendees:(input.attendees as any[]).map(a=>({emailAddress:{address:String(a.email).toLowerCase().trim()},type:"required"}))}) : {};
+      const patch=google ? {start:{dateTime:times.start,timeZone:raw.start?.timeZone || "UTC"},end:{dateTime:times.end,timeZone:raw.end?.timeZone || "UTC"},...(input.summary !== undefined ? {summary:input.summary} : {}),...locPatch,...descPatch,...attendeePatch} : {start:{dateTime:times.start.replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:times.end.replace(/Z$/,""),timeZone:"UTC"},...(input.summary !== undefined ? {subject:input.summary} : {}),...locPatch,...descPatch,...attendeePatch};
       const updated=await gateway.request(base+(google ? "?sendUpdates=all&conferenceDataVersion=1" : ""),{method:"PATCH",headers:{...headers,...((google || raw["@odata.etag"]) ? {"If-Match":current.version} : {})},body:JSON.stringify(patch)});
       connected(connectionId);
       return normalizeEvent(provider,updated,connectionId);

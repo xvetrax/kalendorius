@@ -24,17 +24,34 @@ for(const provider of ["google","outlook"]) {
     assert.equal(Date.parse(result.start.dateTime),Date.parse(from));
     assert.deepEqual(raw.attendees,before.attendees);assert.deepEqual(raw.body,before.body);assert.deepEqual(raw.conferenceData,before.conferenceData);assert.deepEqual(raw.reminders,before.reminders);assert.equal(raw.showAs,before.showAs);
   });
-  test(`${provider}: stale versions and unconfirmed attendee notifications never write`,async()=>{
+  test(`${provider}: stale versions and unconfirmed attendee notifications on time change never write`,async()=>{
     const {service,input,calls,raw}=fixture(provider);
     await assert.rejects(service.update({...input,version:"old"}),e=>e.status===409);
     raw.attendees=[{email:"synthetic@example.test"}];
+    // time change with attendees requires confirmation
     await assert.rejects(service.update(input),e=>e.status===409);
     assert.ok(calls.every(c=>!c.method));
     await service.update({...input,confirmAttendees:true});assert.equal(calls.filter(c=>c.method==="PATCH").length,1);
   });
-  test(`${provider}: client payload cannot overwrite attendees, series, busy status or arbitrary fields`,async()=>{
+  test(`${provider}: attendee-only update skips time-change confirmation; bad email rejected`,async()=>{
+    const {service,calls,raw}=fixture(provider);
+    // use same start/end as the fixture event to avoid time-change trigger
+    const sameStart=provider==="google"?"2026-10-24T08:00:00Z":"2026-10-24T08:00:00Z";
+    const sameEnd=provider==="google"?"2026-10-24T09:00:00Z":"2026-10-24T09:00:00Z";
+    raw.attendees=[{email:"existing@example.test"}];
+    const ver=normalizeEvent(provider,raw,"account-a").version;
+    const sameTimeInput={id:raw.id,connectionId:"account-a",version:ver,start:sameStart,end:sameEnd};
+    // no confirmAttendees needed when only attendees change
+    await service.update({...sameTimeInput,attendees:[{email:"new@example.test"}]});
+    assert.equal(calls.filter(c=>c.method==="PATCH").length,1);
+    // bad email rejected without write
+    const newVer=normalizeEvent(provider,raw,"account-a").version;
+    await assert.rejects(service.update({...sameTimeInput,version:newVer,attendees:[{email:"not-an-email"}]}),e=>e.status===400);
+    assert.equal(calls.filter(c=>c.method==="PATCH").length,1);
+  });
+  test(`${provider}: client payload cannot overwrite series, busy status or arbitrary fields; bad attendees rejected`,async()=>{
     const {service,input,calls}=fixture(provider);
-    for(const extra of [{patch:{attendees:[]}},{showAs:"free"},{recurrence:[]},{attendees:[]},{start:"2026-10-25T10:00"},{end:from},{summary:" "}])await assert.rejects(service.update({...input,...extra}),e=>e.status===400);
+    for(const extra of [{patch:{attendees:[]}},{showAs:"free"},{recurrence:[]},{start:"2026-10-25T10:00"},{end:from},{summary:" "},{attendees:"not-an-array"},{attendees:[{email:"bad"}]}])await assert.rejects(service.update({...input,...extra}),e=>e.status===400);
     assert.equal(calls.length,0);
   });
   test(`${provider}: account changes, non-owner, all-day, and series master are blocked; instances are editable`,async()=>{

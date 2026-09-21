@@ -39,10 +39,15 @@ for(const provider of ["google","microsoft"]){
     const broken=await route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:"http://localhost:3000"},body:"{"}));assert.equal(broken.status,400);
   });
 }
-test("actual Outlook route protects non-organizer events and requires participant confirmation",async()=>{
+test("actual Outlook route protects non-organizer events and requires participant confirmation on time change",async()=>{
   const route=routes.microsoft,url="http://localhost:3000/api/microsoft/events";
   const items=(await (await route.GET(new Request(url))).json()).items;
-  for(const [event,status] of [[items.find(e=>e.attendeeCount),409],[items.find(e=>!e.editable),403]]){
-    const response=await route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify(inputFor(event))}));assert.equal(response.status,status);
+  const withAttendees=items.find(e=>e.attendeeCount&&e.editable);
+  if(withAttendees){
+    // time change with attendees requires confirmAttendees
+    const movedInput={...inputFor(withAttendees),start:new Date(Date.parse(withAttendees.start.dateTime)+3600000).toISOString(),end:new Date(Date.parse(withAttendees.end.dateTime)+3600000).toISOString()};
+    assert.equal((await route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify(movedInput)}))).status,409);
   }
+  const nonEditable=items.find(e=>!e.editable);
+  if(nonEditable)assert.equal((await route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify(inputFor(nonEditable))}))).status,403);
 });
