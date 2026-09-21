@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
+import { graphRecurrence, parseTaskRecurrence, providerRecurrence, sameTaskRecurrence, taskRecurrenceDate } from "./task-recurrence.ts";
 
 export type RemoteTaskSource = "microsoft" | "google";
 export type TaskList = { key: string; source: RemoteTaskSource; account_id: string; list_id: string; name: string; writable: boolean; stale?: boolean;
@@ -349,20 +350,23 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     dateOnly(parts[1]);
     return dateValue(value,true)!;
   }
-  async function currentReminder(input: Input) {
-    if (input.source !== "microsoft") throw new TaskError("Priminimai palaikomi tik Microsoft To Do užduotims.");
+  async function currentMicrosoftTask(input: Input, feature: "priminimai" | "kartojimas") {
+    if (input.source !== "microsoft") throw new TaskError(`${feature === "priminimai" ? "Priminimai palaikomi" : "Kartojimas palaikomas"} tik Microsoft To Do užduotims.`);
     const id=identifier(input.id),list=await currentList(input);
     const path=`/me/todo/lists/${encodeURIComponent(list.list_id)}/tasks/${encodeURIComponent(id)}`;
     const raw=await microsoft.request(path);
     requireAccount(list.account_id);
     if (raw?.id !== id) throw new TaskError("Paslauga grąžino kitą užduotį. Atnaujink duomenis.",502);
-    return {raw,list,path,snapshot:reminderSnapshot(raw,list)};
+    return {raw,list,path};
   }
-  async function readReminder(input: Input) {return (await currentReminder(input)).snapshot;}
+  async function readReminder(input: Input) {
+    const {raw,list}=await currentMicrosoftTask(input,"priminimai");
+    return reminderSnapshot(raw,list);
+  }
   async function updateReminder(input: Input) {
     if (typeof input.enabled !== "boolean" || typeof input.version !== "string" || !input.version) throw new TaskError("Pirmiausia perskaityk priminimą ir pasirink jo būseną.");
     const at=input.enabled ? reminderInstant(input.at) : null;
-    const {raw,list,path,snapshot}=await currentReminder(input);
+    const {raw,list,path}=await currentMicrosoftTask(input,"priminimai"),snapshot=reminderSnapshot(raw,list);
     if (snapshot.readonly_reason) throw new TaskError(snapshot.readonly_reason,403);
     if (input.version !== snapshot.version) throw new TaskError("Microsoft priminimas arba užduotis jau pakeisti. Atnaujink priminimą ir patikrink laiką.",409);
     requireAccount(list.account_id);
@@ -373,6 +377,38 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     if (updated?.id !== raw.id) throw new TaskError("Priminimo rezultato patvirtinti nepavyko. Atnaujink duomenis prieš kartodamas.",502);
     // A reminder never alters the local plan, cached task metadata or Outlook mirror.
     return reminderSnapshot(updated,list);
+  }
+  function recurrenceSnapshot(raw: any, list: TaskList) {
+    const parsed=providerRecurrence(raw?.recurrence),readonlyReason=!list.writable ? "Šio specialaus sąrašo kartojimo keisti negalima."
+      : raw?.status === "completed" ? "Užbaigtos užduoties kartojimą keisk atkūręs užduotį."
+      : !parsed.supported ? "Šios Microsoft kartojimo taisyklės programėlė negali saugiai pakeisti. Tvarkyk ją Microsoft To Do." : undefined;
+    const dueDate=typeof raw?.dueDateTime?.dateTime === "string" ? taskRecurrenceDate(raw.dueDateTime.dateTime.slice(0,10)) : null;
+    return {recurrence:parsed.recurrence,supported:parsed.supported,
+      suggested_start_date:dueDate,
+      version:fingerprint({key:remoteKey(list.account_id,list.list_id,identifier(raw?.id)),task:raw}),
+      ...(readonlyReason ? {readonly_reason:readonlyReason} : {})};
+  }
+  async function readRecurrence(input: Input) {
+    const {raw,list}=await currentMicrosoftTask(input,"kartojimas");
+    return recurrenceSnapshot(raw,list);
+  }
+  async function updateRecurrence(input: Input) {
+    if (typeof input.version !== "string" || !input.version || input.recurrence === undefined) throw new TaskError("Pirmiausia perskaityk kartojimo taisyklę ir pasirink jos būseną.");
+    const desired=input.recurrence === null ? null : parseTaskRecurrence(input.recurrence);
+    if (input.recurrence !== null && !desired) throw new TaskError("Neteisinga Microsoft To Do kartojimo taisyklė.");
+    const {raw,list,path}=await currentMicrosoftTask(input,"kartojimas"),snapshot=recurrenceSnapshot(raw,list);
+    if (snapshot.readonly_reason) throw new TaskError(snapshot.readonly_reason, snapshot.supported ? 403 : 409);
+    if (input.version !== snapshot.version) throw new TaskError("Microsoft kartojimo taisyklė arba užduotis jau pakeista. Atnaujink kartojimą.",409);
+    requireAccount(list.account_id);
+    const updated=await microsoft.request(path,{method:"PATCH",
+      ...(typeof raw["@odata.etag"] === "string" ? {headers:{"If-Match":raw["@odata.etag"]}} : {}),
+      body:JSON.stringify({recurrence:desired ? graphRecurrence(desired) : null})});
+    requireAccount(list.account_id);
+    if (updated?.id !== raw.id) throw new TaskError("Kartojimo rezultato patvirtinti nepavyko. Atnaujink duomenis prieš kartodamas.",502);
+    const result=recurrenceSnapshot(updated,list);
+    if (!result.supported || !sameTaskRecurrence(result.recurrence,desired)) throw new TaskError("Microsoft nepatvirtino pasirinktos kartojimo taisyklės. Atnaujink duomenis prieš kartodamas.",502);
+    // Recurrence is provider-owned and never changes local planning or Outlook mirrors.
+    return result;
   }
   async function listProvider(source: RemoteTaskSource) {
     const items: Task[] = [], lists: TaskList[] = [], warnings: string[] = [];
@@ -593,6 +629,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
   // Prevent a slow read from replacing a just-written remote cache snapshot.
   function mutation<T>(input: Input, operation: () => Promise<T>) {return input.source === "google" || input.source === "microsoft" ? serial("task-provider:" + input.source,operation) : operation();}
   return { list, listCatalog, readReminder:(input:Input)=>mutation(input,()=>readReminder(input)), updateReminder:(input:Input)=>mutation(input,()=>updateReminder(input)),
+    readRecurrence:(input:Input)=>mutation(input,()=>readRecurrence(input)), updateRecurrence:(input:Input)=>mutation(input,()=>updateRecurrence(input)),
     createList:(input:Input)=>mutation(input,()=>createList(input)), renameList:(input:Input)=>mutation(input,()=>renameList(input)),
     previewListDeletion:(input:Input)=>mutation(input,()=>previewListDeletion(input)), deleteList:(input:Input)=>mutation(input,()=>deleteList(input)),
     create:(input:Input)=>mutation(input,()=>create(input)), update:(input:Input)=>mutation(input,()=>update(input)), remove:(input:Input)=>mutation(input,()=>remove(input)) };
