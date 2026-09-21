@@ -112,7 +112,7 @@ Priimta, kai sutartiniai testai su imitacine Graph paslauga įrodo: 0 kalendoria
 - [x] Tempimo peržiūra ir aiški sėkmė; nepavykus serverio operacijai — ankstesnė padėtis. Sparčių pakeitimų eilė neleidžia pavėluotam atsakymui perrašyti naujesnio.
 - [ ] Modernus išdėstymas, abiejų temų palaikymas, redaktoriai, paieška, klaviatūra, mobilus rodinys.
 - [x] Kairė navigacija, centrinis kalendorius, suskleidžiama dešinė juosta, šviesi / tamsi / sistemos tema, nustatymų langas, ⌘ / Ctrl K paieška ir atskiri mobilūs rodiniai. Pilnas klaviatūros bei jutiklinis valdymas dar nebaigtas.
-- [ ] Visos dienos ir kelių dienų įvykiai, persidengimai, dabartinis laikas, konfliktai ir 24 val. pasiekiamumas.
+- [x] Visos dienos ir kelių dienų įvykiai, persidengimai, dabartinis laikas, konfliktai ir 24 val. pasiekiamumas.
 - [x] 24 val. dienos / savaitės tinklelis, bendri įvykių ir užduočių persidengimo stulpeliai, naktinių blokų skaidymas ir dabartinio laiko linija. Kelių dienų bei DST tempimas ir kartojamos valandos pasirinkimas lieka nebaigti.
 
 Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įskaitant perkėlimą į kitą savaitę, trukmę, atšaukimą, HTTP klaidą ir datos pokyčius ties 2026-03-29 bei 2026-10-25 Vilniuje.
