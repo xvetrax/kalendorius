@@ -467,7 +467,7 @@ function ExistingEventEditor({value,onClose,onSave}:{value:{event:CalEvent;start
       const originalStart=value.start || event.start.dateTime!,originalEnd=value.end || event.end.dateTime!;
       const start=new Date(String(data.get("start"))===localInput(new Date(originalStart)) ? originalStart : String(data.get("start"))),end=new Date(String(data.get("end"))===localInput(new Date(originalEnd)) ? originalEnd : String(data.get("end")));
       if(end<=start)throw new Error("Pabaiga turi būti vėliau už pradžią.");
-      await onSave({start:start.toISOString(),end:end.toISOString(),summary:data.get("summary"),location:data.get("location")||undefined,confirmAttendees:data.get("confirm")==="on"});
+      await onSave({start:start.toISOString(),end:end.toISOString(),summary:data.get("summary"),description:data.get("description")||undefined,location:data.get("location")||undefined,confirmAttendees:data.get("confirm")==="on"});
     } catch(error) {setError(error instanceof Error ? error.message : "Nepavyko išsaugoti.");}
     finally {setSaving(false);}
   }
@@ -480,10 +480,11 @@ function ExistingEventEditor({value,onClose,onSave}:{value:{event:CalEvent;start
     <form className="modalForm" onSubmit={submit}>
       <label>Pavadinimas<input name="summary" required maxLength={1024} defaultValue={event.summary} disabled={!event.editable || saving}/></label>
       <label>Vieta<input name="location" maxLength={1000} defaultValue={event.location || ""} disabled={!event.editable || saving} placeholder="Kabinetas, miestas arba nuoroda…"/></label>
+      <label>Aprašymas<textarea name="description" maxLength={10000} defaultValue={event.description || ""} disabled={!event.editable || saving} placeholder="Darbotvarkė…"/></label>
       {!event.allDay && <div className="formRow"><label>Pradžia<input name="start" type="datetime-local" required disabled={!event.editable || saving} defaultValue={localInput(new Date(value.start || event.start.dateTime!))}/></label><label>Pabaiga<input name="end" type="datetime-local" required disabled={!event.editable || saving} defaultValue={localInput(new Date(value.end || event.end.dateTime!))}/></label></div>}
       {event.allDay && <p className="formHint">{event.start.date || event.start.dateTime} – {event.end.date || event.end.dateTime}</p>}
       {event.editable && event.attendeeCount>0 && <label className="confirmAttendees"><input type="checkbox" name="confirm" required disabled={saving}/>Patvirtinu pakeitimą ir pranešimų dalyviams išsiuntimą</label>}
-      <p className="formHint">Keičiami pavadinimas, vieta ir laikas. Dalyviai, aprašymas, priminimai bei susitikimo nuoroda išsaugomi.</p>
+      <p className="formHint">Keičiami pavadinimas, vieta, aprašymas ir laikas. Dalyviai, priminimai bei susitikimo nuoroda išsaugomi.</p>
       <div className="modalActions">{safeLink && <a className="originalEvent" href={safeLink} target="_blank" rel="noopener noreferrer">Atverti originalą ↗</a>}{event.editable && <button className="newButton" disabled={saving}>{saving?"Saugoma…":"Išsaugoti įvykį"}</button>}</div>
     </form>
   </Modal>;
