@@ -134,7 +134,7 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [x] Google / Microsoft sąrašų kūrimas, pervadinimas ir šalinimas su peržiūra bei pavadinimo patvirtinimu (imitacinė patikra; įtaisyti / svetimi Microsoft sąrašai ir sąrašai su Outlook blokais ar Docs / Chat užduotimis saugomi nuo šalinimo).
 - [x] Sukurti, redaguoti, užbaigti, atkurti ir ištrinti visų trijų šaltinių užduotis; pastabos, datos, vietiniai projektai / žymos ir trukmė (sintetinės API patikra).
 - [x] Microsoft svarba ir atskiras priminimo įjungimas, laiko keitimas bei išjungimas su versijos / paskyros patikra (imitacinė API).
-- [ ] Microsoft kartojimas ir žingsniai. „Mano diena“ tiksliai atskiriama nuo Microsoft „My Day“, jei vieša API jo nesinchronizuoja.
+- [~] Microsoft kartojimas ir žingsniai. „Mano diena” tiksliai atskiriama nuo Microsoft „My Day”, jei vieša API jo nesinchronizuoja. (Kartojimas įgyvendintas 2026-09-21; žingsniai ir „My Day” liko nebaigti.)
 - [x] Google užduočių ir pavaldžių užduočių skaitymas bei bendras planavimas; papildomas Tasks OAuth leidimas ir pakartotinio sutikimo eiga (imitacinė patikra).
 - [ ] Google hierarchijos ir eilės tvarkos keitimas, perkėlimas tarp palaikomų sąrašų.
 - [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
@@ -228,6 +228,15 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - Patikra: `npm run typecheck`, 112/112 `npm test`, `npm run build`, `test:smoke`, `test:calendars` ir `test:tasks` praėjo. Testai apima įjungimą, laiko pakeitimą, išjungimą, paskyros / sąrašo / ID ryšį, CSRF, ETag konfliktą, dvigubą pakeitimą, neaiškią atsakymo baigtį, vietinių duomenų neliečiamumą ir Vilniaus bei pusvalandžio DST perėjimus.
 - Naršyklėje su sintetine Microsoft paskyra priminimas įjungtas ir perkeltas į 2026-10-26 11:15 Vilniaus laiku; po perkrovimo būsena išliko, o pagrindinio redaktoriaus pavadinimo juodraštis nebuvo išsaugotas. 2026-10-25 03:30 dviprasmiška Vilniaus valanda atmesta. Tikra paskyra ir tikras pranešimo pristatymas netikrinti.
 - Ribos: Graph `If-Match` elgsena su To Do užduotimis gyvai nepatvirtinta, todėl išorinio pakeitimo tarp paskutinio GET ir PATCH pilnai atmesti negalima. Kartojimo taisyklės ir žingsniai šiame žingsnyje tik išsaugomi ir nekeičiami; jų valdymas lieka tolesniems atskiriems commit’ams.
+
+## 2026-09-21 (rytas) — E5 Microsoft To Do kartojimo valdymas
+
+- Naujas `lib/task-recurrence.ts`: `TaskRecurrence` tipas (kasdien / kas savaitę / kas mėnesį / kas metus, intervalas, savaitės dienos, mėnesio diena, pradžios data). `parseTaskRecurrence` tikrina visus laukus griežtai; `graphRecurrence` verčia į MS Graph formatą; `providerRecurrence` atbulai normalizuoja. `sameTaskRecurrence` lygina rezultatą prieš grąžinant sėkmę.
+- Naujas `/api/tasks/recurrence` maršrutas: GET grąžina dabartinę taisyklę, tiekėjo palaikymo žymą, siūlomą pradžios datą ir versijos pirštų atspaudą. PATCH priima naują taisyklę arba `null` (pašalinimui), tikrina versiją, paskyros ryšį ir `If-Match` ETag. Nepalaikoma MS Graph taisyklė grąžina 409; neįrašomų sąrašų ir užbaigtų užduočių atveju — 403. Viso kartojimo ciklo versija skaičiuojama iš viso raw įrašo, todėl išoriniai pokyčiai tarp GET ir PATCH atmetami.
+- `lib/task-service.ts` išplėstas: `readRecurrence`, `updateRecurrence` ir `recurrenceSnapshot` vidine funkcija. Sėkmingas atnaujinimas patikrinamas palyginus grąžintą taisyklę su norima — nesutapus grąžinama 502. Kartojimas niekada nekeičia vietinio planavimo, terminų ar Outlook blokų.
+- `tsconfig.json`: pridėtas `"allowImportingTsExtensions": true` — atitinka Node.js v24 elgseną su `.ts` importais.
+- Patikra: 119/119 testai, typecheck, build ir smoke praeina.
+- Ribos: žingsniai (subtasks) ir „My Day" atskyrimas neįgyvendinti. Tikros Graph paskyros nebuvo naudotos — `If-Match` elgsena su To Do kartojimo PATCH gyvai nepatvirtinta.
 
 ## 2026-09-21 — D2 įvykių redagavimas ir C7 klaviatūros perkėlimas
 
