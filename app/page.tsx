@@ -503,15 +503,28 @@ function TaskEditor({ task, outlook, onClose, onSave, onDelete }: {task:Task;out
   </Modal>;
 }
 
+function rsvpIcon(status:string) { return status==="accepted"?"✓":status==="declined"?"✗":status==="tentative"?"?":"·"; }
 function ExistingEventEditor({value,onClose,onSave}:{value:{event:CalEvent;start?:string;end?:string};onClose:()=>void;onSave:(patch:Record<string,unknown>)=>Promise<void>}) {
-  const {event}=value;const [error,setError]=useState(""),[saving,setSaving]=useState(false);
+  const {event}=value;
+  const [error,setError]=useState(""),[saving,setSaving]=useState(false);
+  const [attendees,setAttendees]=useState<{email:string;name?:string;self?:boolean;responseStatus:string}[]>(event.attendees||[]);
+  const [newEmail,setNewEmail]=useState("");
+  function addAttendee() {
+    const e=newEmail.trim().toLowerCase();
+    if (!e||!e.includes("@")||e.length>256||attendees.some(a=>a.email===e)) return;
+    setAttendees(prev=>[...prev,{email:e,responseStatus:"needsAction"}]);setNewEmail("");
+  }
+  function removeAttendee(email:string) {setAttendees(prev=>prev.filter(a=>a.email!==email));}
   async function submit(e:FormEvent<HTMLFormElement>) {
     e.preventDefault();const data=new FormData(e.currentTarget);setError("");setSaving(true);
     try {
       const originalStart=value.start || event.start.dateTime!,originalEnd=value.end || event.end.dateTime!;
       const start=new Date(String(data.get("start"))===localInput(new Date(originalStart)) ? originalStart : String(data.get("start"))),end=new Date(String(data.get("end"))===localInput(new Date(originalEnd)) ? originalEnd : String(data.get("end")));
       if(end<=start)throw new Error("Pabaiga turi būti vėliau už pradžią.");
-      await onSave({start:start.toISOString(),end:end.toISOString(),summary:data.get("summary"),description:data.get("description")||undefined,location:data.get("location")||undefined,confirmAttendees:data.get("confirm")==="on"});
+      const attendeesChanged=JSON.stringify(attendees.map(a=>a.email).sort())!==JSON.stringify((event.attendees||[]).map(a=>a.email).sort());
+      await onSave({start:start.toISOString(),end:end.toISOString(),summary:data.get("summary"),description:data.get("description")||undefined,location:data.get("location")||undefined,
+        ...(attendeesChanged ? {attendees:attendees.map(a=>({email:a.email}))} : {}),
+        confirmAttendees:data.get("confirm")==="on"});
     } catch(error) {setError(error instanceof Error ? error.message : "Nepavyko išsaugoti.");}
     finally {setSaving(false);}
   }
@@ -519,7 +532,6 @@ function ExistingEventEditor({value,onClose,onSave}:{value:{event:CalEvent;start
   return <Modal eyebrow={event.provider==="outlook"?"OUTLOOK":"GOOGLE CALENDAR"} title="Kalendoriaus įvykis" onClose={()=>{if(!saving)onClose();}}>
     {!event.editable && <p className="formHint">{event.readOnlyReason}</p>}
     {event.recurring && event.editable && <p className="formHint">↻ Kartojamas įvykis. Keičiamas tik šis egzempliorius — serija lieka nepakeista.</p>}
-    {event.attendeeCount>0 && <p className="formHint">Susitikimo dalyvių įrašų skaičius: {event.attendeeCount}. Išsaugotas pakeitimas bus perduotas dalyviams.</p>}
     {error && <p className="formError" role="alert">{error}</p>}
     <form className="modalForm" onSubmit={submit}>
       <label>Pavadinimas<input name="summary" required maxLength={1024} defaultValue={event.summary} disabled={!event.editable || saving}/></label>
@@ -527,8 +539,14 @@ function ExistingEventEditor({value,onClose,onSave}:{value:{event:CalEvent;start
       <label>Aprašymas<textarea name="description" maxLength={10000} defaultValue={event.description || ""} disabled={!event.editable || saving} placeholder="Darbotvarkė…"/></label>
       {!event.allDay && <div className="formRow"><label>Pradžia<input name="start" type="datetime-local" required disabled={!event.editable || saving} defaultValue={localInput(new Date(value.start || event.start.dateTime!))}/></label><label>Pabaiga<input name="end" type="datetime-local" required disabled={!event.editable || saving} defaultValue={localInput(new Date(value.end || event.end.dateTime!))}/></label></div>}
       {event.allDay && <p className="formHint">{event.start.date || event.start.dateTime} – {event.end.date || event.end.dateTime}</p>}
-      {event.editable && event.attendeeCount>0 && <label className="confirmAttendees"><input type="checkbox" name="confirm" required disabled={saving}/>Patvirtinu pakeitimą ir pranešimų dalyviams išsiuntimą</label>}
-      <p className="formHint">Keičiami pavadinimas, vieta, aprašymas ir laikas. Dalyviai, priminimai bei susitikimo nuoroda išsaugomi.</p>
+      <div className="attendeeSection">
+        <span className="fieldLabel">Dalyviai</span>
+        {attendees.length>0 && <ul className="attendeeList">{attendees.map(a=><li key={a.email} title={a.responseStatus} className={`rsvp-${a.responseStatus}`}><span className="rsvpIcon">{rsvpIcon(a.responseStatus)}</span><span className="attendeeName">{a.name||a.email}</span>{a.name&&<span className="attendeeEmail"> {a.email}</span>}{event.editable&&!a.self&&<button type="button" className="removeAttendee" aria-label={`Pašalinti: ${a.email}`} disabled={saving} onClick={()=>removeAttendee(a.email)}>×</button>}</li>)}</ul>}
+        {attendees.length===0 && <p className="formHint noAttendees">Be dalyvių</p>}
+        {event.editable && <div className="addAttendee"><input type="email" value={newEmail} onChange={e=>setNewEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addAttendee();}}} placeholder="el.paštas@pavyzdys.lt" disabled={saving}/><button type="button" onClick={addAttendee} disabled={saving||!newEmail.trim()}>Pridėti</button></div>}
+      </div>
+      {event.editable && attendees.length>0 && <label className="confirmAttendees"><input type="checkbox" name="confirm" disabled={saving}/>Patvirtinu pakeitimus — bus išsiųsti pranešimai dalyviams, jei laikas pasikeitė</label>}
+      <p className="formHint">Keičiami pavadinimas, vieta, aprašymas, laikas ir dalyviai. Priminimai bei susitikimo nuoroda išsaugomi.</p>
       <div className="modalActions">{safeLink && <a className="originalEvent" href={safeLink} target="_blank" rel="noopener noreferrer">Atverti originalą ↗</a>}{event.editable && <button className="newButton" disabled={saving}>{saving?"Saugoma…":"Išsaugoti įvykį"}</button>}</div>
     </form>
   </Modal>;
