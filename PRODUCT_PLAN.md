@@ -1,6 +1,6 @@
 # „Dienos planas“ — kelias iki kasdien naudojamo produkto
 
-Atnaujinta: 2026-09-16. Būsena: **tikslas aktyvus; auditas atliktas, produktas dar nebaigtas**.
+Atnaujinta: 2026-09-21. Būsena: **tikslas aktyvus; auditas atliktas, produktas dar nebaigtas**.
 
 ## Tikslas ir darbo principas
 
@@ -228,3 +228,14 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - Patikra: `npm run typecheck`, 112/112 `npm test`, `npm run build`, `test:smoke`, `test:calendars` ir `test:tasks` praėjo. Testai apima įjungimą, laiko pakeitimą, išjungimą, paskyros / sąrašo / ID ryšį, CSRF, ETag konfliktą, dvigubą pakeitimą, neaiškią atsakymo baigtį, vietinių duomenų neliečiamumą ir Vilniaus bei pusvalandžio DST perėjimus.
 - Naršyklėje su sintetine Microsoft paskyra priminimas įjungtas ir perkeltas į 2026-10-26 11:15 Vilniaus laiku; po perkrovimo būsena išliko, o pagrindinio redaktoriaus pavadinimo juodraštis nebuvo išsaugotas. 2026-10-25 03:30 dviprasmiška Vilniaus valanda atmesta. Tikra paskyra ir tikras pranešimo pristatymas netikrinti.
 - Ribos: Graph `If-Match` elgsena su To Do užduotimis gyvai nepatvirtinta, todėl išorinio pakeitimo tarp paskutinio GET ir PATCH pilnai atmesti negalima. Kartojimo taisyklės ir žingsniai šiame žingsnyje tik išsaugomi ir nekeičiami; jų valdymas lieka tolesniems atskiriems commit’ams.
+
+## 2026-09-21 — D2 įvykių redagavimas ir C7 klaviatūros perkėlimas
+
+- **D2 vieta** (`location`): pridėtas laukas naujo įvykio kūrime ir esamo redagavime abiejuose tiekėjuose. Google POST perduoda `location` tiesiogiai; Outlook naudoja `location.displayName`. Normalizatorius ištraukia vietą iš abiejų formatų; `update` leidžiamųjų laukų sąraše įtrauktas `"location"`.
+- **D2 aprašymas** (`description`): `CalendarEvent` tipo laukas, normalizuotas iš `raw.description` (Google) ir `raw.body.content` (Outlook). Esamo įvykio redaktoriuje pridėtas `<textarea>`, perduodamas PATCH. Atnaujinta formHint — aprašymas dabar keičiamas, ne tik išsaugomas. Siunčiama tik tada, kai laukas perduotas; nepriskirtų laukų `update` neteršia.
+- **D2 laisvas / užimtas ir matomumas**: kūrimo formoje pridėti du papildomi mygtukai — „Laisvas / užimtas" ir „Matomumas". Google: `transparency: "transparent"` ir `visibility: "private"`. Outlook: `showAs` jau turimas; pridėtas `sensitivity: "private"`. Numatytosios reikšmės atitinka tiekėjų elgseną (užimtas, vieša).
+- **D2 visos dienos įvykis**: kūrimo formoje pridėtas jungiklis. Kai įjungtas — rodomi tik datos laukai (pradžia ir pabaiga), paslėpti trukmė, dalyviai ir Meet/Teams jungiklis. Google naudoja `start.date` / `end.date` (pabaiga išskirtinė, pridedama +1 diena). Outlook: `isAllDay: true`, `start.dateTime = "YYYY-MM-DDT00:00:00"`, `end.dateTime` — kita diena. Patvirtinimas formoje nepraranda laiko informacijos.
+- **D2 priminimai**: kūrimo formoje pasirenkama iš fiksuotų parinkčių (numatytasis, 0, 5, 10, 15, 30, 60, 1440 min.). Google — `reminders.overrides` su `popup`; Outlook — `reminderMinutesBeforeStart`. Kai pasirinkta „Numatytasis", `reminders.useDefault: true` Google pusėje, Outlook laukas neperduodamas. Priminimai rodomi tik ne visos dienos įvykiuose.
+- **C7 klaviatūros perkėlimas**: `EventBlock` ir `TaskBlock` pagrindiniame mygtuke pridėtas `onKeyDown` su `Shift+↑↓` (±15 min.) ir `Shift+←→` (±1 diena). Trukmės keitimas klaviatūra (`ArrowUp`/`ArrowDown` be `Shift`) ant resize mygtuko išlieka nepakitęs. Tooltip atnaujintas su klaviatūros valdymo aprašymu.
+- Patikra: `npm run typecheck` ir 139/139 `npm test` praeina. Build švarus. Laiko zona, pasikartojančių įvykių redagavimas ir gyvų paskyrų patikra lieka nebaigti.
+- Ribos: `description` iš Outlook gali būti HTML, jei įvykis sukurtas ne mūsų programėlėje — rodomas kaip paprastas tekstas, redagavimas pakeičia formatą į plaintext. Laiko zona kūrimo formoje dar neeksponuojama — visi nauji įvykiai kuriami UTC. D2 laikomas baigtu; likusios neįgyvendintos sąlygos (laiko zona, pasikartojimas) priskiriamos D4.
