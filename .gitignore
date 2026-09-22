@@ -15,3 +15,6 @@ node_modules/
 *.sqlite
 .DS_Store
 .history/
+test-results/
+playwright-report/
+.playwright-mcp/
