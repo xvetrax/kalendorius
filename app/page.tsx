@@ -113,7 +113,11 @@ export default function Planner() {
       ...(me.status === "fulfilled" ? me.value.items : previous.filter((event) => event.provider === "outlook")),
       ...(ge.status === "fulfilled" ? ge.value.items : previous.filter((event) => event.provider === "google")),
     ]);
-    if (results.some((result) => result.status === "rejected")) setToast("Dalies duomenų atnaujinti nepavyko. Išsaugoti duomenys tebėra rodomi.");
+    const rejected=results.filter((r):r is PromiseRejectedResult=>r.status==="rejected");
+    if (rejected.length) {
+      const auth=rejected.find(r=>r.reason instanceof HttpError && r.reason.status===401);
+      setToast(auth ? `${(auth.reason as HttpError).message} Atidaryk nustatymus ir prisijunk iš naujo.` : "Dalies duomenų atnaujinti nepavyko. Išsaugoti duomenys tebėra rodomi.");
+    }
     setLoading(false);
   }
   useEffect(() => { if(!clock)return;load().catch(() => { setToast("Nepavyko atnaujinti duomenų"); setLoading(false); }); }, [anchor, mode, Boolean(clock)]);
@@ -238,7 +242,7 @@ export default function Planner() {
     {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div><h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><Connection name="Outlook + To Do" providerLabel="Microsoft" letter="O" tone="blue" connected={outlook} ready={outlookReady} account={outlookAccount} href="/api/microsoft/connect" onDisconnect={() => disconnect("microsoft")}/><Connection name="Google Calendar + Tasks" providerLabel="Google" letter="G" tone="multi" connected={google} ready={googleReady} account={googleAccount} href="/api/google/connect" onDisconnect={() => disconnect("google")}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href="/api/google/connect">Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p></section></Modal>}
     {taskListManagerOpen && <Modal eyebrow="UŽDUOTYS" title="Tvarkyti sąrašus" onClose={()=>setTaskListManagerOpen(false)}><TaskListManager onChanged={load} onDeleted={(key)=>setTaskDestination(current=>current===key ? "local" : current)} onListCreated={setTaskDestination}/></Modal>}
     {editingEvent && <ExistingEventEditor value={editingEvent} onClose={()=>setEditingEvent(null)} onSave={async(patch)=>{await saveEvent(editingEvent.event,patch);setEditingEvent(null);}} onRefresh={()=>{void load();setEditingEvent(null);}}/>}
-    {editingTask && <TaskEditor task={editingTask} outlook={outlook} onDelete={()=>deleteTask(editingTask)} onClose={() => setEditingTask(null)} onSave={async (patch) => { await patchTask(editingTask, patch); setEditingTask(null); }}/>}
+    {editingTask && <TaskEditor task={editingTask} outlook={outlook} taskLists={taskLists} onDelete={()=>deleteTask(editingTask)} onClose={() => setEditingTask(null)} onSave={async (patch) => { await patchTask(editingTask, patch); setEditingTask(null); }} onMoved={()=>{setToast("Užduotis perkelta.");void load();}}/>}
     {taskModal && <TaskModal lists={taskLists} destination={taskDestination} onDestination={setTaskDestination} onClose={() => setTaskModal(false)} onSave={async (data) => { await createTask(data); setTaskModal(false); setToast("Užduotis sukurta"); }}/>} 
     {eventDate && <EventModal initial={eventDate} outlook={outlook} google={google} outlookReady={outlookReady} googleReady={googleReady} onClose={() => setEventDate(null)} onSave={async () => { setEventDate(null); setToast("Įvykis sukurtas"); await load(); }}/>} 
   </main></TaskActions.Provider></EventActions.Provider>;
@@ -454,8 +458,48 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
 }
 
 
-function TaskEditor({ task, outlook, onClose, onSave, onDelete }: {task:Task;outlook:boolean;onClose:()=>void;onDelete:()=>Promise<void>;onSave:(patch:Record<string,unknown>)=>Promise<void>}) {
+type TaskStep={id:string;displayName:string;isChecked:boolean};
+function TaskSteps({task}:{task:Task}) {
+  const [steps,setSteps]=useState<TaskStep[]|null>(null),[newStep,setNewStep]=useState(""),[busy,setBusy]=useState(false);
+  const listId=task.list_id,taskId=String(task.id);
+  useEffect(()=>{
+    if (!listId||!taskId) return;
+    fetch(`/api/tasks/steps?listId=${encodeURIComponent(listId)}&taskId=${encodeURIComponent(taskId)}`).then(r=>r.json()).then(d=>setSteps(d.items||[])).catch(()=>setSteps([]));
+  },[listId,taskId]);
+  async function toggle(step:TaskStep) {
+    setBusy(true);
+    const next={...step,isChecked:!step.isChecked};
+    setSteps(prev=>prev?.map(s=>s.id===step.id?next:s)||null);
+    try {await fetch("/api/tasks/steps",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({listId,taskId,stepId:step.id,isChecked:next.isChecked})});}
+    catch {setSteps(prev=>prev?.map(s=>s.id===step.id?step:s)||null);}
+    finally {setBusy(false);}
+  }
+  async function addStep() {
+    const name=newStep.trim();if(!name)return;setBusy(true);
+    try {
+      const res=await fetch("/api/tasks/steps",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({listId,taskId,displayName:name})});
+      const created=await res.json();if(res.ok) {setSteps(prev=>[...(prev||[]),created]);setNewStep("");}
+    } finally {setBusy(false);}
+  }
+  async function deleteStep(step:TaskStep) {
+    setBusy(true);setSteps(prev=>prev?.filter(s=>s.id!==step.id)||null);
+    try {await fetch(`/api/tasks/steps?listId=${encodeURIComponent(listId!)}&taskId=${encodeURIComponent(taskId)}&stepId=${encodeURIComponent(step.id)}`,{method:"DELETE"});}
+    catch {setSteps(prev=>[...(prev||[]),step]);}
+    finally {setBusy(false);}
+  }
+  if (!listId) return null;
+  return <div className="taskSteps"><span className="fieldLabel">Žingsniai</span>
+    {steps===null ? <p className="formHint">Kraunama…</p> : <>
+      {steps.length>0 && <ul className="stepList">{steps.map(s=><li key={s.id} className={s.isChecked?"done":""}><label><input type="checkbox" checked={s.isChecked} disabled={busy} onChange={()=>void toggle(s)}/><span>{s.displayName}</span></label><button type="button" className="removeAttendee" disabled={busy} onClick={()=>void deleteStep(s)}>×</button></li>)}</ul>}
+      <div className="addAttendee"><input type="text" value={newStep} onChange={e=>setNewStep(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();void addStep();}}} placeholder="Naujas žingsnis…" disabled={busy}/><button type="button" onClick={()=>void addStep()} disabled={busy||!newStep.trim()}>Pridėti</button></div>
+    </>}
+  </div>;
+}
+function TaskEditor({ task, outlook, taskLists, onClose, onSave, onDelete, onMoved }: {task:Task;outlook:boolean;taskLists:TaskList[];onClose:()=>void;onDelete:()=>Promise<void>;onSave:(patch:Record<string,unknown>)=>Promise<void>;onMoved?:()=>void}) {
   const [saving,setSaving] = useState(false); const [reminderBusy,setReminderBusy] = useState(false); const [error,setError] = useState("");
+  const [moveTarget,setMoveTarget] = useState(task.list_id||"");
+  const [moving,setMoving] = useState(false);
+  const googleLists=task.source==="google" ? taskLists.filter(l=>l.source==="google"&&l.writable) : [];
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (saving || reminderBusy) return; const data = new FormData(event.currentTarget); setSaving(true); setError("");
     try {
@@ -480,6 +524,16 @@ function TaskEditor({ task, outlook, onClose, onSave, onDelete }: {task:Task;out
     catch(error) {setError(error instanceof Error ? error.message : "Nepavyko išsaugoti.");}
     finally {setSaving(false);}
   }
+  async function moveToList() {
+    if (!moveTarget||moveTarget===task.list_id||moving) return;
+    setMoving(true);setError("");
+    try {
+      const res=await fetch("/api/tasks/move",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({source:task.source,account_id:task.account_id,list_id:task.list_id,id:task.id,destination_list_id:moveTarget})});
+      if(!res.ok){const d=await res.json().catch(()=>({}));throw new Error(d.error||"Nepavyko perkelti.");}
+      onMoved?.();onClose();
+    } catch(e){setError(e instanceof Error?e.message:"Nepavyko perkelti.");}
+    finally{setMoving(false);}
+  }
   return <Modal eyebrow={taskSourceLabel(task)} title="Užduotis ir jos planas" onClose={onClose}>
     {task.source_url && <p className="formHint"><a href={task.source_url} target="_blank" rel="noopener noreferrer">{task.source === "google" ? "Atverti Google Tasks" : "Atverti Microsoft To Do"} ↗</a>{task.parent_id && " · Pavaldžioji užduotis. Hierarchiją keisk Google Tasks."}</p>}
     {task.readonly_reason && <p className="formHint">{task.readonly_reason}</p>}
@@ -497,9 +551,11 @@ function TaskEditor({ task, outlook, onClose, onSave, onDelete }: {task:Task;out
       <label className="onlineSwitch"><input name="mirror" type="checkbox" disabled={!outlook && !task.mirror_requested} defaultChecked={Boolean(task.mirror_requested)}/><i/>Papildomas Outlook blokas · laisvas laikas</label>
       <div className="modalActions">{task.scheduled_at && <button type="button" disabled={saving || reminderBusy} onClick={unschedule}>Pašalinti planavimą</button>}<button className="newButton" disabled={saving || reminderBusy}>{saving ? "Saugoma…" : "Išsaugoti"}</button></div>
     </form>
+    {task.source === "microsoft" && <TaskSteps task={task}/>}
     {task.source === "microsoft" && (
       <MicrosoftTaskReminder key={task.key} task={task} disabled={saving} onBusyChange={setReminderBusy}/>
     )}
+    {googleLists.length>1 && <div className="moveToList"><span className="fieldLabel">Perkelti į sąrašą</span><div className="addAttendee"><select value={moveTarget} onChange={e=>setMoveTarget(e.target.value)} disabled={moving}>{googleLists.map(l=><option key={l.key} value={l.list_id}>{l.name}</option>)}</select><button type="button" disabled={moving||moveTarget===task.list_id} onClick={()=>void moveToList()}>{moving?"Keliama…":"Perkelti"}</button></div></div>}
     <div className="modalActions"><button type="button" disabled={saving || reminderBusy || Boolean(task.readonly_reason)} onClick={async()=>{if(saving || reminderBusy)return;if(!window.confirm(`Ištrinti „${task.title}“${task.source === "local" ? "" : " ir jos šaltinyje"}?`))return;setSaving(true);setError("");try{await onDelete();}catch(error){setError(error instanceof Error ? error.message : "Nepavyko ištrinti.");}finally{setSaving(false);}}}>Ištrinti užduotį</button></div>
   </Modal>;
 }
