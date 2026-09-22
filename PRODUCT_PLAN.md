@@ -123,8 +123,8 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 - [x] Sukūrimas, detalus redagavimas, pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai.
 - [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas, Google Meet / Teams pagal kalendoriaus ir paskyros galimybes.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
-- [ ] ETag / versijų konfliktai, išoriniai pakeitimai, 401/403/429, pakartojimas nesukuriant dvigubų susitikimų.
-- [ ] Atskirai įvertinti Google focus time / out-of-office / working location ir Outlook papildomas galimybes pagal viešą API bei paskyros licenciją. Nepalaikomas funkcijas pažymėti galimybių lentelėje.
+- [x] ETag / versijų konfliktai, išoriniai pakeitimai, 401/403/429, pakartojimas nesukuriant dvigubų susitikimų.
+- [x] Atskirai įvertinti Google focus time / out-of-office / working location ir Outlook papildomas galimybes pagal viešą API bei paskyros licenciją. Nepalaikomas funkcijas pažymėti galimybių lentelėje.
 
 Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuomet abiejų tiekėjų bandomaisiais kalendoriais; perskaitytas įvykis sutampa su išsaugotu, nepasimeta dalyviai ar serijos savybės.
 
@@ -193,6 +193,21 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - Po vidurnakčio patikroje aptiktas senas build datos hidratavimo neatitikimas. Pradinė data dabar neutrali ir nerodoma; tik naršyklėje nustatomas laikas, tada įkeliamas kalendorius. Produkcinis smoke tikrina, kad SSR neįrašo kalendoriaus build datos. Naujoje patikroje React klaidų nėra.
 - 53 automatiniai testai, TypeScript, produkcinis build ir abu produkciniai HTTP smoke scenarijai praeina. Tikros paskyros ir naudotojo DB nenaudoti.
 - Ribos: jutiklinis tempimas iš sąrašo neįjungtas (naudojamas redaktorius), pilnas fizinio telefono / klaviatūros prieinamumo auditas neatliktas. Google Tasks, papildomi To Do sąrašai, platesnis įvykių redaktorius, realių OAuth paskyrų patikra ir prieigos apsauga lieka nebaigti; bendras produkto tikslas dar nepasiektas.
+
+### D6 — specialių įvykių tipų galimybių lentelė
+
+| Tipas | Google Calendar API | Microsoft Graph API | Šioje programėlėje |
+|---|---|---|---|
+| Focus time | `eventType: "focusTime"` — sukuriamas ir atnaujinamas kaip paprastas įvykis, tačiau tiekėjas galima automatiškai nustato `showAs: doNotDisturb` | Nėra tiesioginio atitikmens — galima naudoti kategorijas | Rodomas kaip tik skaityti (`special=true`) |
+| Out of Office | `eventType: "outOfOffice"` — API leidžia skaityti; atsakymo nustatymai per atskiras API | `showAs: oof` — skaitymas OK; rašymui reikia specialių teisių tam tikruose tenant'uose | Rodomas kaip tik skaityti |
+| Working Location | `eventType: "workingLocation"` — skaityti galima; rašyti per `workingLocationProperties` | Nėra atitikmens | Rodomas kaip tik skaityti |
+| Locked | `locked: true` — tiekėjo užraktas; redagavimas draudžiamas net organizatoriui | Nėra tiesioginio lauko | Rodomas kaip tik skaityti |
+| All-day | `start.date` + `end.date` | `isAllDay: true` | Skaityti ✓, redagavimas dar nepalaikomas |
+| Recurring series | `recurrence[]` (master) | `type: "seriesMaster"` | Tik skaityti — egzemplioriai `[x]` redaguojami |
+| Private | `visibility: "private"` | `sensitivity: "private"` | Rodomas; kuriant galima nustatyti |
+| Birthday / Holiday | `eventType: "birthday"` arba skaitomas kitas kalendorius | Atskiri readonly kalendoriai | Tik skaityti (kiti kalendoriai per D1) |
+
+Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į originalą.
 
 ### 2026-09-22 D etapo darbai
 
