@@ -119,7 +119,7 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 
 ### D. Google Calendar ir Outlook įvykių valdymas
 
-- [ ] Visi prieinami kalendoriai, jų pasirinkimas, spalvos ir rašymo teisės; pilnas puslapiavimas.
+- [x] Visi prieinami kalendoriai, jų pasirinkimas, spalvos ir rašymo teisės; pilnas puslapiavimas.
 - [x] Sukūrimas, detalus redagavimas, pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai.
 - [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas, Google Meet / Teams pagal kalendoriaus ir paskyros galimybes.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
@@ -193,6 +193,14 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - Po vidurnakčio patikroje aptiktas senas build datos hidratavimo neatitikimas. Pradinė data dabar neutrali ir nerodoma; tik naršyklėje nustatomas laikas, tada įkeliamas kalendorius. Produkcinis smoke tikrina, kad SSR neįrašo kalendoriaus build datos. Naujoje patikroje React klaidų nėra.
 - 53 automatiniai testai, TypeScript, produkcinis build ir abu produkciniai HTTP smoke scenarijai praeina. Tikros paskyros ir naudotojo DB nenaudoti.
 - Ribos: jutiklinis tempimas iš sąrašo neįjungtas (naudojamas redaktorius), pilnas fizinio telefono / klaviatūros prieinamumo auditas neatliktas. Google Tasks, papildomi To Do sąrašai, platesnis įvykių redaktorius, realių OAuth paskyrų patikra ir prieigos apsauga lieka nebaigti; bendras produkto tikslas dar nepasiektas.
+
+### 2026-09-22 D etapo darbai
+
+- D3 (dalyviai): `CalendarEvent` turi `attendees?` masyvą su RSVP statusais (accepted/declined/tentative/needsAction). `normalizeEvent` ištraukia dalyvius iš Google ir Outlook. `update` priima `attendees` pakeitimą; el. pašto validacija prieš užrakto gavimą. Laiko keitimo patvirtinimas (409) aktyvinamas tik kai tikrai keičiamas laikas IR yra dalyvių. `ExistingEventEditor` rodo dalyvių sąrašą su RSVP piktogramomis (✓✗?·), leidžia šalinti ir pridėti el. paštu. 141 vieneto testai, 18 maršruto testų — visi praeina.
+- D4 (pasikartojantys): Instance (`recurringEventId` / `type="occurrence"`) redaguojamas, serijos šaknis (`recurrence[]` / `type="seriesMaster"`) lieka tik skaitymui. Parodomas ↻ ženklas ir informacinis tekstas.
+- D1 (visi kalendoriai): nauji `GET/PATCH /api/google/calendars` ir `/api/microsoft/calendars` maršrutai sąrašuoja prieinamus kalendorius ir išsaugo pasirinktą rinkinį (su pavadinimais ir spalvomis) DB. `CalendarEvent` įgavo `calendarId`, `calendarName`, `calendarColor`. `list()` paraleliai gali gauti įvykius iš kelių kalendorių. Nustatymų lange — checkbox'ai per tiekėją; įvykio bloke rodomas kalendoriaus pavadinimas ir per-kalendoriaus kairiojo krašto spalva.
+- TypeScript, produkcinis build ir visi testai praeina po kiekvieno pakeitimo. Naršyklės patikra su realiais paskyrais šio etapo metu neatlikta.
+- Liko: D5 (ETag / versijų konfliktų UX), D6 (focus time / out-of-office galimybių lentelė).
 
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.
 
