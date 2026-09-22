@@ -145,8 +145,8 @@ Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti,
 
 ### F. Kasdienis naudojimas ir išleidimas
 
-- [ ] Pačios programėlės prieigos apsauga, saugi sesija ir HTTPS diegimo instrukcija viešam / nuotoliniam naudojimui.
-- [ ] OAuth PKCE / vienkartinė serverio operacija, konfigūracijos diagnostika, minimalūs leidimai, saugus žurnalų turinys.
+- [x] Pačios programėlės prieigos apsauga, saugi sesija ir HTTPS diegimo instrukcija viešam / nuotoliniam naudojimui.
+- [x] OAuth PKCE / vienkartinė serverio operacija, konfigūracijos diagnostika, minimalūs leidimai, saugus žurnalų turinys.
 - [ ] SQLite atsarginė kopija ir atkūrimas, migracijos testas su ankstesne schema, duomenų eksportas be žetonų.
 - [ ] Docker sveikatos patikra, neprivilegijuotas procesas, aiški versija, paleidimo ir atnaujinimo vadovas.
 - [ ] Automatizuoti svarbiausi naršyklės scenarijai, mobilus ekranas, prieinamumas, skirtingos laiko zonos, offline / tinklo klaida.
@@ -225,6 +225,27 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - E7 (perkelti tarp sąrašų): `POST /api/tasks/move` iškviečia Google Tasks `move` API su `destinationTasklist`. `TaskEditor` rodo „Perkelti į sąrašą" išskleidžiamąjį meniu Google užduotims, kai yra ≥2 rašytini sąrašai.
 - E8 (paskyrų patikra + blokų tvarkymas): `load()` aptinka `HttpError` 401 atmestuose įvykių gavimo rezultatuose ir rodo specifinį „sesija baigėsi — atidaryk nustatymus" pranešimą. Pasenusių Outlook blokų šalinimas jau buvo įgyvendintas per `syncMirror` užduoties pašalinimo kelyje.
 - TypeScript, produkcinis build ir 141/141 testai praeina. Visa E etapo darbai baigti. Lieka F etapas (sauga, Docker, naršyklės testai).
+
+### 2026-09-22 F1 — programėlės prieigos apsauga
+
+- Slaptažodžio apsauga per `APP_PASSWORD` aplinkos kintamąjį. Kai nenustatytas — autentifikacija išjungta (patogiam vietiniam naudojimui). Kai nustatytas — visi maršrutai apsaugoti.
+- `lib/session.ts`: HMAC-SHA256 pasirašyti žetonai su `TOKEN_ENCRYPTION_KEY`, 24 val. galiojimas, `timingSafeEqual` slaptažodžio tikrinimas.
+- `proxy.ts` (Next.js 16 middleware ekvivalentas, patikrinta per `ƒ Proxy` build žymę): apsaugo visus maršrutus išskyrus `/login` ir `/api/auth/*`. API maršrutai → 401 JSON, puslapiai → peradresuoja į `/login`.
+- `/api/auth/login` su 10 bandymų/min/IP apribojimu; `/api/auth/logout`; atsijungimo mygtukas nustatymuose.
+- `/app/login/page.tsx` — lietuviškas prisijungimo puslapis.
+- `.env.example` papildytas `APP_PASSWORD` komentaru ir `openssl rand -base64 24` pavyzdžiu.
+- Automatinės saugumo peržiūros radinys: atviroji peradresavimo spraga `/login?next=` — ištaisyta iš karto (tik santykiniai tos pačios kilmės keliai priimami).
+- 153/153 testai, typecheck, produkcinis build praeina.
+
+### 2026-09-22 F2 — OAuth PKCE ir konfigūracijos diagnostika
+
+- PKCE S256 abiem tiekėjams: `generatePKCE()` / `generateMicrosoftPKCE()` generuoja `verifier` + `challenge`; verifier saugomas httpOnly slapuke `/connect`, `challenge` perduodamas į tiekėjo auth URL; verifier naudojamas kodo mainuose `/callback`. Apsaugo nuo autorizacijos kodo perėmimo net be `client_secret`.
+- `microsoftAuthUrl` ir `googleAuthUrl` dabar reikalauja antrojo `codeChallenge` parametro; `exchangeCode` / `exchangeMicrosoftCode` — `codeVerifier`. Esami testai atnaujinti.
+- `/api/config` (GET, apsaugotas sesija): grąžina visų aplinkos kintamųjų buvimo būseną be verčių — naudinga diagnostikai.
+- Minimalūs leidimai jau buvo teisingi: Google — `calendar + tasks + openid`; Microsoft — `Calendars.ReadWrite Tasks.ReadWrite User.Read`. Nepakeisti.
+- Žurnalai: `apiError` visada grąžina generines lietuviškas klaidas be tiekėjo detalių. `proxy.ts` neregistruoja žetonų.
+- 153/153 testai, typecheck, produkcinis build praeina. Tikrų OAuth paskyrų su PKCE patikra neatliekta.
+- Ribos: `APP_ORIGIN` HTTPS instrukcija yra `.env.example` komentare, bet atskiro diegimo vadovo nėra — lieka F4.
 
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.
 
