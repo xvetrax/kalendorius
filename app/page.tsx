@@ -239,7 +239,7 @@ export default function Planner() {
       <p className="panelHint">{isMobile ? "Paspausk užduotį ir pasirink suplanuotą pradžią." : "Tempk užduotį į kalendorių."}<br/>Terminas ir darbo laikas – atskirai.</p>
 
     </aside>
-    {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div><h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><Connection name="Outlook + To Do" providerLabel="Microsoft" letter="O" tone="blue" connected={outlook} ready={outlookReady} account={outlookAccount} href="/api/microsoft/connect" onDisconnect={() => disconnect("microsoft")}/><Connection name="Google Calendar + Tasks" providerLabel="Google" letter="G" tone="multi" connected={google} ready={googleReady} account={googleAccount} href="/api/google/connect" onDisconnect={() => disconnect("google")}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href="/api/google/connect">Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p><LogoutButton/>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p></section></Modal>}
+    {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div><h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><Connection name="Outlook + To Do" providerLabel="Microsoft" letter="O" tone="blue" connected={outlook} ready={outlookReady} account={outlookAccount} href="/api/microsoft/connect" onDisconnect={() => disconnect("microsoft")}/><Connection name="Google Calendar + Tasks" providerLabel="Google" letter="G" tone="multi" connected={google} ready={googleReady} account={googleAccount} href="/api/google/connect" onDisconnect={() => disconnect("google")}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href="/api/google/connect">Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p><LogoutButton/>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p><h3>Duomenys</h3><BackupPanel/></section></Modal>}
     {taskListManagerOpen && <Modal eyebrow="UŽDUOTYS" title="Tvarkyti sąrašus" onClose={()=>setTaskListManagerOpen(false)}><TaskListManager onChanged={load} onDeleted={(key)=>setTaskDestination(current=>current===key ? "local" : current)} onListCreated={setTaskDestination}/></Modal>}
     {editingEvent && <ExistingEventEditor value={editingEvent} onClose={()=>setEditingEvent(null)} onSave={async(patch)=>{await saveEvent(editingEvent.event,patch);setEditingEvent(null);}} onRefresh={()=>{void load();setEditingEvent(null);}}/>}
     {editingTask && <TaskEditor task={editingTask} outlook={outlook} taskLists={taskLists} onDelete={()=>deleteTask(editingTask)} onClose={() => setEditingTask(null)} onSave={async (patch) => { await patchTask(editingTask, patch); setEditingTask(null); }} onMoved={()=>{setToast("Užduotis perkelta.");void load();}}/>}
@@ -589,6 +589,56 @@ function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boole
   return <div className="calendarSelector">{error&&<p className="formError">{error}</p>}{renderList("google",gCals,setGCals,"Google")}{renderList("microsoft",mCals,setMCals,"Microsoft / Outlook")}</div>;
 }
 function rsvpIcon(status:string) { return status==="accepted"?"✓":status==="declined"?"✗":status==="tentative"?"?":"·"; }
+function BackupPanel() {
+  const [busy,setBusy]=useState<"export"|"backup"|"restore"|null>(null);
+  const [msg,setMsg]=useState("");
+  const fileRef=useRef<HTMLInputElement>(null);
+
+  async function download(type:"export"|"backup") {
+    setBusy(type);setMsg("");
+    try {
+      const res=await fetch(`/api/backup?type=${type}`);
+      if (!res.ok) { setMsg("Nepavyko sukurti atsarginės kopijos."); return; }
+      const blob=await res.blob();
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url;
+      a.download=res.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? `planner-${type}.db`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { setMsg("Tinklo klaida."); } finally { setBusy(null); }
+  }
+
+  async function restore(e:React.ChangeEvent<HTMLInputElement>) {
+    const file=e.target.files?.[0];
+    if (!file) return;
+    setBusy("restore");setMsg("");
+    try {
+      const res=await fetch("/api/backup",{method:"POST",headers:{"Content-Type":"application/octet-stream","Origin":location.origin},body:file});
+      const data=await res.json().catch(()=>({}));
+      if (res.ok) { setMsg("Atkurta. Puslapis bus atnaujintas."); setTimeout(()=>location.reload(),1500); }
+      else setMsg(data.error ?? "Atkurti nepavyko.");
+    } catch { setMsg("Tinklo klaida."); } finally { setBusy(null); if(fileRef.current) fileRef.current.value=""; }
+  }
+
+  return <div className="backupPanel">
+    <p className="backupHint">Eksportas neįtraukia OAuth žetonų — tinka duomenų perkėlimui. Pilna kopija — tik saugiam asmeniniam naudojimui.</p>
+    <div className="backupButtons">
+      <button className="ghostButton" disabled={!!busy} onClick={()=>download("export")}>
+        {busy==="export"?"Kuriama…":"⬇ Eksportuoti (be žetonų)"}
+      </button>
+      <button className="ghostButton" disabled={!!busy} onClick={()=>download("backup")}>
+        {busy==="backup"?"Kuriama…":"⬇ Pilna kopija"}
+      </button>
+      <label className={`ghostButton${busy?"":""}`} style={{cursor:busy?"not-allowed":"pointer",opacity:busy?0.55:1}}>
+        {busy==="restore"?"Atkuriama…":"⬆ Atkurti iš kopijos"}
+        <input ref={fileRef} type="file" accept=".db" style={{display:"none"}} disabled={!!busy} onChange={restore}/>
+      </label>
+    </div>
+    {msg && <p className="backupMsg" role="status">{msg}</p>}
+  </div>;
+}
+
 function LogoutButton() {
   const [busy,setBusy]=useState(false);
   async function logout() {
