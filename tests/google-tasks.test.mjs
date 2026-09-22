@@ -15,7 +15,7 @@ function setup(t) {
       project TEXT DEFAULT 'Asmeniniai',priority TEXT DEFAULT 'normal',energy TEXT DEFAULT 'medium',tags TEXT DEFAULT '');`);
   migrateTaskPlanning(db);
   const calls=[], lists=new Map([["list-a",new Map([["1",{id:"1",title:"Google užduotis",due:"2026-10-25T00:00:00.000Z",status:"needsAction",webViewLink:"https://tasks.google.com/task/1"}]])]]);
-  const state={account:"account-a",connected:true,offline:false,failedList:null};
+  const state={account:"account-a",connected:true,offline:false,failedList:null,failMove:false,loseMoveResponse:false,failConfirmation:false,moveResultId:null};
   const google={connected:()=>state.connected,cachedAccountId:()=>state.account,accountId:async()=>state.account,
     async request(raw,init={}) {
       const url=new URL(raw,"https://fixture.invalid"),method=init.method||"GET",body=init.body?JSON.parse(init.body):undefined;
@@ -24,7 +24,18 @@ function setup(t) {
       if(url.pathname==="/users/@me/lists")return {items:[...lists.keys()].map(id=>({id,title:id}))};
       const [, ,listId, ,taskId]=url.pathname.split("/").map(decodeURIComponent),list=lists.get(listId);
       if(!list || state.failedList===listId)throw Error("list unavailable");
-      if(method==="GET")return {items:structuredClone([...list.values()])};
+      if(method==="GET") {
+        if(taskId && state.failConfirmation){state.failConfirmation=false;throw Error("confirmation failed");}
+        return taskId ? structuredClone(list.get(taskId)) : {items:structuredClone([...list.values()])};
+      }
+      if(method==="POST" && url.pathname.endsWith("/move")) {
+        if(state.failMove)throw Error("move failed");
+        const id=decodeURIComponent(url.pathname.split("/").at(-2)),destination=lists.get(url.searchParams.get("destinationTasklist"));
+        const task=list.get(id);if(!task||!destination)throw Error("move unavailable");
+        const movedId=state.moveResultId||id,moved={...task,id:movedId};list.delete(id);destination.set(movedId,moved);
+        if(state.loseMoveResponse)throw Error("move response lost");
+        return structuredClone(moved);
+      }
       if(method==="POST") {const task={id:String(list.size+1),status:"needsAction",...body};list.set(task.id,task);return structuredClone(task);}
       if(method==="PATCH") {Object.assign(list.get(taskId),body);return structuredClone(list.get(taskId));}
       if(method==="DELETE") {list.delete(taskId);return null;}
@@ -33,7 +44,7 @@ function setup(t) {
   const microsoft={connected:()=>false,cachedAccountId:()=>null,accountId:async()=>{throw Error("disconnected");},request:async()=>{throw Error("unexpected Microsoft call");}};
   let service=createTaskService(db,microsoft,google);
   t.after(()=>{db.close();rmSync(dir,{recursive:true,force:true});});
-  return {get service(){return service;},google,state,lists,calls,
+  return {get service(){return service;},get db(){return db;},google,state,lists,calls,
     restart(){db.close();db=new DatabaseSync(file);migrateTaskPlanning(db);service=createTaskService(db,microsoft,google);return service;}};
 }
 const ref=t=>({source:t.source,account_id:t.account_id,list_id:t.list_id,id:t.id,schedule_version:t.schedule_version});
@@ -116,4 +127,83 @@ test("Google source links are restricted and subtask metadata survives planning"
   let task=(await f.service.list()).items[0];assert.equal(task.source_url,"https://tasks.google.com/task/1");assert.equal(task.parent_id,"parent");
   for(const link of ["javascript:alert(1)","https://tasks.google.com.evil.example/task","https://user:pass@tasks.google.com/task"]){f.lists.get("list-a").get("1").webViewLink=link;task=(await f.service.list()).items[0];assert.equal(task.source_url,"https://tasks.google.com/");}
   task=await f.service.update({...ref(task),scheduled_at:start});assert.equal(task.parent_id,"parent");
+});
+
+test("Google list move atomically rekeys the complete local plan after provider confirmation",async t=>{
+  const f=setup(t);f.lists.set("list-b",new Map());f.state.moveResultId="moved-1";let task=(await f.service.list()).items[0];
+  task=await f.service.update({...ref(task),scheduled_at:start,duration_minutes:75,priority:"high",project:"Darbas",tags:"svarbu",energy:"high"});
+  f.db.prepare(`UPDATE task_plans SET mirror_requested=1,mirror_event_id='event-1',mirror_account_id='microsoft-a',
+    mirror_transaction_id='transaction-1',mirror_error='retry',mirror_create_payload='{"transactionId":"transaction-1"}' WHERE task_key=?`).run(task.key);
+  const oldKey=task.key,oldPlan=f.db.prepare("SELECT * FROM task_plans WHERE task_key=?").get(oldKey);f.calls.length=0;
+  const moved=await f.service.moveGoogle({...ref(task),destination_list_id:"list-b"});
+  assert.equal(moved.id,"moved-1");assert.equal(moved.list_id,"list-b");assert.notEqual(moved.key,oldKey);assert.equal(moved.schedule_version,task.schedule_version+1);
+  assert.equal(moved.scheduled_at,start);assert.equal(moved.duration_minutes,75);assert.equal(moved.priority,"high");assert.equal(moved.project,"Darbas");
+  const newPlan=f.db.prepare("SELECT * FROM task_plans WHERE task_key=?").get(moved.key);
+  for(const field of ["scheduled_at","duration_minutes","legacy_schedule","mirror_requested","mirror_event_id","mirror_account_id","mirror_transaction_id","mirror_error","project","tags","energy","mirror_create_payload","local_priority"]) assert.equal(newPlan[field],oldPlan[field],field);
+  assert.equal(newPlan.schedule_version,oldPlan.schedule_version+1);assert.equal(f.db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(oldKey),undefined);
+  assert.equal(f.db.prepare("SELECT list_id FROM remote_tasks WHERE task_key=?").get(moved.key).list_id,"list-b");
+  assert.equal(f.lists.get("list-a").has("1"),false);assert.equal(f.lists.get("list-b").has("moved-1"),true);
+  assert.deepEqual(f.calls.filter(call=>call.method!=="GET").map(call=>call.path),["/lists/list-a/tasks/1/move?destinationTasklist=list-b"]);
+});
+
+test("Google list move rejects stale, conflicting and failed moves without changing local identity",async t=>{
+  const f=setup(t);f.lists.set("list-b",new Map());let task=(await f.service.list()).items[0];
+  task=await f.service.update({...ref(task),scheduled_at:start});const oldKey=task.key;
+  f.calls.length=0;
+  await assert.rejects(f.service.moveGoogle({...ref(task),schedule_version:task.schedule_version-1,destination_list_id:"list-b"}),error=>error.status===409);
+  assert.equal(f.calls.length,0);
+  const destinationKey=JSON.stringify(["google","account-a","list-b","1"]);
+  f.db.prepare("INSERT INTO task_plans(task_key) VALUES (?)").run(destinationKey);
+  await assert.rejects(f.service.moveGoogle({...ref(task),destination_list_id:"list-b"}),error=>error.status===409);
+  f.db.prepare("DELETE FROM task_plans WHERE task_key=?").run(destinationKey);f.state.failMove=true;
+  await assert.rejects(f.service.moveGoogle({...ref(task),destination_list_id:"list-b"}),/move failed/);
+  assert.ok(f.db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(oldKey));assert.equal(f.lists.get("list-a").has("1"),true);assert.equal(f.lists.get("list-b").has("1"),false);
+});
+
+test("Google list move refuses parent and child tasks before the provider write",async t=>{
+  const f=setup(t);f.lists.set("list-b",new Map());let task=(await f.service.list()).items[0];f.calls.length=0;
+  f.lists.get("list-a").get("1").parent="parent-1";
+  await assert.rejects(f.service.moveGoogle({...ref(task),destination_list_id:"list-b"}),error=>error.status===409);
+  f.lists.get("list-a").get("1").parent=undefined;f.lists.get("list-a").set("child",{id:"child",title:"Vaikas",parent:"1"});
+  await assert.rejects(f.service.moveGoogle({...ref(task),destination_list_id:"list-b"}),error=>error.status===409);
+  assert.equal(f.calls.some(call=>call.path.includes("/move?")),false);assert.equal(f.lists.get("list-a").has("1"),true);
+});
+
+test("Google list refresh reconciles a provider move whose confirmation request failed",async t=>{
+  const f=setup(t);f.lists.set("list-b",new Map());let task=(await f.service.list()).items[0];
+  task=await f.service.update({...ref(task),scheduled_at:start,project:"Atkuriama",tags:"mirror"});
+  f.db.prepare("UPDATE task_plans SET mirror_requested=1,mirror_event_id='event-recover',mirror_transaction_id='tx-recover' WHERE task_key=?").run(task.key);
+  f.state.failConfirmation=true;
+  await assert.rejects(f.service.moveGoogle({...ref(task),destination_list_id:"list-b"}),/confirmation failed/);
+  assert.ok(f.db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(task.key));
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM settings WHERE key LIKE 'task_move_pending:%'").get().count,1);
+  f.restart();
+  const result=await f.service.list(),moved=result.items.find(item=>item.list_id==="list-b");
+  assert.ok(moved);assert.equal(moved.scheduled_at,start);assert.equal(moved.project,"Atkuriama");assert.equal(moved.mirror_event_id,"event-recover");
+  assert.equal(f.db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(task.key),undefined);
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM settings WHERE key LIKE 'task_move_pending:%'").get().count,0);
+  assert.ok(result.warnings.some(warning=>warning.includes("užbaigtas anksčiau nutrūkęs")));
+});
+
+test("Google move without a returned ID never attaches a plan by matching task content",async t=>{
+  const f=setup(t);f.lists.set("list-b",new Map());let task=(await f.service.list()).items[0];
+  task=await f.service.update({...ref(task),scheduled_at:start});f.state.moveResultId="unknown-new-id";f.state.loseMoveResponse=true;
+  await assert.rejects(f.service.moveGoogle({...ref(task),destination_list_id:"list-b"}),/move response lost/);
+  f.restart();const result=await f.service.list(),destination=result.items.find(item=>item.id==="unknown-new-id");
+  assert.ok(destination);assert.equal(destination.scheduled_at,null);
+  assert.ok(f.db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(task.key));
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM settings WHERE key LIKE 'task_move_pending:%'").get().count,1);
+  assert.ok(result.warnings.some(warning=>warning.includes("nepavyko automatiškai suderinti")));
+});
+
+test("Google recovery with a known new ID never falls back to a foreign task using the old ID",async t=>{
+  const f=setup(t);f.lists.set("list-b",new Map());let task=(await f.service.list()).items[0];
+  task=await f.service.update({...ref(task),scheduled_at:start});f.state.moveResultId="known-new-id";f.state.failConfirmation=true;
+  await assert.rejects(f.service.moveGoogle({...ref(task),destination_list_id:"list-b"}),/confirmation failed/);
+  f.lists.get("list-b").delete("known-new-id");f.lists.get("list-b").set("1",{id:"1",title:"Svetima užduotis",status:"needsAction"});
+  f.restart();const result=await f.service.list(),foreign=result.items.find(item=>item.list_id==="list-b"&&item.id==="1");
+  assert.ok(foreign);assert.equal(foreign.scheduled_at,null);
+  assert.ok(f.db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(task.key));
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM settings WHERE key LIKE 'task_move_pending:%'").get().count,1);
+  assert.ok(result.warnings.some(warning=>warning.includes("nepavyko automatiškai suderinti")));
 });

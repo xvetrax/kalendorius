@@ -42,6 +42,12 @@ function taskApi(source, url, init) {
   if (!match) return Response.json({error: "Unknown fixture endpoint"}, {status: 404});
   const listId=decodeURIComponent(match[1]), map=taskMap(source,listId);
   if (!map) return Response.json({error: "Missing task list"}, {status: 404});
+  if (source === "google" && match[2]?.endsWith("/move") && method === "POST") {
+    const id=decodeURIComponent(match[2].slice(0,-"/move".length)),task=map.get(id);
+    const destinationId=url.searchParams.get("destinationTasklist"),destination=destinationId ? taskMap(source,destinationId) : undefined;
+    if (!task || !destination) return Response.json({error:"Missing task or destination list"},{status:404});
+    map.delete(id);destination.set(id,task);return taskResponse(task);
+  }
   if (!match[2] && method === "GET") return Response.json(source === "google" ? {items: [...map.values()].map(clone)} : {value: [...map.values()].map(clone)});
   if (!match[2] && method === "POST") {
     const id = `${source}-created-${map.size + 1}`;

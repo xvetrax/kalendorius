@@ -21,6 +21,8 @@ type Plan = {
   mirror_account_id: string | null; mirror_transaction_id: string | null; mirror_error: string | null; mirror_create_payload: string | null;
   project: string | null; tags: string | null; energy: string | null; local_priority: Task["priority"] | null;
 };
+type PendingGoogleMove = { setting_key: string; account_id: string; source_list_id: string; destination_list_id: string;
+  old_task_id: string; old_key: string; schedule_version: number; moved_id: string | null };
 export type TaskGateway = {
   connected(): boolean;
   cachedAccountId(): string | null;
@@ -140,6 +142,64 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
   function ensurePlan(task: Task) {
     db.prepare("INSERT OR IGNORE INTO task_plans(task_key, duration_minutes) VALUES (?, ?)").run(task.key, task.duration_minutes || 30);
     return plan(task.key)!;
+  }
+  function pendingMoveKey(oldKey: string) { return `task_move_pending:${createHash("sha256").update(oldKey).digest("hex")}`; }
+  function pendingMoves(account: string): PendingGoogleMove[] {
+    const rows = db.prepare("SELECT key,value FROM settings WHERE key LIKE 'task_move_pending:%'").all() as {key:string;value:string}[];
+    return rows.flatMap(row=>{
+      try {
+        const value=JSON.parse(row.value) as Omit<PendingGoogleMove,"setting_key">;
+        return value.account_id===account && value.old_key && value.destination_list_id ? [{...value,setting_key:row.key}] : [];
+      } catch { return []; }
+    });
+  }
+  function writePendingMove(move: PendingGoogleMove) {
+    const {setting_key,...value}=move;
+    db.prepare("INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(setting_key,JSON.stringify(value));
+  }
+  function applyMoveRows(move: PendingGoogleMove, moved: Task, expectedVersion?: number) {
+    const destinationPlan = plan(moved.key);
+    if (destinationPlan && moved.key !== move.old_key) throw new TaskError("Paskirties užduoties planas jau egzistuoja. Atnaujink duomenis.",409);
+    const existing = db.prepare("SELECT account_id,list_id,source,task_json FROM remote_tasks WHERE task_key=?").get(moved.key) as {account_id:string;list_id:string;source:string;task_json:string}|undefined;
+    if (existing) {
+      let existingId: unknown;
+      try { existingId=(JSON.parse(existing.task_json) as {id?:unknown}).id; } catch { /* Invalid cache is a conflict. */ }
+      if (existing.account_id!==move.account_id || existing.list_id!==move.destination_list_id || existing.source!=="google" || existingId!==moved.id) {
+        throw new TaskError("Paskirties užduoties vietiniai duomenys jau egzistuoja. Atnaujink duomenis.",409);
+      }
+    }
+    const oldPlan=plan(move.old_key);
+    if (oldPlan) {
+      const version=expectedVersion ?? oldPlan.schedule_version;
+      const changed=db.prepare("UPDATE task_plans SET task_key=?,schedule_version=schedule_version+1 WHERE task_key=? AND schedule_version=?")
+        .run(moved.key,move.old_key,version);
+      if (changed.changes!==1) throw new TaskError("Planas jau pakeistas. Atnaujink duomenis ir bandyk dar kartą.",409);
+    }
+    db.prepare(`INSERT INTO remote_tasks(task_key,account_id,list_id,task_json,source) VALUES (?,?,?,?,?)
+      ON CONFLICT(task_key) DO UPDATE SET account_id=excluded.account_id,list_id=excluded.list_id,task_json=excluded.task_json,source=excluded.source`)
+      .run(moved.key,move.account_id,move.destination_list_id,JSON.stringify(moved),"google");
+    db.prepare("DELETE FROM remote_tasks WHERE task_key=? AND task_key<>?").run(move.old_key,moved.key);
+    db.prepare("DELETE FROM settings WHERE key=?").run(move.setting_key);
+  }
+  function reconcilePendingMoves(account: string, staged: {list:TaskList;tasks:Task[];fresh:boolean}[], warnings: string[]) {
+    for (const move of pendingMoves(account)) {
+      const source=staged.find(entry=>entry.list.list_id===move.source_list_id),destination=staged.find(entry=>entry.list.list_id===move.destination_list_id);
+      if (!source?.fresh || !destination?.fresh) { warnings.push("Google: laukiamas užduoties perkėlimo suderinimas."); continue; }
+      const sourceExists=source.tasks.some(task=>String(task.id)===move.old_task_id);
+      const expectedId=move.moved_id ?? move.old_task_id;
+      const candidates=destination.tasks.filter(task=>String(task.id)===expectedId);
+      if (sourceExists && !candidates.length) { db.prepare("DELETE FROM settings WHERE key=?").run(move.setting_key); continue; }
+      if (sourceExists || candidates.length!==1) { warnings.push("Google: nepavyko automatiškai suderinti nutrūkusio užduoties perkėlimo."); continue; }
+      db.exec("SAVEPOINT reconcile_google_move");
+      try {
+        applyMoveRows(move,candidates[0]);
+        db.exec("RELEASE reconcile_google_move");
+        warnings.push("Google: užbaigtas anksčiau nutrūkęs užduoties perkėlimas.");
+      } catch {
+        db.exec("ROLLBACK TO reconcile_google_move");db.exec("RELEASE reconcile_google_move");
+        warnings.push("Google: perkėlimas įvyko, bet vietiniam planui suderinti reikia atnaujinti duomenis.");
+      }
+    }
   }
   function localTasks() {
     return (db.prepare("SELECT * FROM tasks ORDER BY completed, COALESCE(due_at, '9999'), created_at DESC").all() as unknown as Task[])
@@ -453,6 +513,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
             }
           }
         }
+        if (source === "google") reconcilePendingMoves(account,staged,warnings);
         for (const task of cachedTasks(account,source)) if (!available.some(list=>list.list_id === task.list_id)) db.prepare("DELETE FROM remote_tasks WHERE task_key=?").run(task.key);
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
@@ -626,6 +687,69 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       return get(input);
     });
   }
+  async function moveGoogle(input: Input) {
+    if (input.source !== "google") throw new TaskError("Tik Google užduotys gali būti perkeltos tarp sąrašų.");
+    const account = identifier(input.account_id), sourceListId = identifier(input.list_id);
+    const destinationListId = identifier(input.destination_list_id), taskId = identifier(input.id);
+    if (sourceListId === destinationListId) throw new TaskError("Pasirink kitą Google Tasks sąrašą.");
+    const provider = gateway("google"), currentAccount = await provider.accountId();
+    if (account !== currentAccount) throw new TaskError("Paskyra pasikeitė. Atnaujink duomenis.", 409);
+    requireAccount(account,"google");
+    const current = get({source:"google",account_id:account,list_id:sourceListId,id:taskId});
+    if (input.schedule_version !== current.schedule_version) throw new TaskError("Planas jau pakeistas. Atnaujink duomenis ir bandyk dar kartą.", 409);
+    const availableLists = await fetchLists("google",account);
+    const sourceList=availableLists.find(list=>list.list_id===sourceListId),destination=availableLists.find(list=>list.list_id === destinationListId);
+    if (!sourceList) throw new TaskError("Šaltinio sąrašo nebėra. Atnaujink duomenis.",409);
+    if (!destination) throw new TaskError("Paskirties sąrašo nebėra. Atnaujink duomenis.",409);
+    if (!destination.writable) throw new TaskError("Į pasirinktą sąrašą užduočių perkelti negalima.",403);
+    const sourceTasks = await pages("google",`/lists/${encodeURIComponent(sourceListId)}/tasks`,"?maxResults=100&showCompleted=true&showHidden=true&showDeleted=false&showAssigned=false");
+    const providerTask = sourceTasks.find(task=>String(task?.id) === taskId);
+    if (!providerTask || providerTask.deleted || providerTask.assignmentInfo) throw new TaskError("Google užduoties šiame sąraše nebėra arba jos perkelti negalima. Atnaujink duomenis.",409);
+    if (providerTask.parent || sourceTasks.some(task=>String(task?.parent) === taskId)) {
+      throw new TaskError("Užduočių su Google hierarchija tarp sąrašų neperkeliame, kad neprarastume tėvinio ryšio.",409);
+    }
+    requireAccount(account,"google");
+
+    const oldKey = current.key, expectedKey = remoteKey(account,destinationListId,taskId,"google");
+    if (db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=?").get(expectedKey) || db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(expectedKey)) {
+      throw new TaskError("Paskirties sąraše jau yra vietinių duomenų su šia užduoties tapatybe. Atnaujink duomenis.",409);
+    }
+    const pending: PendingGoogleMove = {setting_key:pendingMoveKey(oldKey),account_id:account,source_list_id:sourceListId,
+      destination_list_id:destinationListId,old_task_id:taskId,old_key:oldKey,schedule_version:current.schedule_version,
+      moved_id:null};
+    if (db.prepare("SELECT 1 FROM settings WHERE key=?").get(pending.setting_key)) throw new TaskError("Ankstesnis šios užduoties perkėlimas dar derinamas. Atnaujink duomenis.",409);
+    writePendingMove(pending);
+    const params = new URLSearchParams({destinationTasklist:destinationListId});
+    const raw = await provider.request(`/lists/${encodeURIComponent(sourceListId)}/tasks/${encodeURIComponent(taskId)}/move?${params}`,{method:"POST"});
+    if (!raw || typeof raw !== "object") {
+      throw new TaskError("Google perkėlė užduotį, bet negrąžino patvirtintos jos tapatybės. Atnaujink duomenis.",502);
+    }
+    let movedId: string;
+    try { movedId = identifier(raw.id); }
+    catch { throw new TaskError("Google perkėlė užduotį, bet grąžino neteisingą jos tapatybę. Atnaujink duomenis.",502); }
+    pending.moved_id=movedId;writePendingMove(pending);
+    requireAccount(account,"google");
+    const confirmed = await provider.request(`/lists/${encodeURIComponent(destinationListId)}/tasks/${encodeURIComponent(movedId)}`);
+    requireAccount(account,"google");
+    let confirmedId: string | null = null;
+    try { confirmedId = confirmed && typeof confirmed === "object" ? identifier(confirmed.id) : null; } catch { /* Invalid provider response. */ }
+    if (confirmedId !== movedId) {
+      throw new TaskError("Google perkėlimo rezultato paskirties sąraše patvirtinti nepavyko. Atnaujink duomenis.",502);
+    }
+    const moved = mapped(confirmed,destination), newKey = moved.key;
+
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const cached = db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=? AND source='google' AND account_id=? AND list_id=?").get(oldKey,account,sourceListId);
+      if (!cached) throw new TaskError("Užduoties vietinė kopija pasikeitė. Atnaujink duomenis.",409);
+      if (newKey !== expectedKey && (db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=?").get(newKey) || db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(newKey))) {
+        throw new TaskError("Paskirties sąrašo duomenys pasikeitė. Atnaujink duomenis.",409);
+      }
+      applyMoveRows(pending,moved,current.schedule_version);
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    return decorate(moved);
+  }
   async function remove(input: Input) {
     return serial(reference(input), async () => {
       const task = get(input); const extra = ensurePlan(task);
@@ -651,5 +775,6 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     readRecurrence:(input:Input)=>mutation(input,()=>readRecurrence(input)), updateRecurrence:(input:Input)=>mutation(input,()=>updateRecurrence(input)),
     createList:(input:Input)=>mutation(input,()=>createList(input)), renameList:(input:Input)=>mutation(input,()=>renameList(input)),
     previewListDeletion:(input:Input)=>mutation(input,()=>previewListDeletion(input)), deleteList:(input:Input)=>mutation(input,()=>deleteList(input)),
-    create:(input:Input)=>mutation(input,()=>create(input)), update:(input:Input)=>mutation(input,()=>update(input)), remove:(input:Input)=>mutation(input,()=>remove(input)) };
+    create:(input:Input)=>mutation(input,()=>create(input)), update:(input:Input)=>mutation(input,()=>update(input)),
+    moveGoogle:(input:Input)=>mutation(input,()=>moveGoogle(input)), remove:(input:Input)=>mutation(input,()=>remove(input)) };
 }

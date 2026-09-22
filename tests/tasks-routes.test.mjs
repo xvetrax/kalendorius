@@ -26,6 +26,7 @@ const {upstream}=await import("./fixtures/tasks-upstream.mjs");
 const {db,saveSetting}=await import("../lib/db.ts");
 const {encrypt}=await import("../lib/secrets.ts");
 const route=await import("../app/api/tasks/route.ts");
+const moveRoute=await import("../app/api/tasks/move/route.ts");
 
 const taskScope="https://www.googleapis.com/auth/tasks";
 function connect() {
@@ -101,4 +102,17 @@ test("an account swap rejects references selected for the old provider account",
     const response=await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2026-11-04T08:00:00.000Z"}));
     assert.equal(response.status,409); saveSetting(`${source}_account_id`,`${source}-account`);
   }
+});
+
+test("actual Google move route preserves the plan under its destination identity",async()=>{
+  upstream.googleLists.set("google-list-b",{id:"google-list-b",title:"Google kitas",etag:"google-list-b-v1",_revision:1});
+  upstream.googleListTasks.set("google-list-b",new Map());
+  let task=item(await (await list()).json(),"google");
+  task=await (await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2026-11-05T08:00:00.000Z",duration_minutes:55,project:"Darbas",tags:"perkelta"}))).json();
+  const moveRequest=new Request(url+"/move",{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({...ref(task),destination_list_id:"google-list-b"})});
+  const response=await moveRoute.POST(moveRequest);assert.equal(response.status,200);const moved=await response.json();
+  assert.equal(moved.list_id,"google-list-b");assert.equal(moved.scheduled_at,"2026-11-05T08:00:00.000Z");assert.equal(moved.duration_minutes,55);assert.equal(moved.project,"Darbas");assert.equal(moved.tags,"perkelta");assert.equal(moved.schedule_version,task.schedule_version+1);
+  const refreshed=await (await list()).json(),listed=refreshed.items.find(entry=>entry.key===moved.key);
+  assert.ok(listed);assert.equal(listed.scheduled_at,moved.scheduled_at);assert.equal(refreshed.items.some(entry=>entry.key===task.key),false);
+  assert.equal((await moveRoute.POST(request("POST",{...ref(moved),destination_list_id:"google-list"},"https://attacker.example"))).status,403);
 });
