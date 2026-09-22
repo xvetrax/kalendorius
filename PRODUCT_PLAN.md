@@ -148,7 +148,7 @@ Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti,
 - [x] Pačios programėlės prieigos apsauga, saugi sesija ir HTTPS diegimo instrukcija viešam / nuotoliniam naudojimui.
 - [x] OAuth PKCE / vienkartinė serverio operacija, konfigūracijos diagnostika, minimalūs leidimai, saugus žurnalų turinys.
 - [x] SQLite atsarginė kopija ir atkūrimas, migracijos testas su ankstesne schema, duomenų eksportas be žetonų.
-- [ ] Docker sveikatos patikra, neprivilegijuotas procesas, aiški versija, paleidimo ir atnaujinimo vadovas.
+- [x] Docker sveikatos patikra, neprivilegijuotas procesas, aiški versija, paleidimo ir atnaujinimo vadovas.
 - [ ] Automatizuoti svarbiausi naršyklės scenarijai, mobilus ekranas, prieinamumas, skirtingos laiko zonos, offline / tinklo klaida.
 - [ ] Naudotojo patikra su jo paskyromis ir pašalintos rastos klaidos.
 
@@ -246,6 +246,24 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - Žurnalai: `apiError` visada grąžina generines lietuviškas klaidas be tiekėjo detalių. `proxy.ts` neregistruoja žetonų.
 - 153/153 testai, typecheck, produkcinis build praeina. Tikrų OAuth paskyrų su PKCE patikra neatliekta.
 - Ribos: `APP_ORIGIN` HTTPS instrukcija yra `.env.example` komentare, bet atskiro diegimo vadovo nėra — lieka F4.
+
+### 2026-09-22 F3 — SQLite atsarginė kopija ir atkūrimas
+
+- `lib/backup.ts`: `createBackup()` (visi duomenys), `createExport()` (be `google_refresh_token` / `microsoft_refresh_token`), `restoreBackup()`. Kopija per ATTACH DATABASE + CREATE TABLE + INSERT INTO — vienintelis veikiantis būdas šioje Node.js versijoje (`DatabaseSync.backup()` nėra, `VACUUM INTO` kuria tuščią DB).
+- Atkūrimas: SQLite magic bytes patikrinimas iš buferio prieš `new DatabaseSync()` atidarymą; lentelių sąrašo validavimas (tik `tasks` ir `settings`); roll-back jei kopija nepavyko.
+- Saugumo pataisymai: laikinieji failai sukuriami su 0o600 teisėmis; `.pre-restore` kopija iš karto `chmod 0o600`; GET `/api/backup` gauna `assertSameOrigin` (anksčiau jo nebuvo).
+- `app/api/backup/route.ts`: GET `?type=full|export`, POST atkūrimui. Abi funkcijos gauna tiesioginį sesijos tikrinimą (gynybos gilumas — papildomai prie proxy.ts).
+- `app/page.tsx`: `BackupPanel` komponentas nustatymuose — parsisiuntimas ir atkūrimas per failo įkėlimą.
+- `tests/backup.test.mjs` (5 testai), `tests/db-migration.test.mjs` (5 testai — sena schema su `due_at`, migracija į `task_plans`, idempotentiškumas).
+- 163/163 testai, typecheck, produkcinis build praeina.
+
+### 2026-09-22 F4 — Docker ir diegimas
+
+- `Dockerfile`: papildytas `planner` neprivilegijuotu naudotoju (`adduser -S`), `chown /app/data`, `USER planner`, `HEALTHCHECK` su `wget /api/config`, `ARG APP_VERSION` ir `LABEL` OCI anotacijos.
+- `docker-compose.yml`: `./data` tome susietas, `env_file: .env`, health check, atnaujinimo komandos komentaruose (`docker compose pull && up -d --build`).
+- `app/api/config/route.ts`: grąžina `version` iš `package.json` — sveikatos patikra ir diagnostika vienoje vietoje.
+- 163/163 testai, typecheck, produkcinis build praeina.
+- Ribos: Docker image tikroje aplinkoje nebuvo paleistas (tam reikia Docker daemon). `APP_ORIGIN` HTTPS nustatymas ir OAuth callback URI koregavimas lieka naudotojo atsakomybe.
 
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.
 

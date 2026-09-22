@@ -1,0 +1,33 @@
+# Paleidimas:   docker compose up -d
+# Sustabdymas:  docker compose down
+# Atnaujinimas: docker compose pull && docker compose up -d --build
+# Žurnalai:     docker compose logs -f
+# Atsarginė:    curl -s http://localhost:3000/api/backup?type=full -o backup.db
+#               (reikia prisijungimo slapuko; naudok naršyklės žodynėlį arba wget --load-cookies)
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        APP_VERSION: "0.1.0"
+    image: kalendorius:0.1.0
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Duomenų bazė išlieka tarp perkrovimų
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      # APP_ORIGIN turi atitikti viešą URL (pvz. https://planner.example.com)
+      # APP_PASSWORD — prisijungimo slaptažodis (openssl rand -base64 24)
+      # TOKEN_ENCRYPTION_KEY — 64 hex simboliai (openssl rand -hex 32)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/config"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3

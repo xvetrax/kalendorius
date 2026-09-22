@@ -2,6 +2,7 @@ import { isGoogleConfigured } from "@/lib/google";
 import { isMicrosoftConfigured } from "@/lib/microsoft";
 import { isTokenEncryptionConfigured } from "@/lib/secrets";
 import { isAuthEnabled } from "@/lib/session";
+import pkg from "@/package.json";
 
 export const runtime = "nodejs";
 
@@ -16,5 +17,5 @@ export async function GET() {
     DATABASE_PATH: env.DATABASE_PATH || "(default: ./data/planner.db)",
   };
   const issues = Object.entries(checks).filter(([, v]) => v === "missing" || v === "not configured");
-  return Response.json({ ok: issues.length === 0, checks }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json({ ok: issues.length === 0, version: pkg.version, checks }, { headers: { "Cache-Control": "no-store" } });
 }

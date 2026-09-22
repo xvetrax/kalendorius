@@ -1,9 +1,20 @@
 import { createBackup, createExport, restoreBackup } from "@/lib/backup";
 import { apiError, assertSameOrigin } from "@/lib/http";
+import { verifySessionToken, isAuthEnabled, SESSION_COOKIE } from "@/lib/session";
 
 export const runtime = "nodejs";
 
+function requireSession(request: Request): Response | null {
+  if (!isAuthEnabled()) return null;
+  const cookie = request.headers.get("cookie") ?? "";
+  const token = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`))?.[1];
+  if (verifySessionToken(token)) return null;
+  return Response.json({ error: "Neprisijungta." }, { status: 401 });
+}
+
 export async function GET(request: Request) {
+  const authErr = requireSession(request);
+  if (authErr) return authErr;
   assertSameOrigin(request);
   const type = new URL(request.url).searchParams.get("type") ?? "export";
   const isFullBackup = type === "full";
@@ -24,6 +35,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const authErr = requireSession(request);
+  if (authErr) return authErr;
   try {
     assertSameOrigin(request);
     const buf = await request.arrayBuffer();
