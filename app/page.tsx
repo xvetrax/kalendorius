@@ -597,8 +597,8 @@ function BackupPanel() {
   async function download(type:"export"|"backup") {
     setBusy(type);setMsg("");
     try {
-      const res=await fetch(`/api/backup?type=${type}`);
-      if (!res.ok) { setMsg("Nepavyko sukurti atsarginės kopijos."); return; }
+      const res=await fetch("/api/backup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:type==="backup"?"full":"export"})});
+      if (!res.ok) { const data=await res.json().catch(()=>({}));setMsg(data.error??"Nepavyko sukurti atsarginės kopijos."); return; }
       const blob=await res.blob();
       const url=URL.createObjectURL(blob);
       const a=document.createElement("a");
@@ -614,7 +614,7 @@ function BackupPanel() {
     if (!file) return;
     setBusy("restore");setMsg("");
     try {
-      const res=await fetch("/api/backup",{method:"POST",headers:{"Content-Type":"application/octet-stream","Origin":location.origin},body:file});
+      const res=await fetch("/api/backup",{method:"PUT",headers:{"Content-Type":"application/octet-stream"},body:file});
       const data=await res.json().catch(()=>({}));
       if (res.ok) { setMsg("Atkurta. Puslapis bus atnaujintas."); setTimeout(()=>location.reload(),1500); }
       else setMsg(data.error ?? "Atkurti nepavyko.");

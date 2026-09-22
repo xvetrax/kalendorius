@@ -149,7 +149,7 @@ Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti,
 
 - [x] Pačios programėlės prieigos apsauga, saugi sesija ir HTTPS diegimo instrukcija viešam / nuotoliniam naudojimui.
 - [x] OAuth PKCE / vienkartinė serverio operacija, konfigūracijos diagnostika, minimalūs leidimai, saugus žurnalų turinys.
-- [ ] SQLite atsarginė kopija ir atkūrimas bei duomenų eksportas be žetonų. Eksportas sukuriamas, bet pilnos kopijos UI tipas nesutampa su API, o dabartinis atkūrimas nepriima realios schemos ir nesaugiai keičia aktyvią WAL duomenų bazę.
+- [x] SQLite atsarginė kopija ir atkūrimas bei duomenų eksportas be žetonų. Pilnas penkių lentelių roundtrip, senesnės schemos migracija, žetonų pašalinimas eksporte ir klaidingos kopijos rollback patikrinti izoliuotoje SQLite bazėje.
 - [ ] Docker neprivilegijuotas procesas, versija, paleidimo vadovas ir sveikatos patikra. Įjungus `APP_PASSWORD`, dabartinis healthcheck gauna 401.
 - [ ] Izoliuoti ir prasmingi svarbiausi naršyklės scenarijai: mobilus ekranas, prieinamumas, DST, offline / klaidos grąžinimas ir pagrindinis CRUD. Dabartinis Playwright gali panaudoti veikiantį `:3000` bei jo DB, o dalis testų tikrina tik matomą `body` ar ekrano nuotraukos dydį.
 - [ ] Naudotojo patikra su tikromis paskyromis ir pašalintos rastos klaidos.
@@ -160,7 +160,7 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 
 Šis etapas turi pirmenybę prieš naujas funkcijas. Kiekviena eilutė užbaigiama atskiru patikrintu commit’u ir push’u į `origin/codex/audit-remediation`; `main` atnaujinama tik po bendros žalios peržiūros.
 
-- [ ] **P0 — atsarginės kopijos.** Pilnos kopijos ir eksporto užklausa turi naudoti aiškų duomenis keičiantį metodą su sesijos bei kilmės patikra. Atkūrimas turi patikrinti visą schemą ir vienoje transakcijoje atkurti duomenis per aktyvią SQLite jungtį, nekeisdamas po atvira WAL jungtimi esančio failo. Privalomas pilnas create → pakeisti → restore → skaityti / rašyti roundtrip testas.
+- [x] **P0 — atsarginės kopijos.** Pilnos kopijos ir eksporto užklausa naudoja `POST`, atkūrimas — `PUT`; abu tikrina sesiją bei kilmę. Atkūrimas patikrina SQLite vientisumą, leidžiamas lenteles ir stulpelių suderinamumą, o visų penkių programos lentelių duomenis pakeičia vienoje transakcijoje per aktyvią jungtį. Roundtrip testas patvirtina create → pakeisti → restore → skaityti / rašyti eigą; eksportas atskirai patikrintas be abiejų OAuth atnaujinimo žetonų.
 - [ ] **P1 — testų izoliacija.** Playwright naudoja atskirą prievadą ir unikalią laikiną DB, niekada neperima jau veikiančio naudotojo serverio, o baigęs pašalina duomenis. Testai tikrina realų vieno stulpelio rodinį, konkrečią DST datą, klaidos pranešimą ir rollback.
 - [ ] **P1 — tapatybės ir vietinių duomenų vientisumas.** Google perkėlimas tarp sąrašų migruoja `task_plans` / mirror ryšį tik patvirtinus tiekėjo rezultatą; kalendoriaus įvykio tapatybė apima kalendoriaus ID; ištrintų užduočių Outlook blokai turi pasiekiamą valymo eilę.
 - [ ] **P1 — produkto paviršius.** Pridėti Microsoft kartojimo UI; žingsnius perkelti į bendrą saugų adapterį; užbaigti Google `parent` / `previous`; pataisyti fokusavimo sesijos laiką ir būseną.
@@ -270,6 +270,9 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - `tests/backup.test.mjs` (5 testai), `tests/db-migration.test.mjs` (5 testai — sena schema su `due_at`, migracija į `task_plans`, idempotentiškumas).
 - 163/163 testai, typecheck, produkcinis build praeina.
 - 2026-09-22 audito pataisa: šie testai nepatikrino sėkmingo pilnos kopijos roundtrip. Reali kopija turi papildomas lenteles, kurias atkūrimas atmeta, UI siunčia netinkamą pilnos kopijos tipą, o failo pakeitimas po aktyvia WAL jungtimi yra nesaugus. F3 laikomas nebaigtu.
+- 2026-09-22 audito taisymas: kopijavimas apribotas penkiomis programos lentelėmis ir vyksta nuoseklioje skaitymo transakcijoje. Atkūrimas nekeičia DB failo: patikrintus duomenis įkelia per prijungtą tik skaitymui skirtą kopiją ir vieną `BEGIN IMMEDIATE` transakciją. Nežinomos lentelės, nepalaikomi objektai ir naujesni stulpeliai atmetami iki duomenų pakeitimo; senesnės `tasks` / `settings` kopijos užpildomos dabartiniais numatytais laukais ir migracijos žyma.
+- API dabar naudoja `POST` pilnai kopijai / eksportui ir `PUT` atkūrimui, todėl visos operacijos turi sesijos bei tos pačios kilmės patikrą. UI siunčia `full` pilnai kopijai. README aprašo žetonų riziką, 100 MB ribą ir atkūrimo eigą.
+- Izoliuoti testai patvirtina visas penkias lenteles, pilną create → pakeisti → restore → skaityti / rašyti roundtrip, eksportą be abiejų OAuth atnaujinimo žetonų, seną schemą, nežinomą / naujesnę schemą, nepakeistus esamus duomenis po atmetimo ir API metodų / sesijos / kilmės sutartį.
 
 ### 2026-09-22 F4 — Docker ir diegimas
 

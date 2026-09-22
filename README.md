@@ -63,6 +63,12 @@ npm start
 
 `test:tasks` tikrina produkcinius vietinių, Google Tasks ir Microsoft To Do užduočių maršrutus: kūrimą, planavimą, perkėlimą, trukmę, užbaigimą, atkūrimą ir ištrynimą. Naudojama laikina DB ir tik sintetiniai tiekėjai; išorinis tinklas užblokuotas. `node tests/tasks-smoke.mjs --preview` palieka tą kopiją `http://127.0.0.1:3102` naršyklės patikrai iki Ctrl+C.
 
+## Atsarginės kopijos ir atkūrimas
+
+Atverk **Nustatymai → Duomenys**. **Pilna kopija** išsaugo visas vietines užduotis, planus, tiekėjų talpyklą, nustatymus ir užšifruotus OAuth atnaujinimo žetonus, todėl failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju atjunk ir iš naujo prijunk paskyras. **Eksportuoti (be žetonų)** sukuria perkėlimui tinkamą SQLite failą be Google ir Microsoft atnaujinimo žetonų.
+
+**Atkurti iš kopijos** priima iki 100 MB SQLite failą. Prieš pakeisdama duomenis programa patikrina failo vientisumą, lenteles ir stulpelius, tada vienoje transakcijoje pakeičia visų programos lentelių duomenis. Klaidinga ar naujesnės nepalaikomos schemos kopija esamų duomenų nekeičia. Po sėkmingo atkūrimo puslapis persikrauna. Prieš programos atnaujinimą parsisiųsk pilną kopiją.
+
 ## Google Tasks leidimas
 
 Google OAuth sutikimo ekrane pridėk `https://www.googleapis.com/auth/tasks` prie naudojamo Calendar leidimo. Jei projektas yra testavimo režimu, pridėk savo paskyrą prie testinių naudotojų. Tasks API įjungimas projekte ir naudotojo suteiktas Tasks leidimas yra du atskiri reikalavimai.

@@ -2,8 +2,7 @@
 # Sustabdymas:  docker compose down
 # Atnaujinimas: docker compose pull && docker compose up -d --build
 # Žurnalai:     docker compose logs -f
-# Atsarginė:    curl -s http://localhost:3000/api/backup?type=full -o backup.db
-#               (reikia prisijungimo slapuko; naudok naršyklės žodynėlį arba wget --load-cookies)
+# Atsarginė:    programėlėje atverk Nustatymai → Duomenys → Pilna kopija
 
 services:
   app:
