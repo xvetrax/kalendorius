@@ -4,6 +4,7 @@ import { apiError, assertSameOrigin } from "@/lib/http";
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
+  assertSameOrigin(request);
   const type = new URL(request.url).searchParams.get("type") ?? "export";
   const isFullBackup = type === "full";
   try {

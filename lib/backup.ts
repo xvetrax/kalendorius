@@ -50,8 +50,14 @@ function copyDbTo(dest: string, excludeSettings?: string[]) {
   }
 }
 
+function makeTempPath(prefix: string): string {
+  const p = path.join(os.tmpdir(), `${prefix}-${process.hrtime.bigint()}.db`);
+  fs.closeSync(fs.openSync(p, "w", 0o600));
+  return p;
+}
+
 export function createBackup(): Buffer {
-  const tmp = path.join(os.tmpdir(), `planner-backup-${Date.now()}.db`);
+  const tmp = makeTempPath("planner-backup");
   try {
     copyDbTo(tmp);
     return fs.readFileSync(tmp);
@@ -61,7 +67,7 @@ export function createBackup(): Buffer {
 }
 
 export function createExport(): Buffer {
-  const tmp = path.join(os.tmpdir(), `planner-export-${Date.now()}.db`);
+  const tmp = makeTempPath("planner-export");
   try {
     copyDbTo(tmp, SENSITIVE_KEYS);
     return fs.readFileSync(tmp);
@@ -74,7 +80,7 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
   if (data.length < 16 || !data.slice(0, 16).toString("utf8").startsWith("SQLite format 3")) {
     throw new Error("Netinkamas failo formatas — tikėtina SQLite duomenų bazė.");
   }
-  const tmp = path.join(os.tmpdir(), `planner-restore-${Date.now()}.db`);
+  const tmp = makeTempPath("planner-restore");
   try {
     fs.writeFileSync(tmp, data);
     const incoming = new DatabaseSync(tmp);
@@ -97,6 +103,7 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
     const live = dbPath();
     const bak = live + ".pre-restore";
     fs.copyFileSync(live, bak);
+    try { fs.chmodSync(bak, 0o600); } catch {}
     try {
       fs.copyFileSync(tmp, live);
       // Remove stale WAL/SHM after restore
