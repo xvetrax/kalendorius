@@ -22,7 +22,8 @@ function LoginForm() {
         body: JSON.stringify({ password }),
       });
       if (res.ok) {
-        const next = params.get("next") ?? "/";
+        const raw = params.get("next") ?? "/";
+        const next = raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/\\") ? raw : "/";
         window.location.href = next;
       } else {
         const data = await res.json().catch(() => ({}));

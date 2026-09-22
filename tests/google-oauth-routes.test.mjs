@@ -24,18 +24,18 @@ function consent(scope){globalThis.fetch=async raw=>{const url=new URL(raw);if(u
 test("Google connect requests incremental Tasks consent and callback marks granted permission",async()=>{
   const response=await connect.GET(new Request("http://localhost:3000/api/google/connect"));
   const auth=new URL(response.headers.get("location")),state=auth.searchParams.get("state");
-  assert.equal(jar.get("google_oauth_state"),state);assert.equal(auth.searchParams.get("prompt"),"consent");assert.equal(auth.searchParams.get("include_granted_scopes"),"true");assert.ok(auth.searchParams.get("scope").includes(tasks));
+  assert.equal(jar.get("google_oauth_state"),state);assert.ok(jar.get("google_oauth_verifier"));assert.equal(auth.searchParams.get("prompt"),"consent");assert.equal(auth.searchParams.get("include_granted_scopes"),"true");assert.ok(auth.searchParams.get("scope").includes(tasks));assert.equal(auth.searchParams.get("code_challenge_method"),"S256");assert.ok(auth.searchParams.get("code_challenge"));
   consent(`${calendar} ${tasks}`);assert.equal(oauthResult(await callback.GET(req({state,code:"synthetic"}))),"connected");
   const s=await status.GET();assert.equal(s.headers.get("cache-control"),"no-store");const body=await s.json();assert.equal(body.tasksConnected,true);assert.equal(body.tasksStatus,"connected");
   assert.equal(oauthResult(await callback.GET(req({state,code:"replay"}))),"error");
 });
 
 test("partial or denied Tasks consent reports an actionable result while preserving the old Calendar connection",async()=>{
-  jar.set("google_oauth_state","partial");consent(calendar);
+  jar.set("google_oauth_state","partial");jar.set("google_oauth_verifier","test-verifier");consent(calendar);
   assert.equal(oauthResult(await callback.GET(req({state:"partial",code:"synthetic"}))),"tasks-permission-required");
   let s=await (await status.GET()).json();assert.equal(s.connected,true);assert.equal(s.tasksStatus,"permission_required");
   const stored=setting("google_refresh_token"),generation=setting("google_connection_generation");
-  jar.set("google_oauth_state","denied");globalThis.fetch=async()=>{throw Error("Must not exchange denied consent");};
+  jar.set("google_oauth_state","denied");jar.set("google_oauth_verifier","test-verifier");globalThis.fetch=async()=>{throw Error("Must not exchange denied consent");};
   assert.equal(oauthResult(await callback.GET(req({state:"denied",error:"access_denied"}))),"tasks-permission-required");
   assert.equal(setting("google_refresh_token"),stored);assert.equal(setting("google_connection_generation"),generation);
 });

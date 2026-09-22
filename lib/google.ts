@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { decrypt, encrypt, isTokenEncryptionConfigured } from "@/lib/secrets";
 import { db, deleteSettings, saveSetting, setting } from "@/lib/db";
 import { oauthRedirectUri } from "@/lib/http";
@@ -27,7 +27,13 @@ function hasScope(scopes: string | undefined, expected: string) {
   return (scopes || "").split(/\s+/).includes(expected);
 }
 
-export function googleAuthUrl(state: string) {
+export function generatePKCE(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(40).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  return { verifier, challenge };
+}
+
+export function googleAuthUrl(state: string, codeChallenge: string) {
   const { clientId, redirectUri } = config();
   const params = new URLSearchParams({
     client_id: clientId,
@@ -38,13 +44,15 @@ export function googleAuthUrl(state: string) {
     prompt: "consent",
     include_granted_scopes: "true",
     state,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
   });
   const accountId = cachedGoogleAccountId();
   if (accountId) params.set("login_hint", accountId);
   return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 }
 
-export async function exchangeCode(code: string) {
+export async function exchangeCode(code: string, codeVerifier: string) {
   const generation = setting("google_connection_generation");
   const previousToken = setting("google_refresh_token");
   const previousAccountId = setting("google_account_id");
@@ -52,7 +60,7 @@ export async function exchangeCode(code: string) {
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: "authorization_code" }),
+    body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: "authorization_code", code_verifier: codeVerifier }),
   });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error_description || "Google prieigos patvirtinti nepavyko");

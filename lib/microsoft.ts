@@ -1,7 +1,7 @@
 import { decrypt, encrypt, isTokenEncryptionConfigured } from "@/lib/secrets";
 import { db, deleteSettings, saveSetting, setting } from "@/lib/db";
 import { oauthRedirectUri } from "@/lib/http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { ProviderError } from "@/lib/provider-error";
 
 const scopes = "openid profile offline_access User.Read Calendars.ReadWrite Tasks.ReadWrite";
@@ -15,18 +15,24 @@ function config() {
   return { clientId, clientSecret, redirectUri, tenant };
 }
 
-export function microsoftAuthUrl(state: string) {
+export function generateMicrosoftPKCE(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(40).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  return { verifier, challenge };
+}
+
+export function microsoftAuthUrl(state: string, codeChallenge: string) {
   const { clientId, redirectUri, tenant } = config();
-  const params = new URLSearchParams({ client_id: clientId, response_type: "code", redirect_uri: redirectUri, response_mode: "query", scope: scopes, state });
+  const params = new URLSearchParams({ client_id: clientId, response_type: "code", redirect_uri: redirectUri, response_mode: "query", scope: scopes, state, code_challenge: codeChallenge, code_challenge_method: "S256" });
   return `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize?${params}`;
 }
 
-export async function exchangeMicrosoftCode(code: string) {
+export async function exchangeMicrosoftCode(code: string, codeVerifier: string) {
   const generation = setting("microsoft_connection_generation");
   const { clientId, clientSecret, redirectUri, tenant } = config();
   const response = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: redirectUri, grant_type: "authorization_code", scope: scopes }),
+    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: redirectUri, grant_type: "authorization_code", scope: scopes, code_verifier: codeVerifier }),
   });
   const body = await response.json();
   if (!response.ok || !body.refresh_token) throw new Error(body.error_description || "Microsoft negrąžino refresh token");

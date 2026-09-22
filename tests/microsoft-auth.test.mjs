@@ -59,14 +59,14 @@ test("late refresh cannot reconnect a disconnected account or send its Graph req
 
 test("failed new profile lookup leaves the previous token and account paired",async () => {
   globalThis.fetch=async (url) => url.includes("/token") ? json({access_token:"new-access",refresh_token:"new-refresh"}) : json({error:"unavailable"},503);
-  await assert.rejects(ms.exchangeMicrosoftCode("test-code"));
+  await assert.rejects(ms.exchangeMicrosoftCode("test-code","test-verifier"));
   assert.equal(ms.cachedMicrosoftAccountId(),"old-account");assert.equal(decrypt(setting("microsoft_refresh_token")),"old-refresh");
 });
 
 test("successful account switch atomically replaces identity and clears the old task list",async () => {
   saveSetting("microsoft_task_list_id","old-list");
   globalThis.fetch=async (url) => url.includes("/token") ? json({access_token:"new-access",refresh_token:"new-refresh"}) : json({id:"new-account",displayName:"Test account"});
-  await ms.exchangeMicrosoftCode("test-code");
+  await ms.exchangeMicrosoftCode("test-code","test-verifier");
   assert.equal(ms.cachedMicrosoftAccountId(),"new-account");assert.equal(decrypt(setting("microsoft_refresh_token")),"new-refresh");
   assert.equal(setting("microsoft_task_list_id"),undefined);assert.notEqual(setting("microsoft_connection_generation"),"generation-a");
 });
@@ -74,7 +74,7 @@ test("successful account switch atomically replaces identity and clears the old 
 test("in-flight sign-in cannot undo a newer disconnect",async () => {
   const waiting=deferred();
   globalThis.fetch=async (url) => url.includes("/token") ? waiting.promise : json({id:"new-account"});
-  const signingIn=ms.exchangeMicrosoftCode("test-code");ms.disconnectMicrosoft();
+  const signingIn=ms.exchangeMicrosoftCode("test-code","test-verifier");ms.disconnectMicrosoft();
   waiting.resolve(json({access_token:"new-access",refresh_token:"new-refresh"}));
   await assert.rejects(signingIn,/pasikeitė/);assert.equal(ms.isMicrosoftConnected(),false);
 });

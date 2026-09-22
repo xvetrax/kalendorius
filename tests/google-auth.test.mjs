@@ -59,14 +59,14 @@ test("late refresh cannot reconnect a disconnected account or send its Graph req
 
 test("failed new profile lookup leaves the previous token and account paired",async () => {
   globalThis.fetch=async (url) => url.includes("/token") ? json({access_token:"new-access",refresh_token:"new-refresh"}) : json({error:"unavailable"},503);
-  await assert.rejects(google.exchangeCode("test-code"));
+  await assert.rejects(google.exchangeCode("test-code","test-verifier"));
   assert.equal(setting("google_account_id"),"old-account");assert.equal(decrypt(setting("google_refresh_token")),"old-refresh");
 });
 
 test("successful account switch atomically replaces identity and clears the old task list",async () => {
   
   globalThis.fetch=async (url) => url.includes("/token") ? json({access_token:"new-access",refresh_token:"new-refresh"}) : json({sub:"new-account",name:"Test account"});
-  await google.exchangeCode("test-code");
+  await google.exchangeCode("test-code","test-verifier");
   assert.equal(setting("google_account_id"),"new-account");assert.equal(decrypt(setting("google_refresh_token")),"new-refresh");
   assert.notEqual(setting("google_connection_generation"),"generation-a");
 });
@@ -74,7 +74,7 @@ test("successful account switch atomically replaces identity and clears the old 
 test("in-flight sign-in cannot undo a newer disconnect",async () => {
   const waiting=deferred();
   globalThis.fetch=async (url) => url.includes("/token") ? waiting.promise : json({sub:"new-account"});
-  const signingIn=google.exchangeCode("test-code");google.disconnectGoogle();
+  const signingIn=google.exchangeCode("test-code","test-verifier");google.disconnectGoogle();
   waiting.resolve(json({access_token:"new-access",refresh_token:"new-refresh"}));
   await assert.rejects(signingIn,/pasikeitė/);assert.equal(google.isGoogleConnected(),false);
 });
@@ -84,30 +84,30 @@ function allowTasks(){saveSetting("google_granted_scopes",`${calendarScope} ${ta
 
 test("legacy Calendar connection requires explicit Tasks consent and never attempts Tasks requests",async()=>{
   assert.equal(google.isGoogleConnected(),true);assert.equal(google.isGoogleTasksConnected(),false);assert.equal(google.googleTasksStatus(),"permission_required");
-  const url=new URL(google.googleAuthUrl("test-state"));
-  for(const [key,value] of Object.entries({include_granted_scopes:"true",prompt:"consent",access_type:"offline",state:"test-state",login_hint:"old-account"}))assert.equal(url.searchParams.get(key),value);
+  const url=new URL(google.googleAuthUrl("test-state","test-challenge"));
+  for(const [key,value] of Object.entries({include_granted_scopes:"true",prompt:"consent",access_type:"offline",state:"test-state",login_hint:"old-account",code_challenge:"test-challenge",code_challenge_method:"S256"}))assert.equal(url.searchParams.get(key),value);
   assert.ok(url.searchParams.get("scope").split(" ").includes(tasksScope));
   await assert.rejects(google.googleTasksFetch("/users/@me/lists"),/Tasks leidimą/);
 });
 
 test("incremental grant without a refresh token reuses only the verified same account token",async()=>{
   globalThis.fetch=async url=>url.includes("/token")?json({access_token:"new-access",scope:`${calendarScope} ${tasksScope}`}):json({sub:"old-account"});
-  assert.equal((await google.exchangeCode("consent")).tasksConnected,true);assert.equal(google.isGoogleTasksConnected(),true);
+  assert.equal((await google.exchangeCode("test-code","test-verifier")).tasksConnected,true);assert.equal(google.isGoogleTasksConnected(),true);
   assert.equal(decrypt(setting("google_refresh_token")),"old-refresh");
   const generation=setting("google_connection_generation");
   globalThis.fetch=async url=>url.includes("/token")?json({access_token:"other-access",scope:tasksScope}):json({sub:"other-account"});
-  await assert.rejects(google.exchangeCode("other-account"),/refresh token/);
+  await assert.rejects(google.exchangeCode("test-code","test-verifier"),/refresh token/);
   assert.equal(setting("google_connection_generation"),generation);assert.equal(setting("google_account_id"),"old-account");
 });
 
 test("partial Tasks consent preserves Calendar and missing scopes never invent a new grant",async()=>{
   allowTasks();
   globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access",refresh_token:"replacement",scope:calendarScope}):json({sub:"old-account"});
-  assert.equal((await google.exchangeCode("partial")).tasksConnected,false);assert.equal(google.isGoogleConnected(),true);
+  assert.equal((await google.exchangeCode("test-code","test-verifier")).tasksConnected,false);assert.equal(google.isGoogleConnected(),true);
   globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access"}):json({items:[]});
   assert.deepEqual(await google.googleFetch("/calendars/primary/events"),{items:[]});
   globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access",refresh_token:"new-refresh"}):json({sub:"new-account"});
-  assert.equal((await google.exchangeCode("no-scopes")).tasksConnected,false);assert.equal(setting("google_granted_scopes"),"");
+  assert.equal((await google.exchangeCode("test-code","test-verifier")).tasksConnected,false);assert.equal(setting("google_granted_scopes"),"");
 });
 
 test("refresh scope removal blocks Tasks but leaves Calendar usable; missing refresh scope preserves known grants",async()=>{
@@ -155,7 +155,7 @@ test("revoked refresh tokens require reconnection without exposing provider erro
 test("incremental consent keeps a token rotated during the account lookup",async()=>{
   const waiting=deferred(),started=deferred();
   globalThis.fetch=async url=>{if(url.includes("/token"))return json({access_token:"access",scope:tasksScope});started.resolve();return waiting.promise;};
-  const exchange=google.exchangeCode("incremental");await started.promise;saveSetting("google_refresh_token",encrypt("rotated-during-consent"));
+  const exchange=google.exchangeCode("test-code","test-verifier");await started.promise;saveSetting("google_refresh_token",encrypt("rotated-during-consent"));
   waiting.resolve(json({sub:"old-account"}));await exchange;
   assert.equal(decrypt(setting("google_refresh_token")),"rotated-during-consent");
 });
