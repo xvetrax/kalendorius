@@ -4,7 +4,7 @@ test.describe("accessibility", () => {
   test("page has lang attribute", async ({ page }) => {
     await page.goto("/");
     const lang = await page.locator("html").getAttribute("lang");
-    expect(lang).toBeTruthy();
+    expect(lang).toBe("lt");
   });
 
   test("main content area is reachable", async ({ page }) => {
@@ -23,19 +23,14 @@ test.describe("accessibility", () => {
     expect(focused).not.toBe("BODY");
   });
 
-  test("login page has proper form labels when auth enabled", async ({ page }) => {
-    // If redirected to login (auth enabled), check form accessibility
-    const res = await page.goto("/");
-    if (res && res.url().includes("/login")) {
-      const inputs = page.locator("input");
-      const count = await inputs.count();
-      for (let i = 0; i < count; i++) {
-        const input = inputs.nth(i);
-        const id = await input.getAttribute("id");
-        const ariaLabel = await input.getAttribute("aria-label");
-        const label = id ? await page.locator(`label[for="${id}"]`).count() : 0;
-        expect(id && (label > 0 || ariaLabel)).toBeTruthy();
-      }
-    }
+  test("new task dialog exposes labeled form controls", async ({ page }) => {
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+    await page.getByRole("button", { name: "Užduotys", exact: true }).click();
+    await page.getByRole("button", { name: "Nauja užduotis", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Nauja užduotis" });
+    await expect(dialog.getByLabel("Pavadinimas")).toBeVisible();
+    await expect(dialog.getByLabel("Pastabos")).toBeVisible();
+    await expect(dialog.getByLabel(/Terminas/)).toBeVisible();
   });
 });

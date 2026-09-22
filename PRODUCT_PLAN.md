@@ -151,7 +151,7 @@ Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti,
 - [x] OAuth PKCE / vienkartinė serverio operacija, konfigūracijos diagnostika, minimalūs leidimai, saugus žurnalų turinys.
 - [x] SQLite atsarginė kopija ir atkūrimas bei duomenų eksportas be žetonų. Pilnas penkių lentelių roundtrip, senesnės schemos migracija, žetonų pašalinimas eksporte ir klaidingos kopijos rollback patikrinti izoliuotoje SQLite bazėje.
 - [ ] Docker neprivilegijuotas procesas, versija, paleidimo vadovas ir sveikatos patikra. Įjungus `APP_PASSWORD`, dabartinis healthcheck gauna 401.
-- [ ] Izoliuoti ir prasmingi svarbiausi naršyklės scenarijai: mobilus ekranas, prieinamumas, DST, offline / klaidos grąžinimas ir pagrindinis CRUD. Dabartinis Playwright gali panaudoti veikiantį `:3000` bei jo DB, o dalis testų tikrina tik matomą `body` ar ekrano nuotraukos dydį.
+- [x] Izoliuoti ir prasmingi svarbiausi naršyklės scenarijai: mobilus ekranas, prieinamumas, konkreti DST diena, tinklo klaidos / rollback ir pilnas vietinių užduočių CRUD. Kiekvienas paleidimas naudoja laisvą prievadą bei unikalią laikiną DB ir ją pašalina.
 - [ ] Naudotojo patikra su tikromis paskyromis ir pašalintos rastos klaidos.
 
 Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų pagrindiniuose scenarijuose, veikia abu kalendoriai ir abu užduočių šaltiniai, duomenys išlieka po perkrovimo / atnaujinimo, o tikrų paskyrų scenarijai patvirtinti. Imitaciniai testai nepakeičia OAuth ir realių tiekėjų patikros.
@@ -161,7 +161,7 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 Šis etapas turi pirmenybę prieš naujas funkcijas. Kiekviena eilutė užbaigiama atskiru patikrintu commit’u ir push’u į `origin/codex/audit-remediation`; `main` atnaujinama tik po bendros žalios peržiūros.
 
 - [x] **P0 — atsarginės kopijos.** Pilnos kopijos ir eksporto užklausa naudoja `POST`, atkūrimas — `PUT`; abu tikrina sesiją bei kilmę. Atkūrimas patikrina SQLite vientisumą, leidžiamas lenteles ir stulpelių suderinamumą, o visų penkių programos lentelių duomenis pakeičia vienoje transakcijoje per aktyvią jungtį. Roundtrip testas patvirtina create → pakeisti → restore → skaityti / rašyti eigą; eksportas atskirai patikrintas be abiejų OAuth atnaujinimo žetonų.
-- [ ] **P1 — testų izoliacija.** Playwright naudoja atskirą prievadą ir unikalią laikiną DB, niekada neperima jau veikiančio naudotojo serverio, o baigęs pašalina duomenis. Testai tikrina realų vieno stulpelio rodinį, konkrečią DST datą, klaidos pranešimą ir rollback.
+- [x] **P1 — testų izoliacija.** Playwright wrapperis kiekvienam vykdymui parenka laisvą prievadą ir unikalią laikiną DB, neleidžia tiesiogiai perimti jau veikiančio serverio ir `finally` bloke pašalina duomenis. Testai tikrina realų vieno stulpelio rodinį, konkrečią 2026-03-29 Vilniaus 23 valandų dieną, klaidos pranešimą, UI / DB rollback ir pilną vietinės užduoties CRUD.
 - [ ] **P1 — tapatybės ir vietinių duomenų vientisumas.** Google perkėlimas tarp sąrašų migruoja `task_plans` / mirror ryšį tik patvirtinus tiekėjo rezultatą; kalendoriaus įvykio tapatybė apima kalendoriaus ID; ištrintų užduočių Outlook blokai turi pasiekiamą valymo eilę.
 - [ ] **P1 — produkto paviršius.** Pridėti Microsoft kartojimo UI; žingsnius perkelti į bendrą saugų adapterį; užbaigti Google `parent` / `previous`; pataisyti fokusavimo sesijos laiką ir būseną.
 - [ ] **P1 — diegimas.** Viešas minimalus health endpoint neturi apeiti jokių duomenų API ir turi veikti su `APP_PASSWORD`; Docker image realiai paleidžiamas bei patikrinamas.
@@ -295,6 +295,8 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - `tests/calendar-smoke.mjs` pataisa: `meeting` PATCH testas dabar siunčia laiko pakeitimą (+30 min.) tam, kad suaktyvintų 409 dalyvių patvirtinimo tikrinimą (senas kodas siuntė tą patį laiką → `timeChanged=false` → 200). Visos 3 HTTP smoke priemonės praeina.
 - 163 vienetiniai + 20 naršyklės testai praeina.
 - 2026-09-22 audito pataisa: `reuseExistingServer: true` leido testams rašyti į naudotojo DB; 22 testiniai įrašai pašalinti tik padarius nuoseklią kopiją. Vieno stulpelio, DST ir tinklo klaidų testų teiginiai stipresni už jų tikrinamas sąlygas. F5 laikomas nebaigtu iki izoliacijos ir prasmingų assertions.
+- 2026-09-22 audito taisymas: `scripts/test-e2e.mjs` parenka laisvą prievadą, sukuria unikalų laikinos DB katalogą, perduoda jį Playwright serveriui ir pašalina `finally` bloke. `reuseExistingServer` išjungtas, o konfigūracija be wrapperio atsisako startuoti. Testinis serveris išjungia programėlės slaptažodį ir tikrų OAuth tiekėjų konfigūraciją; `/api/config` testas patvirtina laikinos DB kelią.
+- Mobilus testas skaičiuoja vieną `.dayHead` ir `.dayLane`; DST testas fiksuoja laiką ties 2026-03-29 ir tikrina 23 valandų žymą; klaidų testai tikrina matomą lietuvišką pranešimą, lėto atsakymo loading būseną ir nesėkmingo kūrimo UI / DB rollback. CRUD scenarijus sukuria, perkrauna, redaguoja, užbaigia, atkuria ir ištrina vietinę užduotį.
 
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.
 

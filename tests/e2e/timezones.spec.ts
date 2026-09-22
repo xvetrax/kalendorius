@@ -27,10 +27,13 @@ for (const { name, tz } of TZ_CASES) {
 test("DST boundary: Vilnius 2026-03-29 renders without crash", async ({ browser }) => {
   const ctx = await browser.newContext({ timezoneId: "Europe/Vilnius" });
   const page = await ctx.newPage();
+  await page.clock.setFixedTime(new Date("2026-03-29T09:00:00.000Z"));
   await page.goto("/");
   await page.waitForLoadState("networkidle");
-  // Navigate to DST-transition week if navigation is possible
-  // Just verify the page doesn't crash
-  await expect(page.locator("body")).toBeVisible();
+  await page.getByRole("button", { name: "Diena", exact: true }).click();
+  await expect(page.locator(".dayHead")).toHaveCount(1);
+  await expect(page.locator(".dayHead")).toContainText("23 val.");
+  await expect(page.locator(".dayHead strong")).toHaveText("29");
+  await expect(page.locator(".dayLane")).toHaveAttribute("data-day", "2026-03-29");
   await ctx.close();
 });

@@ -52,6 +52,7 @@ npm run build
 npm run test:smoke
 npm run test:calendars
 npm run test:tasks
+npm run test:e2e
 npm start
 ```
 
@@ -62,6 +63,8 @@ npm start
 `test:calendars` tikrina produkcinius kalendorių HTTP maršrutus su atskira laikina DB ir sintetiniu Google / Microsoft pakaitalu. Išorinės užklausos nepatenka pas tikrus tiekėjus. `node tests/calendar-smoke.mjs --preview` po tų patikrų palieka testinę programėlę `http://127.0.0.1:3101` naršyklės bandymams iki Ctrl+C. Šis pakaitalas įjungiamas tik atskiru Node testiniu paleidimu, ne programėlės nustatymu. Tai nėra tikrų integracijų veikimo įrodymas.
 
 `test:tasks` tikrina produkcinius vietinių, Google Tasks ir Microsoft To Do užduočių maršrutus: kūrimą, planavimą, perkėlimą, trukmę, užbaigimą, atkūrimą ir ištrynimą. Naudojama laikina DB ir tik sintetiniai tiekėjai; išorinis tinklas užblokuotas. `node tests/tasks-smoke.mjs --preview` palieka tą kopiją `http://127.0.0.1:3102` naršyklės patikrai iki Ctrl+C.
+
+`test:e2e` po produkcinio build parenka laisvą vietinį prievadą, sukuria unikalią laikiną SQLite bazę ir paleidžia atskirą produkcinį serverį. Testai niekada neperima jau veikiančio `:3000` serverio. Baigus ar testams nepraėjus laikinas katalogas su DB pašalinamas. Rinkinys tikrina vietinių užduočių pilną CRUD ir išlikimą, nesėkmingo kūrimo rollback, matomus tinklo klaidų pranešimus, lėtą atsakymą, tikrą vienos dienos mobilų tinklelį, prieinamus formų laukus ir konkrečią 2026-03-29 Vilniaus 23 valandų DST dieną. Tiesioginis `playwright test` sąmoningai atmetamas; naudok npm komandą, kad testai negalėtų paliesti naudotojo DB.
 
 ## Atsarginės kopijos ir atkūrimas
 

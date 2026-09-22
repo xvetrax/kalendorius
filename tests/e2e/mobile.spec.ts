@@ -13,8 +13,10 @@ test.describe("mobile viewport", () => {
     await page.goto("/");
     await page.waitForLoadState("networkidle");
     // Mobile shows bottom nav with Užduotys tab
-    const nav = page.locator("nav, [role='navigation']").last();
+    const nav = page.locator("nav[aria-label='Rodiniai']");
     await expect(nav).toBeVisible({ timeout: 5000 });
+    await expect(nav.getByRole("button", { name: "Kalendorius" })).toBeVisible();
+    await expect(nav.getByRole("button", { name: "Užduotys" })).toBeVisible();
   });
 
   test("task list is accessible via Užduotys tab", async ({ page }) => {
@@ -31,8 +33,8 @@ test.describe("mobile viewport", () => {
   test("calendar shows single-column day view on mobile", async ({ page }) => {
     await page.goto("/");
     await page.waitForLoadState("networkidle");
-    // Single day column visible — not a 5-day week grid
-    const body = await page.locator("body").screenshot();
-    expect(body.byteLength).toBeGreaterThan(1000);
+    await expect(page.getByRole("button", { name: "Diena", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".dayHead")).toHaveCount(1);
+    await expect(page.locator(".dayLane")).toHaveCount(1);
   });
 });
