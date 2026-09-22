@@ -27,9 +27,10 @@ function localInput(date: Date) { return new Date(date.getTime() - date.getTimez
 function durationLabel(value: number) { return value < 60 ? `${value} min.` : `${Math.floor(value / 60)} val.${value % 60 ? ` ${value % 60} min.` : ""}`; }
 function monthStart(date: Date) { return monday(new Date(date.getFullYear(), date.getMonth(), 1)); }
 function addDays(date: Date, amount: number) { const next = new Date(date); next.setDate(next.getDate() + amount); return next; }
+class HttpError extends Error {status:number;constructor(message:string,status:number){super(message);this.status=status;}}
 async function responseJson<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : "Veiksmo atlikti nepavyko.");
+  if (!response.ok) throw new HttpError(typeof data.error === "string" ? data.error : "Veiksmo atlikti nepavyko.", response.status);
   return data as T;
 }
 
@@ -236,7 +237,7 @@ export default function Planner() {
     </aside>
     {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div><h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><Connection name="Outlook + To Do" providerLabel="Microsoft" letter="O" tone="blue" connected={outlook} ready={outlookReady} account={outlookAccount} href="/api/microsoft/connect" onDisconnect={() => disconnect("microsoft")}/><Connection name="Google Calendar + Tasks" providerLabel="Google" letter="G" tone="multi" connected={google} ready={googleReady} account={googleAccount} href="/api/google/connect" onDisconnect={() => disconnect("google")}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href="/api/google/connect">Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p></section></Modal>}
     {taskListManagerOpen && <Modal eyebrow="UŽDUOTYS" title="Tvarkyti sąrašus" onClose={()=>setTaskListManagerOpen(false)}><TaskListManager onChanged={load} onDeleted={(key)=>setTaskDestination(current=>current===key ? "local" : current)} onListCreated={setTaskDestination}/></Modal>}
-    {editingEvent && <ExistingEventEditor value={editingEvent} onClose={()=>setEditingEvent(null)} onSave={async(patch)=>{await saveEvent(editingEvent.event,patch);setEditingEvent(null);}}/>}
+    {editingEvent && <ExistingEventEditor value={editingEvent} onClose={()=>setEditingEvent(null)} onSave={async(patch)=>{await saveEvent(editingEvent.event,patch);setEditingEvent(null);}} onRefresh={()=>{void load();setEditingEvent(null);}}/>}
     {editingTask && <TaskEditor task={editingTask} outlook={outlook} onDelete={()=>deleteTask(editingTask)} onClose={() => setEditingTask(null)} onSave={async (patch) => { await patchTask(editingTask, patch); setEditingTask(null); }}/>}
     {taskModal && <TaskModal lists={taskLists} destination={taskDestination} onDestination={setTaskDestination} onClose={() => setTaskModal(false)} onSave={async (data) => { await createTask(data); setTaskModal(false); setToast("Užduotis sukurta"); }}/>} 
     {eventDate && <EventModal initial={eventDate} outlook={outlook} google={google} outlookReady={outlookReady} googleReady={googleReady} onClose={() => setEventDate(null)} onSave={async () => { setEventDate(null); setToast("Įvykis sukurtas"); await load(); }}/>} 
@@ -532,9 +533,9 @@ function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boole
   return <div className="calendarSelector">{error&&<p className="formError">{error}</p>}{renderList("google",gCals,setGCals,"Google")}{renderList("microsoft",mCals,setMCals,"Microsoft / Outlook")}</div>;
 }
 function rsvpIcon(status:string) { return status==="accepted"?"✓":status==="declined"?"✗":status==="tentative"?"?":"·"; }
-function ExistingEventEditor({value,onClose,onSave}:{value:{event:CalEvent;start?:string;end?:string};onClose:()=>void;onSave:(patch:Record<string,unknown>)=>Promise<void>}) {
+function ExistingEventEditor({value,onClose,onSave,onRefresh}:{value:{event:CalEvent;start?:string;end?:string};onClose:()=>void;onSave:(patch:Record<string,unknown>)=>Promise<void>;onRefresh?:()=>void}) {
   const {event}=value;
-  const [error,setError]=useState(""),[saving,setSaving]=useState(false);
+  const [error,setError]=useState(""),[saving,setSaving]=useState(false),[conflict,setConflict]=useState(false);
   const [attendees,setAttendees]=useState<{email:string;name?:string;self?:boolean;responseStatus:string}[]>(event.attendees||[]);
   const [newEmail,setNewEmail]=useState("");
   function addAttendee() {
@@ -550,17 +551,23 @@ function ExistingEventEditor({value,onClose,onSave}:{value:{event:CalEvent;start
       const start=new Date(String(data.get("start"))===localInput(new Date(originalStart)) ? originalStart : String(data.get("start"))),end=new Date(String(data.get("end"))===localInput(new Date(originalEnd)) ? originalEnd : String(data.get("end")));
       if(end<=start)throw new Error("Pabaiga turi būti vėliau už pradžią.");
       const attendeesChanged=JSON.stringify(attendees.map(a=>a.email).sort())!==JSON.stringify((event.attendees||[]).map(a=>a.email).sort());
+      setConflict(false);
       await onSave({start:start.toISOString(),end:end.toISOString(),summary:data.get("summary"),description:data.get("description")||undefined,location:data.get("location")||undefined,
         ...(attendeesChanged ? {attendees:attendees.map(a=>({email:a.email}))} : {}),
         confirmAttendees:data.get("confirm")==="on"});
-    } catch(error) {setError(error instanceof Error ? error.message : "Nepavyko išsaugoti.");}
+    } catch(err) {
+      const msg=err instanceof Error ? err.message : "";
+      const isVersionConflict=err instanceof HttpError && err.status===409 && /pakeistas kitur|pasikeitė/i.test(msg);
+      setConflict(isVersionConflict);
+      setError(msg || "Nepavyko išsaugoti.");
+    }
     finally {setSaving(false);}
   }
   const safeLink=event.htmlLink?.startsWith("https://") ? event.htmlLink : undefined;
   return <Modal eyebrow={event.provider==="outlook"?"OUTLOOK":"GOOGLE CALENDAR"} title="Kalendoriaus įvykis" onClose={()=>{if(!saving)onClose();}}>
     {!event.editable && <p className="formHint">{event.readOnlyReason}</p>}
     {event.recurring && event.editable && <p className="formHint">↻ Kartojamas įvykis. Keičiamas tik šis egzempliorius — serija lieka nepakeista.</p>}
-    {error && <p className="formError" role="alert">{error}</p>}
+    {error && <p className="formError" role="alert">{error}{conflict && onRefresh && <> <button type="button" className="inlineRefreshBtn" onClick={()=>{onRefresh();onClose();}}>Atnaujinti ir uždaryti →</button></>}</p>}
     <form className="modalForm" onSubmit={submit}>
       <label>Pavadinimas<input name="summary" required maxLength={1024} defaultValue={event.summary} disabled={!event.editable || saving}/></label>
       <label>Vieta<input name="location" maxLength={1000} defaultValue={event.location || ""} disabled={!event.editable || saving} placeholder="Kabinetas, miestas arba nuoroda…"/></label>
