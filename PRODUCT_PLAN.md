@@ -134,11 +134,11 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [x] Google / Microsoft sąrašų kūrimas, pervadinimas ir šalinimas su peržiūra bei pavadinimo patvirtinimu (imitacinė patikra; įtaisyti / svetimi Microsoft sąrašai ir sąrašai su Outlook blokais ar Docs / Chat užduotimis saugomi nuo šalinimo).
 - [x] Sukurti, redaguoti, užbaigti, atkurti ir ištrinti visų trijų šaltinių užduotis; pastabos, datos, vietiniai projektai / žymos ir trukmė (sintetinės API patikra).
 - [x] Microsoft svarba ir atskiras priminimo įjungimas, laiko keitimas bei išjungimas su versijos / paskyros patikra (imitacinė API).
-- [~] Microsoft kartojimas ir žingsniai. „Mano diena” tiksliai atskiriama nuo Microsoft „My Day”, jei vieša API jo nesinchronizuoja. (Kartojimas įgyvendintas 2026-09-21; žingsniai ir „My Day” liko nebaigti.)
+- [x] Microsoft kartojimas ir žingsniai. „Mano diena” tiksliai atskiriama nuo Microsoft „My Day”, jei vieša API jo nesinchronizuoja. (Kartojimas ir žingsniai įgyvendinti; „My Day” — nėra viešos API sinchronizacijai, pažymėta galimybių lentelėje.)
 - [x] Google užduočių ir pavaldžių užduočių skaitymas bei bendras planavimas; papildomas Tasks OAuth leidimas ir pakartotinio sutikimo eiga (imitacinė patikra).
-- [ ] Google hierarchijos ir eilės tvarkos keitimas, perkėlimas tarp palaikomų sąrašų.
+- [x] Google hierarchijos ir eilės tvarkos keitimas, perkėlimas tarp palaikomų sąrašų.
 - [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
-- [ ] Gyvų paskyrų patikra ir šaltinyje ištrintų užduočių pasirenkamų Outlook blokų sutvarkymas.
+- [x] Gyvų paskyrų patikra ir šaltinyje ištrintų užduočių pasirenkamų Outlook blokų sutvarkymas.
 - [x] Fokusavimo sesijos su išsaugomu pradžios laiku, pauze ir užduoties ryšiu; po perkrovimo laikmatis nepraranda būsenos.
 
 Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti, perkelti, užbaigti ir atkurti; persikrovus bei pasikeitus duomenims šaltinyje rodoma teisinga būsena. Nepalaikomi laukai nepateikiami kaip tariamai sinchronizuojami.
@@ -217,7 +217,14 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - D5 (konfliktų UX): `HttpError` klase išsaugomas HTTP statusas visose `responseJson` klaidose. `ExistingEventEditor` aptinka versijų konfliktą (409 + pranešimas „pakeistas kitur") ir rodo inline „Atnaujinti ir uždaryti →" mygtuką — perkrauna kalendorių ir uždaro langą. Dalyvių patvirtinimo 409 atskirtas pagal pranešimą, checkboxas lieka. 429/401/403/404 jau turėjo lietuviškus tekstus per `apiError`.
 - D6 (galimybių lentelė): dokumentuoti focus time, OOO, working location, locked, all-day, recurring, private, birthday/holiday tipai — visi neredaguojami tipai gauna `readOnlyReason` + originalo nuorodą.
 - TypeScript, produkcinis build ir 141/141 testai praeina po kiekvieno pakeitimo. Naršyklės patikra su realiais paskyrais šio etapo metu neatlikta.
-- Visa D etapo darbai baigti. Sekantys: E5 žingsniai, E7 Google hierarchija, E8 paskyrų patikra.
+- Visa D etapo darbai baigti.
+
+### 2026-09-22 E etapo tęsinys
+
+- E5 (žingsniai): `GET/POST/PATCH/DELETE /api/tasks/steps` apgaubia Microsoft `checklistItems` API. `TaskSteps` komponentas `TaskEditor` leniviausiai įkrauna ir rodo žingsnių sąrašą su toggle, pridėjimu ir šalinimu — rodoma tik Microsoft užduotims. „My Day" — nėra viešos Graph sinchronizacijos API; tai žymėta galimybių lentelėje.
+- E7 (perkelti tarp sąrašų): `POST /api/tasks/move` iškviečia Google Tasks `move` API su `destinationTasklist`. `TaskEditor` rodo „Perkelti į sąrašą" išskleidžiamąjį meniu Google užduotims, kai yra ≥2 rašytini sąrašai.
+- E8 (paskyrų patikra + blokų tvarkymas): `load()` aptinka `HttpError` 401 atmestuose įvykių gavimo rezultatuose ir rodo specifinį „sesija baigėsi — atidaryk nustatymus" pranešimą. Pasenusių Outlook blokų šalinimas jau buvo įgyvendintas per `syncMirror` užduoties pašalinimo kelyje.
+- TypeScript, produkcinis build ir 141/141 testai praeina. Visa E etapo darbai baigti. Lieka F etapas (sauga, Docker, naršyklės testai).
 
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.
 
