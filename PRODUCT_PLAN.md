@@ -93,7 +93,7 @@ Priimta, kai `npm run build && npm start` pateikia HTML, CSS, JS ir favicon, nau
 - [x] Vietinės ir Microsoft užduotys vienu metu; aiškus pasirinkimas, kur kurti užduotį.
 - [x] Planavimas / perplanavimas / trukmė / išplanavimas nekeičia To Do termino ir nesikreipia į kalendoriaus API be atskiro pasirinkimo.
 - [x] Pasirenkamo `free` bloko sukūrimas, išsaugotas ryšys, atnaujinimas ir pašalinimas atliekant veiksmus programėlėje; sutartiniai testai su imitacine API.
-- [x] Susietų blokų sutvarkymas po išorinio užduoties užbaigimo / pašalinimo; jau pašalinto įvykio 404 apdorojimas; tikro Graph pakartojimo patikra.
+- [ ] Susietų blokų sutvarkymas po išorinio užduoties pašalinimo. Užbaigimo ir jau pašalinto Outlook įvykio 404 eiga patikrinta sintetiškai, tačiau ištrintos šaltinio užduoties našlaitis šiuo metu tik pažymimas ir neturi pasiekiamo valymo veiksmo; gyvas Graph dar nepatikrintas.
 - [x] Microsoft lygiagretūs veiksmai dalinasi žetono atnaujinimu; rotacija, atjungimas ir paskyros keitimas apsaugoti nuo pavėluotų atsakymų, patikrinti imitaciniais testais.
 - [x] Tokia pati Google apsauga: bendras lygiagretus atnaujinimas, užšifruota rotacija, paskyros ir žetono pakeitimas vienoje transakcijoje, atjungimo lenktynių testai.
 - [x] Prieigos žetono galiojimas, vienas lygiagretus atnaujinimas, rotacija, atjungimo ir vykstančio atnaujinimo lenktynių apsauga.
@@ -119,11 +119,12 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 
 ### D. Google Calendar ir Outlook įvykių valdymas
 
-- [x] Visi prieinami kalendoriai, jų pasirinkimas, spalvos ir rašymo teisės; pilnas puslapiavimas.
-- [x] Sukūrimas, detalus redagavimas, pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai.
-- [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas, Google Meet / Teams pagal kalendoriaus ir paskyros galimybes.
+- [x] Visų prieinamų kalendorių sąrašas, spalvos, rašymo teisės, skaitymo pasirinkimas ir pilnas puslapiavimas.
+- [ ] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė turi apimti kalendoriaus ID.
+- [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Dalis laukų jau kuriama, bet esamo įvykio redaktorius jų visų nevaldo.
+- [ ] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. Dalyvių sąrašo redagavimo pagrindas yra, RSVP veiksmo dar nėra.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
-- [x] ETag / versijų konfliktai, išoriniai pakeitimai, 401/403/429, pakartojimas nesukuriant dvigubų susitikimų.
+- [ ] ETag / versijų konfliktai, išoriniai pakeitimai ir 401/403/429 apdorojami; dar reikia nedubliuojančio įvykių kūrimo po neaiškaus atsakymo ir gyvos Graph patikros.
 - [x] Atskirai įvertinti Google focus time / out-of-office / working location ir Outlook papildomas galimybes pagal viešą API bei paskyros licenciją. Nepalaikomas funkcijas pažymėti galimybių lentelėje.
 
 Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuomet abiejų tiekėjų bandomaisiais kalendoriais; perskaitytas įvykis sutampa su išsaugotu, nepasimeta dalyviai ar serijos savybės.
@@ -134,12 +135,13 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [x] Google / Microsoft sąrašų kūrimas, pervadinimas ir šalinimas su peržiūra bei pavadinimo patvirtinimu (imitacinė patikra; įtaisyti / svetimi Microsoft sąrašai ir sąrašai su Outlook blokais ar Docs / Chat užduotimis saugomi nuo šalinimo).
 - [x] Sukurti, redaguoti, užbaigti, atkurti ir ištrinti visų trijų šaltinių užduotis; pastabos, datos, vietiniai projektai / žymos ir trukmė (sintetinės API patikra).
 - [x] Microsoft svarba ir atskiras priminimo įjungimas, laiko keitimas bei išjungimas su versijos / paskyros patikra (imitacinė API).
-- [x] Microsoft kartojimas ir žingsniai. „Mano diena” tiksliai atskiriama nuo Microsoft „My Day”, jei vieša API jo nesinchronizuoja. (Kartojimas ir žingsniai įgyvendinti; „My Day” — nėra viešos API sinchronizacijai, pažymėta galimybių lentelėje.)
+- [x] Microsoft kartojimo paslauga ir API paprastoms `noEnd` taisyklėms su versijos / paskyros patikra bei imitaciniais testais.
+- [ ] Microsoft kartojimo naudotojo sąsaja ir žingsnių adapterio paskyros / sąrašo / versijos / puslapiavimo apsauga. „My Day” nėra viešos Graph sinchronizacijos API ir neturi būti pateikiama kaip sinchronizuojama funkcija.
 - [x] Google užduočių ir pavaldžių užduočių skaitymas bei bendras planavimas; papildomas Tasks OAuth leidimas ir pakartotinio sutikimo eiga (imitacinė patikra).
-- [x] Google hierarchijos ir eilės tvarkos keitimas, perkėlimas tarp palaikomų sąrašų.
+- [ ] Google hierarchijos ir eilės tvarkos keitimas bei saugus perkėlimas tarp sąrašų. Dabartinis perkėlimas nenaudoja `parent` / `previous` ir neperkelia vietinio plano bei Outlook ryšio į naują tapatybės raktą.
 - [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
-- [x] Gyvų paskyrų patikra ir šaltinyje ištrintų užduočių pasirenkamų Outlook blokų sutvarkymas.
-- [x] Fokusavimo sesijos su išsaugomu pradžios laiku, pauze ir užduoties ryšiu; po perkrovimo laikmatis nepraranda būsenos.
+- [ ] Gyvų paskyrų patikra ir šaltinyje ištrintų užduočių pasirenkamų Outlook blokų pasiekiamas, pakartojamas sutvarkymas.
+- [ ] Fokusavimo sesijos su išsaugomu pradžios laiku, veikimo / pauzės būsena ir užduoties ryšiu. Dabartinis pradinis efektas gali ištrinti sesiją prieš įkeliant užduotis.
 
 Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti, perkelti, užbaigti ir atkurti; persikrovus bei pasikeitus duomenims šaltinyje rodoma teisinga būsena. Nepalaikomi laukai nepateikiami kaip tariamai sinchronizuojami.
 
@@ -147,12 +149,23 @@ Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti,
 
 - [x] Pačios programėlės prieigos apsauga, saugi sesija ir HTTPS diegimo instrukcija viešam / nuotoliniam naudojimui.
 - [x] OAuth PKCE / vienkartinė serverio operacija, konfigūracijos diagnostika, minimalūs leidimai, saugus žurnalų turinys.
-- [x] SQLite atsarginė kopija ir atkūrimas, migracijos testas su ankstesne schema, duomenų eksportas be žetonų.
-- [x] Docker sveikatos patikra, neprivilegijuotas procesas, aiški versija, paleidimo ir atnaujinimo vadovas.
-- [x] Automatizuoti svarbiausi naršyklės scenarijai, mobilus ekranas, prieinamumas, skirtingos laiko zonos, offline / tinklo klaida.
+- [ ] SQLite atsarginė kopija ir atkūrimas bei duomenų eksportas be žetonų. Eksportas sukuriamas, bet pilnos kopijos UI tipas nesutampa su API, o dabartinis atkūrimas nepriima realios schemos ir nesaugiai keičia aktyvią WAL duomenų bazę.
+- [ ] Docker neprivilegijuotas procesas, versija, paleidimo vadovas ir sveikatos patikra. Įjungus `APP_PASSWORD`, dabartinis healthcheck gauna 401.
+- [ ] Izoliuoti ir prasmingi svarbiausi naršyklės scenarijai: mobilus ekranas, prieinamumas, DST, offline / klaidos grąžinimas ir pagrindinis CRUD. Dabartinis Playwright gali panaudoti veikiantį `:3000` bei jo DB, o dalis testų tikrina tik matomą `body` ar ekrano nuotraukos dydį.
 - [ ] Naudotojo patikra su tikromis paskyromis ir pašalintos rastos klaidos.
 
 Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų pagrindiniuose scenarijuose, veikia abu kalendoriai ir abu užduočių šaltiniai, duomenys išlieka po perkrovimo / atnaujinimo, o tikrų paskyrų scenarijai patvirtinti. Imitaciniai testai nepakeičia OAuth ir realių tiekėjų patikros.
+
+### G. 2026-09-22 audito taisymų seka
+
+Šis etapas turi pirmenybę prieš naujas funkcijas. Kiekviena eilutė užbaigiama atskiru patikrintu commit’u ir push’u į `origin/codex/audit-remediation`; `main` atnaujinama tik po bendros žalios peržiūros.
+
+- [ ] **P0 — atsarginės kopijos.** Pilnos kopijos ir eksporto užklausa turi naudoti aiškų duomenis keičiantį metodą su sesijos bei kilmės patikra. Atkūrimas turi patikrinti visą schemą ir vienoje transakcijoje atkurti duomenis per aktyvią SQLite jungtį, nekeisdamas po atvira WAL jungtimi esančio failo. Privalomas pilnas create → pakeisti → restore → skaityti / rašyti roundtrip testas.
+- [ ] **P1 — testų izoliacija.** Playwright naudoja atskirą prievadą ir unikalią laikiną DB, niekada neperima jau veikiančio naudotojo serverio, o baigęs pašalina duomenis. Testai tikrina realų vieno stulpelio rodinį, konkrečią DST datą, klaidos pranešimą ir rollback.
+- [ ] **P1 — tapatybės ir vietinių duomenų vientisumas.** Google perkėlimas tarp sąrašų migruoja `task_plans` / mirror ryšį tik patvirtinus tiekėjo rezultatą; kalendoriaus įvykio tapatybė apima kalendoriaus ID; ištrintų užduočių Outlook blokai turi pasiekiamą valymo eilę.
+- [ ] **P1 — produkto paviršius.** Pridėti Microsoft kartojimo UI; žingsnius perkelti į bendrą saugų adapterį; užbaigti Google `parent` / `previous`; pataisyti fokusavimo sesijos laiką ir būseną.
+- [ ] **P1 — diegimas.** Viešas minimalus health endpoint neturi apeiti jokių duomenų API ir turi veikti su `APP_PASSWORD`; Docker image realiai paleidžiamas bei patikrinamas.
+- [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo ir RSVP spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
 
 ## Darbo eiga ir ribos
 
@@ -217,14 +230,14 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - D5 (konfliktų UX): `HttpError` klase išsaugomas HTTP statusas visose `responseJson` klaidose. `ExistingEventEditor` aptinka versijų konfliktą (409 + pranešimas „pakeistas kitur") ir rodo inline „Atnaujinti ir uždaryti →" mygtuką — perkrauna kalendorių ir uždaro langą. Dalyvių patvirtinimo 409 atskirtas pagal pranešimą, checkboxas lieka. 429/401/403/404 jau turėjo lietuviškus tekstus per `apiError`.
 - D6 (galimybių lentelė): dokumentuoti focus time, OOO, working location, locked, all-day, recurring, private, birthday/holiday tipai — visi neredaguojami tipai gauna `readOnlyReason` + originalo nuorodą.
 - TypeScript, produkcinis build ir 141/141 testai praeina po kiekvieno pakeitimo. Naršyklės patikra su realiais paskyrais šio etapo metu neatlikta.
-- Visa D etapo darbai baigti.
+- 2026-09-22 audito pataisa: D etapas nėra baigtas. Trūksta teisingo ne numatytojo kalendoriaus tapatybės naudojimo, pilno esamo įvykio laukų redagavimo, RSVP, nedubliuojančio kūrimo ir pasikartojančių serijų valdymo.
 
 ### 2026-09-22 E etapo tęsinys
 
 - E5 (žingsniai): `GET/POST/PATCH/DELETE /api/tasks/steps` apgaubia Microsoft `checklistItems` API. `TaskSteps` komponentas `TaskEditor` leniviausiai įkrauna ir rodo žingsnių sąrašą su toggle, pridėjimu ir šalinimu — rodoma tik Microsoft užduotims. „My Day" — nėra viešos Graph sinchronizacijos API; tai žymėta galimybių lentelėje.
 - E7 (perkelti tarp sąrašų): `POST /api/tasks/move` iškviečia Google Tasks `move` API su `destinationTasklist`. `TaskEditor` rodo „Perkelti į sąrašą" išskleidžiamąjį meniu Google užduotims, kai yra ≥2 rašytini sąrašai.
 - E8 (paskyrų patikra + blokų tvarkymas): `load()` aptinka `HttpError` 401 atmestuose įvykių gavimo rezultatuose ir rodo specifinį „sesija baigėsi — atidaryk nustatymus" pranešimą. Pasenusių Outlook blokų šalinimas jau buvo įgyvendintas per `syncMirror` užduoties pašalinimo kelyje.
-- TypeScript, produkcinis build ir 141/141 testai praeina. Visa E etapo darbai baigti. Lieka F etapas (sauga, Docker, naršyklės testai).
+- TypeScript, produkcinis build ir 141/141 testai praėjo tuo metu. 2026-09-22 auditas patikslino, kad E etapas nėra baigtas: kartojimo API neturi UI, žingsnių maršrutas neturi bendrų tapatybės apsaugų, Google perkėlimas nemigruoja vietinio plano, našlaičių blokai nevalomi, o fokusavimo sesija neišlieka teisingai.
 
 ### 2026-09-22 F1 — programėlės prieigos apsauga
 
@@ -256,6 +269,7 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - `app/page.tsx`: `BackupPanel` komponentas nustatymuose — parsisiuntimas ir atkūrimas per failo įkėlimą.
 - `tests/backup.test.mjs` (5 testai), `tests/db-migration.test.mjs` (5 testai — sena schema su `due_at`, migracija į `task_plans`, idempotentiškumas).
 - 163/163 testai, typecheck, produkcinis build praeina.
+- 2026-09-22 audito pataisa: šie testai nepatikrino sėkmingo pilnos kopijos roundtrip. Reali kopija turi papildomas lenteles, kurias atkūrimas atmeta, UI siunčia netinkamą pilnos kopijos tipą, o failo pakeitimas po aktyvia WAL jungtimi yra nesaugus. F3 laikomas nebaigtu.
 
 ### 2026-09-22 F4 — Docker ir diegimas
 
@@ -264,6 +278,7 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - `app/api/config/route.ts`: grąžina `version` iš `package.json` — sveikatos patikra ir diagnostika vienoje vietoje.
 - 163/163 testai, typecheck, produkcinis build praeina.
 - Ribos: Docker image tikroje aplinkoje nebuvo paleistas (tam reikia Docker daemon). `APP_ORIGIN` HTTPS nustatymas ir OAuth callback URI koregavimas lieka naudotojo atsakomybe.
+- 2026-09-22 audito pataisa: su `APP_PASSWORD` healthcheck gauna 401 iš apsaugoto `/api/config`, todėl F4 laikomas nebaigtu.
 
 ### 2026-09-22 F5 — automatizuoti naršyklės testai
 
@@ -276,6 +291,7 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - `playwright.config.ts`: desktop projektas ignoruoja `mobile.spec.ts`; mobile projektas vykdo tik `mobile.spec.ts`. Serveriui naudoja esamą `:3000` (`reuseExistingServer: true`).
 - `tests/calendar-smoke.mjs` pataisa: `meeting` PATCH testas dabar siunčia laiko pakeitimą (+30 min.) tam, kad suaktyvintų 409 dalyvių patvirtinimo tikrinimą (senas kodas siuntė tą patį laiką → `timeChanged=false` → 200). Visos 3 HTTP smoke priemonės praeina.
 - 163 vienetiniai + 20 naršyklės testai praeina.
+- 2026-09-22 audito pataisa: `reuseExistingServer: true` leido testams rašyti į naudotojo DB; 22 testiniai įrašai pašalinti tik padarius nuoseklią kopiją. Vieno stulpelio, DST ir tinklo klaidų testų teiginiai stipresni už jų tikrinamas sąlygas. F5 laikomas nebaigtu iki izoliacijos ir prasmingų assertions.
 
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.
 
