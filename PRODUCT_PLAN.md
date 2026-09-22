@@ -149,7 +149,7 @@ Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti,
 - [x] OAuth PKCE / vienkartinė serverio operacija, konfigūracijos diagnostika, minimalūs leidimai, saugus žurnalų turinys.
 - [x] SQLite atsarginė kopija ir atkūrimas, migracijos testas su ankstesne schema, duomenų eksportas be žetonų.
 - [x] Docker sveikatos patikra, neprivilegijuotas procesas, aiški versija, paleidimo ir atnaujinimo vadovas.
-- [ ] Automatizuoti svarbiausi naršyklės scenarijai, mobilus ekranas, prieinamumas, skirtingos laiko zonos, offline / tinklo klaida.
+- [x] Automatizuoti svarbiausi naršyklės scenarijai, mobilus ekranas, prieinamumas, skirtingos laiko zonos, offline / tinklo klaida.
 - [ ] Naudotojo patikra su jo paskyromis ir pašalintos rastos klaidos.
 
 Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų pagrindiniuose scenarijuose, veikia abu kalendoriai ir abu užduočių šaltiniai, duomenys išlieka po perkrovimo / atnaujinimo, o tikrų paskyrų scenarijai patvirtinti. Imitaciniai testai nepakeičia OAuth ir realių tiekėjų patikros.
@@ -264,6 +264,17 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - `app/api/config/route.ts`: grąžina `version` iš `package.json` — sveikatos patikra ir diagnostika vienoje vietoje.
 - 163/163 testai, typecheck, produkcinis build praeina.
 - Ribos: Docker image tikroje aplinkoje nebuvo paleistas (tam reikia Docker daemon). `APP_ORIGIN` HTTPS nustatymas ir OAuth callback URI koregavimas lieka naudotojo atsakomybe.
+
+### 2026-09-22 F5 — automatizuoti naršyklės testai
+
+- Playwright 1.63.0 įdiegtas; `npm run test:e2e` paleidžia visus testus (20 testų, 2 projektai: desktop + mobile 390px viewport).
+- `tests/e2e/task-crud.spec.ts`: puslapio įkėlimas be konsolės klaidų, `/api/config` sveikatos patikra su versija, užduoties sukūrimas (laukiama POST atsakymo), išlikimas po perkrovimo.
+- `tests/e2e/mobile.spec.ts`: horizontalus slinkimas ≤ kliento plotui, apatinė navigacija, užduočių sąrašas per „Užduotys" mygtuką (tikslus `nav[aria-label='Rodiniai']` selektorius), vieno stulpelio rodinys.
+- `tests/e2e/accessibility.spec.ts`: `<html lang>` atributas, `<main>` ar `role=main` matomumas, Tab klavišo fokusavimas nuo `<body>`, prisijungimo formos etiketės.
+- `tests/e2e/network-errors.spec.ts`: užduočių ir kalendorių API klaidų (`abort`) apdorojimas be steko pėdsakų, lėtas tinklas (500ms) nesugriauna puslapio.
+- `tests/e2e/timezones.spec.ts`: Vilnius, UTC, New York, Tokyo laiko zonos ir DST riba 2026-03-29 — visi be konsolės klaidų.
+- `playwright.config.ts`: desktop projektas ignoruoja `mobile.spec.ts`; mobile projektas vykdo tik `mobile.spec.ts`. Serveriui naudoja esamą `:3000` (`reuseExistingServer: true`).
+- 163 vienetiniai + 20 naršyklės testai praeina.
 
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.
 
