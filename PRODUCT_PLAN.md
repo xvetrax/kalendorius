@@ -150,7 +150,7 @@ Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti,
 - [x] SQLite atsarginė kopija ir atkūrimas, migracijos testas su ankstesne schema, duomenų eksportas be žetonų.
 - [x] Docker sveikatos patikra, neprivilegijuotas procesas, aiški versija, paleidimo ir atnaujinimo vadovas.
 - [x] Automatizuoti svarbiausi naršyklės scenarijai, mobilus ekranas, prieinamumas, skirtingos laiko zonos, offline / tinklo klaida.
-- [ ] Naudotojo patikra su jo paskyromis ir pašalintos rastos klaidos.
+- [ ] Naudotojo patikra su tikromis paskyromis ir pašalintos rastos klaidos.
 
 Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų pagrindiniuose scenarijuose, veikia abu kalendoriai ir abu užduočių šaltiniai, duomenys išlieka po perkrovimo / atnaujinimo, o tikrų paskyrų scenarijai patvirtinti. Imitaciniai testai nepakeičia OAuth ir realių tiekėjų patikros.
 
@@ -274,6 +274,7 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - `tests/e2e/network-errors.spec.ts`: užduočių ir kalendorių API klaidų (`abort`) apdorojimas be steko pėdsakų, lėtas tinklas (500ms) nesugriauna puslapio.
 - `tests/e2e/timezones.spec.ts`: Vilnius, UTC, New York, Tokyo laiko zonos ir DST riba 2026-03-29 — visi be konsolės klaidų.
 - `playwright.config.ts`: desktop projektas ignoruoja `mobile.spec.ts`; mobile projektas vykdo tik `mobile.spec.ts`. Serveriui naudoja esamą `:3000` (`reuseExistingServer: true`).
+- `tests/calendar-smoke.mjs` pataisa: `meeting` PATCH testas dabar siunčia laiko pakeitimą (+30 min.) tam, kad suaktyvintų 409 dalyvių patvirtinimo tikrinimą (senas kodas siuntė tą patį laiką → `timeChanged=false` → 200). Visos 3 HTTP smoke priemonės praeina.
 - 163 vienetiniai + 20 naršyklės testai praeina.
 
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.

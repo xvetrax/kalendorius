@@ -35,7 +35,11 @@ try {
   }
   const api=`${origin}/api/microsoft/events`,items=(await (await fetch(api)).json()).items;
   const meeting=items.find(e=>e.attendeeCount),locked=items.find(e=>!e.editable);
-  for(const [event,status] of [[meeting,409],[locked,403]])assert.equal((await fetch(api,{method:"PATCH",headers,body:JSON.stringify({id:event.id,connectionId:event.connectionId,version:event.version,start:event.start.dateTime,end:event.end.dateTime})})).status,status);
+  // meeting: time change + attendees → 409 (requires confirmAttendees)
+  const meetingShift=h=>new Date(Date.parse(h)+30*6e4).toISOString();
+  assert.equal((await fetch(api,{method:"PATCH",headers,body:JSON.stringify({id:meeting.id,connectionId:meeting.connectionId,version:meeting.version,start:meetingShift(meeting.start.dateTime),end:meetingShift(meeting.end.dateTime)})})).status,409);
+  // locked: not organizer → 403
+  assert.equal((await fetch(api,{method:"PATCH",headers,body:JSON.stringify({id:locked.id,connectionId:locked.connectionId,version:locked.version,start:locked.start.dateTime,end:locked.end.dateTime})})).status,403);
   console.log(`OK: abiejų kalendorių HTTP skaitymas, perkėlimas, trukmė, versijos konfliktai, dalyvių patvirtinimas ir teisės. ${origin}`);
   if(preview)await new Promise(resolve=>{process.once("SIGINT",resolve);process.once("SIGTERM",resolve);});
 } finally {child.kill("SIGTERM");await stopped;rmSync(temp,{recursive:true,force:true});}
