@@ -121,7 +121,7 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 
 - [ ] Visi prieinami kalendoriai, jų pasirinkimas, spalvos ir rašymo teisės; pilnas puslapiavimas.
 - [x] Sukūrimas, detalus redagavimas, pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai.
-- [ ] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas, Google Meet / Teams pagal kalendoriaus ir paskyros galimybes.
+- [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas, Google Meet / Teams pagal kalendoriaus ir paskyros galimybes.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
 - [ ] ETag / versijų konfliktai, išoriniai pakeitimai, 401/403/429, pakartojimas nesukuriant dvigubų susitikimų.
 - [ ] Atskirai įvertinti Google focus time / out-of-office / working location ir Outlook papildomas galimybes pagal viešą API bei paskyros licenciją. Nepalaikomas funkcijas pažymėti galimybių lentelėje.

@@ -1,6 +1,7 @@
 export type CalendarProvider = "google" | "outlook";
 export type CalendarEvent = {
   id:string; provider:CalendarProvider; connectionId:string; version:string;
+  calendarId:string; calendarName?:string; calendarColor?:string;
   summary:string; description?:string; location?:string; start:{dateTime?:string;date?:string}; end:{dateTime?:string;date?:string};
   htmlLink?:string; hangoutLink?:string; editable:boolean; readOnlyReason:string;
   attendeeCount:number; attendees?:{email:string;name?:string;self?:boolean;responseStatus:string}[]; recurring:boolean; allDay:boolean;
@@ -28,7 +29,7 @@ function graphTime(value:any) {
   if (value.timeZone !== "UTC") throw new CalendarError("Nepavyko nustatyti Outlook įvykio laiko zonos.",502);
   return `${raw}Z`;
 }
-export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:string):CalendarEvent {
+export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:string,calendarId="primary",calendarName?:string,calendarColor?:string):CalendarEvent {
   const google=provider === "google";
   const allDay=google ? Boolean(raw.start?.date) : Boolean(raw.isAllDay);
   const recurringMaster=google ? Boolean(raw.recurrence && !raw.recurringEventId) : raw.type === "seriesMaster";
@@ -45,7 +46,7 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
   const attendees=rawAttendees.length ? rawAttendees.map((a:any)=>google
     ? {email:String(a.email||""),name:a.displayName||undefined,self:Boolean(a.self),responseStatus:a.responseStatus||"needsAction"}
     : {email:String(a.emailAddress?.address||""),name:a.emailAddress?.name||undefined,self:false,responseStatus:a.status?.response==="accepted"?"accepted":a.status?.response==="declined"?"declined":a.status?.response==="tentativelyAccepted"?"tentative":"needsAction"}) : undefined;
-  return {id:raw.id,provider,connectionId,version,summary:(google ? raw.summary : raw.subject) || "Be pavadinimo",
+  return {id:raw.id,provider,connectionId,version,calendarId,...(calendarName ? {calendarName} : {}),...(calendarColor ? {calendarColor} : {}),summary:(google ? raw.summary : raw.subject) || "Be pavadinimo",
     ...(description ? {description} : {}),
     ...(location ? {location} : {}),
     start:google ? raw.start : {dateTime:graphTime(raw.start)},end:google ? raw.end : {dateTime:graphTime(raw.end)},
@@ -62,9 +63,16 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     if (!current || (id !== undefined && id !== current)) throw new CalendarError("Paskyra atjungta arba pasikeitė. Atnaujink kalendorių.",409);
     return current;
   }
-  async function list(start:string,end:string) {
-    const times=eventTimes(start,end); const connectionId=connected(); const raw:any[]=[];
-    let next:string|null=google ? `/calendars/primary/events?${new URLSearchParams({timeMin:times.start,timeMax:times.end,singleEvents:"true",orderBy:"startTime",maxResults:"250"})}` : `/me/calendarView?${new URLSearchParams({startDateTime:times.start,endDateTime:times.end,$orderby:"start/dateTime",$top:"250"})}`;
+  async function listOne(start:string,end:string,calId:string|null,calName:string|undefined,calColor:string|undefined,connectionId:string) {
+    const raw:any[]=[];
+    const calEnc=calId ? encodeURIComponent(calId) : null;
+    const basePath=google
+      ? `/calendars/${calEnc || "primary"}/events`
+      : calEnc ? `/me/calendars/${calEnc}/calendarView` : `/me/calendarView`;
+    const expectedOutlookPath=google ? null : calEnc ? `/v1.0/me/calendars/${calEnc}/calendarView` : "/v1.0/me/calendarView";
+    let next:string|null=google
+      ? `${basePath}?${new URLSearchParams({timeMin:start,timeMax:end,singleEvents:"true",orderBy:"startTime",maxResults:"250"})}`
+      : `${basePath}?${new URLSearchParams({startDateTime:start,endDateTime:end,$orderby:"start/dateTime",$top:"250"})}`;
     const visited=new Set<string>();
     while (next) {
       if (visited.has(next)) throw new CalendarError("Kalendoriaus puslapiavimo klaida.",502);
@@ -73,13 +81,19 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       raw.push(...(google ? page.items || [] : page.value || []));
       if (google) {
         const token=page.nextPageToken;
-        next=token ? `/calendars/primary/events?${new URLSearchParams({timeMin:times.start,timeMax:times.end,singleEvents:"true",orderBy:"startTime",maxResults:"250",pageToken:token})}` : null;
+        next=token ? `${basePath}?${new URLSearchParams({timeMin:start,timeMax:end,singleEvents:"true",orderBy:"startTime",maxResults:"250",pageToken:token})}` : null;
       } else {
         next=page["@odata.nextLink"] || null;
-        if (next) {const url=new URL(next);if (url.origin !== "https://graph.microsoft.com" || url.pathname !== "/v1.0/me/calendarView" || url.username || url.password || url.hash) throw new CalendarError("Nesaugi kalendoriaus puslapiavimo nuoroda.",502);next=url.pathname.slice(5)+url.search;}
+        if (next) {const url=new URL(next);if (url.origin !== "https://graph.microsoft.com" || url.pathname !== expectedOutlookPath || url.username || url.password || url.hash) throw new CalendarError("Nesaugi kalendoriaus puslapiavimo nuoroda.",502);next=url.pathname.slice(5)+url.search;}
       }
     }
-    return raw.filter(r=>google ? r.status !== "cancelled" : !r.isCancelled).map(r=>normalizeEvent(provider,r,connectionId));
+    return raw.filter(r=>google ? r.status !== "cancelled" : !r.isCancelled).map(r=>normalizeEvent(provider,r,connectionId,calId||"primary",calName,calColor));
+  }
+  async function list(start:string,end:string,calendars?:{id:string;name?:string;color?:string}[]) {
+    const times=eventTimes(start,end); const connectionId=connected();
+    if (!calendars?.length) return listOne(times.start,times.end,google ? "primary" : null,undefined,undefined,connectionId);
+    const pages=await Promise.all(calendars.map(c=>listOne(times.start,times.end,c.id,c.name,c.color,connectionId)));
+    return pages.flat();
   }
   async function update(input:Record<string,unknown>) {
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new CalendarError("Neteisingi įvykio duomenys.");

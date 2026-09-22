@@ -8,10 +8,17 @@ export const runtime = "nodejs";
 const calendar=createCalendarService("google",{connection:()=>isGoogleConnected() ? setting("google_connection_generation") || "legacy" : null,request:googleFetch});
 function failure(error:unknown) {return error instanceof CalendarError ? Response.json({error:error.message},{status:error.status}) : apiError(error);}
 
+function enabledCalendars(key:string):{id:string;name?:string;color?:string}[]|undefined {
+  const stored=setting(key);if (!stored) return undefined;
+  try {
+    const parsed=JSON.parse(stored);if (!Array.isArray(parsed)) return undefined;
+    return parsed.map((c:any)=>typeof c==="string"?{id:c}:{id:String(c.id||""),name:c.name||undefined,color:c.color||undefined}).filter(c=>c.id);
+  } catch {return undefined;}
+}
 export async function GET(request:Request) {
   if (!isGoogleConnected()) return Response.json({items:[]});
   const input=new URL(request.url).searchParams;
-  try {return Response.json({items:await calendar.list(input.get("timeMin") || new Date().toISOString(),input.get("timeMax") || new Date(Date.now()+7*864e5).toISOString())},{headers:{"Cache-Control":"no-store"}});}
+  try {return Response.json({items:await calendar.list(input.get("timeMin") || new Date().toISOString(),input.get("timeMax") || new Date(Date.now()+7*864e5).toISOString(),enabledCalendars("google_enabled_calendars"))},{headers:{"Cache-Control":"no-store"}});}
   catch(error) {return failure(error);}
 }
 
