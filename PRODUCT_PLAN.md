@@ -163,13 +163,20 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P0 — atsarginės kopijos.** Pilnos kopijos ir eksporto užklausa naudoja `POST`, atkūrimas — `PUT`; abu tikrina sesiją bei kilmę. Atkūrimas patikrina SQLite vientisumą, leidžiamas lenteles ir stulpelių suderinamumą, o visų penkių programos lentelių duomenis pakeičia vienoje transakcijoje per aktyvią jungtį. Roundtrip testas patvirtina create → pakeisti → restore → skaityti / rašyti eigą; eksportas atskirai patikrintas be abiejų OAuth atnaujinimo žetonų.
 - [x] **P1 — testų izoliacija.** Playwright wrapperis kiekvienam vykdymui parenka laisvą prievadą ir unikalią laikiną DB, neleidžia tiesiogiai perimti jau veikiančio serverio ir `finally` bloke pašalina duomenis. Testai tikrina realų vieno stulpelio rodinį, konkrečią 2026-03-29 Vilniaus 23 valandų dieną, klaidos pranešimą, UI / DB rollback ir pilną vietinės užduoties CRUD.
 - [x] **P1 — Google užduoties tapatybė.** Perkėlimas tarp sąrašų per bendrą užduočių adapterį tikrina paskyrą, paskirties sąrašą ir plano versiją. Tik Google patvirtinus rezultatą viena vietine transakcija pakeičiamas užduoties raktas, perkeliama visa `task_plans` eilutė su Outlook bloko ryšiu ir atnaujinama nuotolinė kopija; nutrūkus tarp tiekėjo ir vietinės transakcijos, patvarus ketinimas suderinamas per kitą atnaujinimą.
-- [ ] **P1 — kalendoriaus įvykio tapatybė.** Vietinis įvykio raktas apima kalendoriaus ID, todėl sutampantys skirtingų kalendorių įvykių ID nesusilieja.
+- [x] **P1 — kalendoriaus įvykio tapatybė.** Bendras raktas apima tiekėją, prisijungimą, kalendorių ir įvykį. UI atnaujina tik pasirinktą įrašą; PATCH ir DELETE privalo pateikti kalendorių, prisijungimą bei versiją ir naudoja to kalendoriaus kelią. Vienodi ID skirtinguose Google / Outlook kalendoriuose patikrinti integraciniais testais.
+- [ ] **Outlook bloko rodymo susiejimas.** Susieto bloko slėpimui pateikti pilną, serverio patvirtintą paskyros ir kalendoriaus tapatybę. Vien ID sutapimu grįstas slėpimas pašalintas, todėl iki šio žingsnio užduoties planas ir jo Outlook blokas rodomi atskirai.
 - [ ] **P1 — našlaičių Outlook blokų valymas.** Ištrintų šaltinio užduočių susieti blokai patenka į pasiekiamą, pakartojamą valymo eilę.
 - [ ] **P1 — produkto paviršius.** Pridėti Microsoft kartojimo UI; žingsnius perkelti į bendrą saugų adapterį; užbaigti Google `parent` / `previous`; pataisyti fokusavimo sesijos laiką ir būseną.
 - [ ] **P1 — diegimas.** Viešas minimalus health endpoint neturi apeiti jokių duomenų API ir turi veikti su `APP_PASSWORD`; Docker image realiai paleidžiamas bei patikrinamas.
 - [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo ir RSVP spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
 
 ## Darbo eiga ir ribos
+
+### 2026-09-23 kalendoriaus tapatybės pataisa
+
+- Google ir Outlook įvykiai raktinami pagal tiekėją, prisijungimą, kalendorių ir įvykio ID; antrinio kalendoriaus redagavimas bei trynimas nebekreipiami į numatytąjį kalendorių.
+- Patikra: `typecheck`, 178/178 vienetinių / integracinių testų, produkcinis build ir 21/21 izoliuotas Playwright scenarijus. Naršyklėje patikrinti vienodų ID laiko bei visos dienos blokai ir pasirinkto bloko perkėlimas. Nepriklausomos peržiūros verdiktas — `ship`.
+- Gyvos Google / Graph paskyros šiame žingsnyje nebuvo keičiamos. Outlook bloko slėpimas pagal pilną susiejimą ir našlaičių valymo eilė lieka kitais žingsniais.
 
 ### 2026-09-15 tęsinio patikra
 

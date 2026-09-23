@@ -26,7 +26,7 @@ try {
     const api=`${origin}/api/${provider}/events`,list=await (await fetch(api)).json();
     const event=list.items.find(e=>e.editable && !e.attendeeCount);assert.ok(event);
     const start=new Date(Date.parse(event.start.dateTime)+864e5).toISOString(),end=new Date(Date.parse(event.end.dateTime)+864e5+30*6e4).toISOString();
-    const input={id:event.id,connectionId:event.connectionId,version:event.version,start,end};
+    const input={id:event.id,calendarId:event.calendarId,connectionId:event.connectionId,version:event.version,start,end};
     assert.equal((await fetch(api,{method:"PATCH",headers:{...headers,Origin:"https://evil.example"},body:JSON.stringify(input)})).status,403);
     const updated=await fetch(api,{method:"PATCH",headers,body:JSON.stringify(input)});assert.equal(updated.status,200);const result=await updated.json();
     assert.equal(Date.parse(result.start.dateTime),Date.parse(start));assert.notEqual(result.version,event.version);
@@ -37,9 +37,9 @@ try {
   const meeting=items.find(e=>e.attendeeCount),locked=items.find(e=>!e.editable);
   // meeting: time change + attendees → 409 (requires confirmAttendees)
   const meetingShift=h=>new Date(Date.parse(h)+30*6e4).toISOString();
-  assert.equal((await fetch(api,{method:"PATCH",headers,body:JSON.stringify({id:meeting.id,connectionId:meeting.connectionId,version:meeting.version,start:meetingShift(meeting.start.dateTime),end:meetingShift(meeting.end.dateTime)})})).status,409);
+  assert.equal((await fetch(api,{method:"PATCH",headers,body:JSON.stringify({id:meeting.id,calendarId:meeting.calendarId,connectionId:meeting.connectionId,version:meeting.version,start:meetingShift(meeting.start.dateTime),end:meetingShift(meeting.end.dateTime)})})).status,409);
   // locked: not organizer → 403
-  assert.equal((await fetch(api,{method:"PATCH",headers,body:JSON.stringify({id:locked.id,connectionId:locked.connectionId,version:locked.version,start:locked.start.dateTime,end:locked.end.dateTime})})).status,403);
+  assert.equal((await fetch(api,{method:"PATCH",headers,body:JSON.stringify({id:locked.id,calendarId:locked.calendarId,connectionId:locked.connectionId,version:locked.version,start:locked.start.dateTime,end:locked.end.dateTime})})).status,403);
   console.log(`OK: abiejų kalendorių HTTP skaitymas, perkėlimas, trukmė, versijos konfliktai, dalyvių patvirtinimas ir teisės. ${origin}`);
   if(preview)await new Promise(resolve=>{process.once("SIGINT",resolve);process.once("SIGTERM",resolve);});
 } finally {child.kill("SIGTERM");await stopped;rmSync(temp,{recursive:true,force:true});}

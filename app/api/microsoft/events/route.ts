@@ -37,11 +37,9 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   try {
     assertSameOrigin(request);
-    const id = new URL(request.url).searchParams.get("id");
-    if (!id) return Response.json({ error: "Trūksta įvykio ID" }, { status: 400 });
-    await graphFetch(`/me/events/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await calendar.remove(Object.fromEntries(new URL(request.url).searchParams));
     return Response.json({ ok: true });
-  } catch (error) { return apiError(error); }
+  } catch (error) { return failure(error); }
 }
 
 export async function PATCH(request:Request) {

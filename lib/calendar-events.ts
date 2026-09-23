@@ -1,6 +1,6 @@
 export type CalendarProvider = "google" | "outlook";
 export type CalendarEvent = {
-  id:string; provider:CalendarProvider; connectionId:string; version:string;
+  id:string; key:string; provider:CalendarProvider; connectionId:string; version:string;
   calendarId:string; calendarName?:string; calendarColor?:string;
   summary:string; description?:string; location?:string; start:{dateTime?:string;date?:string}; end:{dateTime?:string;date?:string};
   htmlLink?:string; hangoutLink?:string; editable:boolean; readOnlyReason:string;
@@ -29,6 +29,13 @@ function graphTime(value:any) {
   if (value.timeZone !== "UTC") throw new CalendarError("Nepavyko nustatyti Outlook įvykio laiko zonos.",502);
   return `${raw}Z`;
 }
+function identifier(value:unknown,label:string) {
+  if (typeof value!=="string" || !value || value==="." || value===".." || value.length>2048 || /[\u0000-\u001f]/.test(value)) throw new CalendarError(`Trūksta arba neteisingas ${label}.`);
+  return value;
+}
+export function calendarEventKey(provider:CalendarProvider,connectionId:string,calendarId:string,id:string) {
+  return JSON.stringify([provider,connectionId,calendarId,id]);
+}
 export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:string,calendarId="primary",calendarName?:string,calendarColor?:string):CalendarEvent {
   const google=provider === "google";
   const allDay=google ? Boolean(raw.start?.date) : Boolean(raw.isAllDay);
@@ -46,7 +53,7 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
   const attendees=rawAttendees.length ? rawAttendees.map((a:any)=>google
     ? {email:String(a.email||""),name:a.displayName||undefined,self:Boolean(a.self),responseStatus:a.responseStatus||"needsAction"}
     : {email:String(a.emailAddress?.address||""),name:a.emailAddress?.name||undefined,self:false,responseStatus:a.status?.response==="accepted"?"accepted":a.status?.response==="declined"?"declined":a.status?.response==="tentativelyAccepted"?"tentative":"needsAction"}) : undefined;
-  return {id:raw.id,provider,connectionId,version,calendarId,...(calendarName ? {calendarName} : {}),...(calendarColor ? {calendarColor} : {}),summary:(google ? raw.summary : raw.subject) || "Be pavadinimo",
+  return {id:raw.id,key:calendarEventKey(provider,connectionId,calendarId,raw.id),provider,connectionId,version,calendarId,...(calendarName ? {calendarName} : {}),...(calendarColor ? {calendarColor} : {}),summary:(google ? raw.summary : raw.subject) || "Be pavadinimo",
     ...(description ? {description} : {}),
     ...(location ? {location} : {}),
     start:google ? raw.start : {dateTime:graphTime(raw.start)},end:google ? raw.end : {dateTime:graphTime(raw.end)},
@@ -63,9 +70,13 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     if (!current || (id !== undefined && id !== current)) throw new CalendarError("Paskyra atjungta arba pasikeitė. Atnaujink kalendorių.",409);
     return current;
   }
+  function eventPath(calendarId:string,eventId:string) {
+    const calendar=encodeURIComponent(calendarId),event=encodeURIComponent(eventId);
+    return google ? `/calendars/${calendar}/events/${event}` : calendarId==="primary" ? `/me/calendar/events/${event}` : `/me/calendars/${calendar}/events/${event}`;
+  }
   async function listOne(start:string,end:string,calId:string|null,calName:string|undefined,calColor:string|undefined,connectionId:string) {
     const raw:any[]=[];
-    const calEnc=calId ? encodeURIComponent(calId) : null;
+    const calEnc=calId && (google || calId!=="primary") ? encodeURIComponent(calId) : null;
     const basePath=google
       ? `/calendars/${calEnc || "primary"}/events`
       : calEnc ? `/me/calendars/${calEnc}/calendarView` : `/me/calendarView`;
@@ -97,9 +108,10 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
   }
   async function update(input:Record<string,unknown>) {
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new CalendarError("Neteisingi įvykio duomenys.");
-    const allowed=new Set(["id","connectionId","version","start","end","summary","description","location","attendees","confirmAttendees"]);
+    const allowed=new Set(["id","calendarId","connectionId","version","start","end","summary","description","location","attendees","confirmAttendees"]);
     if (Object.keys(input).some(key=>!allowed.has(key))) throw new CalendarError("Pateikti nepalaikomi įvykio laukai.");
-    if (typeof input.id !== "string" || !input.id || input.id === "." || input.id === ".." || input.id.length>2048 || typeof input.version !== "string" || !input.version || typeof input.connectionId !== "string") throw new CalendarError("Trūksta įvykio ID, paskyros arba versijos.");
+    const eventId=identifier(input.id,"įvykio ID"),calendarId=identifier(input.calendarId,"kalendoriaus ID");
+    if (typeof input.version !== "string" || !input.version || typeof input.connectionId !== "string") throw new CalendarError("Trūksta įvykio ID, paskyros arba versijos.");
     const times=eventTimes(input.start,input.end);
     if (input.summary !== undefined && (typeof input.summary !== "string" || !input.summary.trim() || input.summary.length>1024)) throw new CalendarError("Įvesk pavadinimą iki 1024 simbolių.");
     if (input.attendees !== undefined) {
@@ -107,13 +119,14 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       const emails=(input.attendees as any[]).map(a=>typeof a?.email==="string" ? a.email.toLowerCase().trim() : "");
       if (emails.some(e=>!e||!e.includes("@")||e.length>256)) throw new CalendarError("Neteisingas dalyvio el. paštas.");
     }
-    const connectionId=connected(input.connectionId),key=JSON.stringify([provider,connectionId,input.id]);
+    const connectionId=connected(input.connectionId),key=calendarEventKey(provider,connectionId,calendarId,eventId);
     const previous=locks.get(key) || Promise.resolve();
     const operation=previous.catch(()=>{}).then(async ()=>{
       connected(connectionId);
-      const base=google ? `/calendars/primary/events/${encodeURIComponent(input.id as string)}` : `/me/events/${encodeURIComponent(input.id as string)}`;
+      const base=eventPath(calendarId,eventId);
       const raw=await gateway.request(base,{headers});connected(connectionId);
-      const current=normalizeEvent(provider,raw,connectionId);
+      if (raw?.id!==eventId) throw new CalendarError("Tiekėjas grąžino kito įvykio duomenis. Atnaujink kalendorių.",502);
+      const current=normalizeEvent(provider,raw,connectionId,calendarId);
       if (!current.editable) throw new CalendarError(current.readOnlyReason,403);
       if (current.version !== input.version) throw new CalendarError("Įvykis jau pakeistas kitur. Atnaujink kalendorių ir peržiūrėk laiką.",409);
       const curStart=current.start.dateTime ? new Date(current.start.dateTime).getTime() : NaN;
@@ -128,10 +141,28 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       const patch=google ? {start:{dateTime:times.start,timeZone:raw.start?.timeZone || "UTC"},end:{dateTime:times.end,timeZone:raw.end?.timeZone || "UTC"},...(input.summary !== undefined ? {summary:input.summary} : {}),...locPatch,...descPatch,...attendeePatch} : {start:{dateTime:times.start.replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:times.end.replace(/Z$/,""),timeZone:"UTC"},...(input.summary !== undefined ? {subject:input.summary} : {}),...locPatch,...descPatch,...attendeePatch};
       const updated=await gateway.request(base+(google ? "?sendUpdates=all&conferenceDataVersion=1" : ""),{method:"PATCH",headers:{...headers,...((google || raw["@odata.etag"]) ? {"If-Match":current.version} : {})},body:JSON.stringify(patch)});
       connected(connectionId);
-      return normalizeEvent(provider,updated,connectionId);
+      if (updated?.id!==eventId) throw new CalendarError("Tiekėjas nepatvirtino pasirinkto įvykio pakeitimo. Atnaujink kalendorių.",502);
+      return normalizeEvent(provider,updated,connectionId,calendarId);
     });
     locks.set(key,operation);
     try {return await operation;} finally {if (locks.get(key)===operation) locks.delete(key);}
   }
-  return {list,update};
+  async function remove(input:Record<string,unknown>) {
+    const id=identifier(input.id,"įvykio ID"),calendarId=identifier(input.calendarId,"kalendoriaus ID");
+    if (typeof input.connectionId!=="string" || typeof input.version!=="string" || !input.version) throw new CalendarError("Trūksta paskyros arba įvykio versijos.");
+    const connectionId=connected(input.connectionId),key=calendarEventKey(provider,connectionId,calendarId,id);
+    const operation=(locks.get(key)||Promise.resolve()).catch(()=>{}).then(async()=>{
+      connected(connectionId);
+      const base=eventPath(calendarId,id),raw=await gateway.request(base,{headers});connected(connectionId);
+      if(raw?.id!==id) throw new CalendarError("Tiekėjas grąžino kito įvykio duomenis.",502);
+      const current=normalizeEvent(provider,raw,connectionId,calendarId);
+      if(!current.editable) throw new CalendarError(current.readOnlyReason,403);
+      if(current.version!==input.version) throw new CalendarError("Įvykis jau pakeistas kitur. Atnaujink kalendorių.",409);
+      await gateway.request(base+(google?"?sendUpdates=all":""),{method:"DELETE",headers:{...headers,"If-Match":current.version}});
+      connected(connectionId);
+    });
+    locks.set(key,operation);
+    try {await operation;} finally {if(locks.get(key)===operation) locks.delete(key);}
+  }
+  return {list,update,remove};
 }

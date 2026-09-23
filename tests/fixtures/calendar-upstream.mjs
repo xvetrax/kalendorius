@@ -13,19 +13,25 @@ google.set("google-overlap",{...structuredClone(google.get("google-personal")),i
 google.set("google-night",{...structuredClone(google.get("google-personal")),id:"google-night",summary:"Naktinis įvykis",start:{dateTime:date(1,23)},end:{dateTime:date(2,1)}});
 let version=1;
 google.set("google-short",{...structuredClone(google.get("google-personal")),id:"google-short",summary:"Trumpas",start:{dateTime:new Date(Date.parse(date(1,23))+45*60000).toISOString()},end:{dateTime:date(2,0)}});
+export const calendarUpstream={google:new Map([["primary",google],["other/calendar",new Map([["google-personal",{...structuredClone(google.get("google-personal")),summary:"Kitas Google"}]])]]),outlook:new Map([["primary",outlook],["other/calendar",new Map([["outlook-personal",{...structuredClone(outlook.get("outlook-personal")),subject:"Kitas Outlook"}]])]])};
 globalThis.fetch=async(input,init={})=>{
   const url=new URL(String(input)),method=init.method || "GET";
   if(url.hostname==="oauth2.googleapis.com" || url.hostname==="login.microsoftonline.com")return Response.json({access_token:"synthetic-access"});
   if(url.hostname!=="www.googleapis.com" && url.hostname!=="graph.microsoft.com")throw new Error("Fixture blocks external network");
   if(url.pathname==="/v1.0/me/todo/lists")return Response.json({value:[{id:"fixture-list",wellknownListName:"defaultList"}]});
   if(url.pathname==="/v1.0/me/todo/lists/fixture-list/tasks")return Response.json({value:[]});
-  const isGoogle=url.hostname==="www.googleapis.com",map=isGoogle?google:outlook;
-  const collection=isGoogle?"/calendar/v3/calendars/primary/events":"/v1.0/me/calendarView";
-  if(url.pathname===collection && method==="GET")return Response.json({[isGoogle?"items":"value"]:[...map.values()]});
-  const prefix=isGoogle?"/calendar/v3/calendars/primary/events/":"/v1.0/me/events/";
-  if(!url.pathname.startsWith(prefix))return Response.json({error:"Fixture endpoint missing"},{status:404});
-  const id=decodeURIComponent(url.pathname.slice(prefix.length)),event=map.get(id);
+  const isGoogle=url.hostname==="www.googleapis.com";
+  const match=isGoogle ? url.pathname.match(/^\/calendar\/v3\/calendars\/([^/]+)\/events(?:\/(.+))?$/)
+    : url.pathname.match(/^\/v1\.0\/me\/calendars\/([^/]+)\/(?:calendarView|events)(?:\/(.+))?$/);
+  const defaultOutlook=!isGoogle && (url.pathname==="/v1.0/me/calendarView" || url.pathname.startsWith("/v1.0/me/calendar/events/"));
+  if(!match && !defaultOutlook)return Response.json({error:"Fixture endpoint missing"},{status:404});
+  const calendarId=match?decodeURIComponent(match[1]):"primary",map=calendarUpstream[isGoogle?"google":"outlook"].get(calendarId);
+  if(!map)return Response.json({error:"Missing calendar"},{status:404});
+  const encodedId=match?match[2]:url.pathname.startsWith("/v1.0/me/calendar/events/")?url.pathname.slice("/v1.0/me/calendar/events/".length):undefined;
+  if(!encodedId && method==="GET")return Response.json({[isGoogle?"items":"value"]:[...map.values()]});
+  const id=decodeURIComponent(encodedId||""),event=map.get(id);
   if(!event)return Response.json({error:"Not found"},{status:404});
+  if(method==="DELETE") {if(new Headers(init.headers).get("If-Match")!==(isGoogle?event.etag:event["@odata.etag"]))return Response.json({error:"Version changed"},{status:412});map.delete(id);return new Response(null,{status:204});}
   if(method==="PATCH") {
     const match=new Headers(init.headers).get("If-Match"),etag=isGoogle?event.etag:event["@odata.etag"];
     if(match!==etag)return Response.json({error:"Version changed"},{status:412});

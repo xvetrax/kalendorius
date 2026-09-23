@@ -19,7 +19,7 @@ const {db,saveSetting}=await import("../lib/db.ts");const {encrypt}=await import
 for(const provider of ["google","microsoft"]){saveSetting(`${provider}_refresh_token`,encrypt("synthetic-refresh"));saveSetting(`${provider}_account_id`,"fixture-account");saveSetting(`${provider}_connection_generation`,`${provider}-fixture`);}
 const routes={google:await import("../app/api/google/events/route.ts"),microsoft:await import("../app/api/microsoft/events/route.ts")};
 after(()=>{globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
-const inputFor=e=>({id:e.id,version:e.version,connectionId:e.connectionId,start:e.start.dateTime,end:e.end.dateTime});
+const inputFor=e=>({id:e.id,calendarId:e.calendarId,version:e.version,connectionId:e.connectionId,start:e.start.dateTime,end:e.end.dateTime});
 for(const provider of ["google","microsoft"]){
   const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
   const patch=(body,origin="http://localhost:3000")=>route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify(body)}));
@@ -50,4 +50,28 @@ test("actual Outlook route protects non-organizer events and requires participan
   }
   const nonEditable=items.find(e=>!e.editable);
   if(nonEditable)assert.equal((await route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify(inputFor(nonEditable))}))).status,403);
+});
+
+for(const provider of ["google","microsoft"]) test(`${provider}: same-ID events in different calendars update and delete independently`,async()=>{
+  const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
+  saveSetting(`${provider}_enabled_calendars`,JSON.stringify([{id:"primary"},{id:"other/calendar",name:"Kitas",color:"#123456"}]));
+  const items=(await (await route.GET(new Request(url))).json()).items;
+  const target=items.find(e=>e.calendarId==="other/calendar"),original=items.find(e=>e.calendarId==="primary"&&e.id===target.id);
+  assert.ok(original);assert.notEqual(target.key,original.key);
+  const response=await route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({...inputFor(target),summary:"Tik antrinis"})}));
+  assert.equal(response.status,200);const updated=await response.json();assert.equal(updated.key,target.key);assert.equal(updated.calendarId,"other/calendar");
+  const after=(await (await route.GET(new Request(url))).json()).items;
+  assert.deepEqual(after.find(e=>e.key===original.key),original);assert.equal(after.find(e=>e.key===target.key).summary,"Tik antrinis");
+  const headers={Origin:"http://localhost:3000"};
+  assert.equal((await route.DELETE(new Request(url+"?id="+encodeURIComponent(target.id),{method:"DELETE",headers}))).status,400);
+  const query=new URLSearchParams({id:updated.id,calendarId:updated.calendarId,connectionId:updated.connectionId,version:updated.version});
+  for(const [field,value] of [["version","outdated"],["connectionId","another-account"]]) {
+    const stale=new URLSearchParams(query);stale.set(field,value);
+    assert.equal((await route.DELETE(new Request(url+"?"+stale,{method:"DELETE",headers}))).status,409);
+  }
+  assert.equal((await route.DELETE(new Request(url+"?"+query,{method:"DELETE",headers:{Origin:"https://attacker.example"}}))).status,403);
+  assert.equal((await route.DELETE(new Request(url+"?"+query,{method:"DELETE",headers}))).status,200);
+  const remaining=(await (await route.GET(new Request(url))).json()).items;
+  assert.ok(remaining.some(e=>e.key===original.key));assert.ok(!remaining.some(e=>e.key===target.key));
+  saveSetting(`${provider}_enabled_calendars`,JSON.stringify([{id:"primary"}]));
 });

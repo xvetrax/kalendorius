@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {createCalendarService,normalizeEvent} from "../lib/calendar-events.ts";
+import {calendarEventKey,createCalendarService,normalizeEvent} from "../lib/calendar-events.ts";
 const from="2026-10-25T10:00:00+02:00",to="2026-10-25T11:00:00+02:00";
 function fixture(provider) {
   const raw=provider==="google" ? {id:"event/a",summary:"Įvykis",etag:'"v1"',organizer:{self:true},start:{dateTime:"2026-10-24T08:00:00Z",timeZone:"Europe/Vilnius"},end:{dateTime:"2026-10-24T09:00:00Z",timeZone:"Europe/Vilnius"},attendees:[],description:"Keep description",conferenceData:{keep:true},reminders:{useDefault:true}} : {id:"event/a",subject:"Įvykis","@odata.etag":'W/"v1"',isOrganizer:true,type:"singleInstance",start:{dateTime:"2026-10-24T08:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00",timeZone:"UTC"},attendees:[],body:{content:"Keep Teams blob",contentType:"html"},isReminderOn:true,showAs:"busy"};
@@ -11,7 +11,7 @@ function fixture(provider) {
     return structuredClone(raw);
   }};
   const service=createCalendarService(provider,gateway);
-  const input={id:raw.id,connectionId:"account-a",version:normalizeEvent(provider,raw,"account-a").version,start:from,end:to};
+  const input={id:raw.id,calendarId:"primary",connectionId:"account-a",version:normalizeEvent(provider,raw,"account-a").version,start:from,end:to};
   return {service,input,calls,raw,state,gateway};
 }
 for(const provider of ["google","outlook"]) {
@@ -40,7 +40,7 @@ for(const provider of ["google","outlook"]) {
     const sameEnd=provider==="google"?"2026-10-24T09:00:00Z":"2026-10-24T09:00:00Z";
     raw.attendees=[{email:"existing@example.test"}];
     const ver=normalizeEvent(provider,raw,"account-a").version;
-    const sameTimeInput={id:raw.id,connectionId:"account-a",version:ver,start:sameStart,end:sameEnd};
+    const sameTimeInput={id:raw.id,calendarId:"primary",connectionId:"account-a",version:ver,start:sameStart,end:sameEnd};
     // no confirmAttendees needed when only attendees change
     await service.update({...sameTimeInput,attendees:[{email:"new@example.test"}]});
     assert.equal(calls.filter(c=>c.method==="PATCH").length,1);
@@ -83,3 +83,21 @@ test("event list follows Google tokens and validates Graph nextLink before reque
   const outlook=createCalendarService("outlook",{connection:()=>"a",request:async()=>{calls++;return {value:[],"@odata.nextLink":"https://evil.example/v1.0/me/calendarView"};}});
   await assert.rejects(outlook.list(from,to));assert.equal(calls,1);
 });
+
+test("calendar identity includes provider, connection, calendar and event without delimiter collisions",()=>{
+  const references=[["google","a","b-c","d"],["google","a-b","c","d"],["google","a","b","c-d"],["google","a","b","d"],["outlook","a","b","d"]];
+  assert.equal(new Set(references.map(ref=>calendarEventKey(...ref))).size,references.length);
+});
+for(const provider of ["google","outlook"]) {
+  test(`${provider}: missing or invalid calendar identity never reaches the provider`,async()=>{
+    const {service,input,calls}=fixture(provider);
+    for(const calendarId of [undefined,null,"",[],".","..","a\n", "x".repeat(2049)])await assert.rejects(service.update({...input,calendarId}),error=>error.status===400);
+    assert.equal(calls.length,0);
+  });
+  test(`${provider}: unexpected provider identity is rejected before writing and after an unconfirmed write`,async()=>{
+    const {service,input,raw,calls,gateway}=fixture(provider);
+    raw.id="foreign";await assert.rejects(service.update(input),error=>error.status===502);assert.equal(calls.length,1);
+    raw.id=input.id;const original=gateway.request;gateway.request=async(path,init)=>{const result=await original(path,init);return init?.method==="PATCH"?{...result,id:"foreign"}:result;};
+    await assert.rejects(service.update(input),error=>error.status===502);
+  });
+}
