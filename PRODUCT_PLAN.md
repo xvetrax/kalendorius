@@ -135,8 +135,8 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [x] Google / Microsoft sąrašų kūrimas, pervadinimas ir šalinimas su peržiūra bei pavadinimo patvirtinimu (imitacinė patikra; įtaisyti / svetimi Microsoft sąrašai ir sąrašai su Outlook blokais ar Docs / Chat užduotimis saugomi nuo šalinimo).
 - [x] Sukurti, redaguoti, užbaigti, atkurti ir ištrinti visų trijų šaltinių užduotis; pastabos, datos, vietiniai projektai / žymos ir trukmė (sintetinės API patikra).
 - [x] Microsoft svarba ir atskiras priminimo įjungimas, laiko keitimas bei išjungimas su versijos / paskyros patikra (imitacinė API).
-- [x] Microsoft kartojimo paslauga ir API paprastoms `noEnd` taisyklėms su versijos / paskyros patikra bei imitaciniais testais.
-- [ ] Microsoft kartojimo naudotojo sąsaja ir žingsnių adapterio paskyros / sąrašo / versijos / puslapiavimo apsauga. „My Day” nėra viešos Graph sinchronizacijos API ir neturi būti pateikiama kaip sinchronizuojama funkcija.
+- [x] Microsoft kartojimo paslauga, API ir naudotojo sąsaja paprastoms `noEnd` taisyklėms su versijos / paskyros patikra, konflikto bei tik skaitymo būsenomis ir imitaciniu naršyklės testu.
+- [ ] Žingsnių adapterio paskyros / sąrašo / versijos / puslapiavimo apsauga. „My Day” nėra viešos Graph sinchronizacijos API ir neturi būti pateikiama kaip sinchronizuojama funkcija.
 - [x] Google užduočių ir pavaldžių užduočių skaitymas bei bendras planavimas; papildomas Tasks OAuth leidimas ir pakartotinio sutikimo eiga (imitacinė patikra).
 - [ ] Google hierarchijos ir eilės tvarkos keitimas. Perkėlimas tarp sąrašų jau saugiai perkelia vietinį planą ir Outlook ryšį į naują tapatybės raktą, tačiau dar nenaudoja `parent` / `previous` hierarchijai ir eiliškumui valdyti.
 - [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
@@ -169,7 +169,7 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P1 — kalendoriaus įvykio tapatybė.** Bendras raktas apima tiekėją, prisijungimą, kalendorių ir įvykį. UI atnaujina tik pasirinktą įrašą; PATCH ir DELETE privalo pateikti kalendorių, prisijungimą bei versiją ir naudoja to kalendoriaus kelią. Vienodi ID skirtinguose Google / Outlook kalendoriuose patikrinti integraciniais testais.
 - [x] **Outlook bloko rodymo susiejimas.** Serveris susieja Graph įvykį tik pagal dabartinę Microsoft paskyrą, pirminį kalendorių, įvykio ID ir kuriant išsaugotą `transactionId`; neatitinkantis to paties ID įvykis kitame kalendoriuje lieka matomas. UI bloką sutraukia į užduoties planą tik kai sutampa dabartinis laikas, trukmė, pavadinimas ir saugios bloko savybės.
 - [x] **P1 — našlaičių Outlook blokų valymas.** Ištrintų šaltinio užduočių susieti blokai patenka į pasiekiamą, pakartojamą valymo eilę.
-- [ ] **P1 — produkto paviršius.** Pridėti Microsoft kartojimo UI; žingsnius perkelti į bendrą saugų adapterį; užbaigti Google `parent` / `previous`; išsaugoti tikrą fokusavimo pradžios laiką ir veikimo / pauzės būseną.
+- [ ] **P1 — produkto paviršius.** Žingsnius perkelti į bendrą saugų adapterį; užbaigti Google `parent` / `previous`; išsaugoti tikrą fokusavimo pradžios laiką ir veikimo / pauzės būseną.
 - [x] **P1 — diegimo health.** Viešas minimalus `/api/health` neapeina duomenų API ir veikia su `APP_PASSWORD`; Docker ir Playwright sveikatos patikros naudoja šį maršrutą.
 - [ ] **P1 — Docker priėmimas.** Realiai sukurti ir paleisti image; patikrinti sveikatą, versiją, neprivilegijuotą procesą ir duomenų tomo išlikimą.
 - [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo ir RSVP spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
@@ -335,7 +335,7 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - Focus sesijos race condition pataisa: `localStorage.removeItem("focus-session")` buvo iškviečiamas pradiniam render metu prieš užkraunant užduotis ir prieš paleidžiant restoration effect. Dabar saugoma/ištrinama tik po `restoredFocus.current = true`.
 - `tests/calendar-smoke.mjs` pataisa: `meeting` PATCH siuntė tą patį laiką → `timeChanged=false` → 200 vietoj 409. Pataisyta siųsti +30 min. laiko poslinkį.
 - 190 vienetinių + 23 naršyklės testai praeina. TypeScript ir produkcinis build švarūs.
-- Ribos: gyvas Graph Outlook bloko šalinimas nepatikrintas su tikra paskyra. Microsoft kartojimo UI, Google hierarchija/eiliškumas, RSVP veiksmas ir detalaus įvykio redagavimo spragos lieka.
+- Ribos: gyvas Graph Outlook bloko šalinimas nepatikrintas su tikra paskyra. Google hierarchija/eiliškumas, RSVP veiksmas ir detalaus įvykio redagavimo spragos lieka.
 
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.
 
@@ -380,6 +380,14 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - `tsconfig.json`: pridėtas `"allowImportingTsExtensions": true` — atitinka Node.js v24 elgseną su `.ts` importais.
 - Patikra: 119/119 testai, typecheck, build ir smoke praeina.
 - Ribos: žingsniai (subtasks) ir „My Day" atskyrimas neįgyvendinti. Tikros Graph paskyros nebuvo naudotos — `If-Match` elgsena su To Do kartojimo PATCH gyvai nepatvirtinta.
+
+### 2026-09-23 — Microsoft To Do kartojimo naudotojo sąsaja
+
+- Microsoft užduoties redaktoriuje galima įjungti, pakeisti ir išjungti kasdienę, savaitinę, mėnesinę arba metinę paprastą `noEnd` taisyklę. Sąsaja aiškiai palieka terminą ir vietinį darbo planą nepakeistus.
+- Redaktorius naudoja API grąžintą versiją, paskyros ir sąrašo tapatybę, blokuoja lygiagrečius pagrindinės užduoties, priminimo bei kartojimo pakeitimus, o 409 konfliktui ir tik skaitymo taisyklei rodo atnaujinimo eigą.
+- Naršyklės testas patikrina savaitinės taisyklės išsaugojimo užklausą ir saugo nuo kartojimo valdiklio dubliavimo keičiantis asinchroninei būsenai.
+- Patikra: `npm run typecheck`, 190/190 `npm test`, `npm run build` ir 24/24 `npm run test:e2e` praėjo.
+- Ribos: tikros Graph paskyros `If-Match` elgsena dar nepatvirtinta; sudėtingos taisyklės ir baigtinis kartojimas sąmoningai lieka tik skaitymui.
 
 ## 2026-09-21 — D2 įvykių redagavimas ir C7 klaviatūros perkėlimas
 

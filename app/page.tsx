@@ -12,6 +12,7 @@ import {Icon, type IconName} from "@/app/icons";
 import {usePreferences} from "@/app/ui-preferences";
 import {TaskListManager} from "@/app/task-list-manager";
 import { MicrosoftTaskReminder } from "@/app/microsoft-task-reminder";
+import { MicrosoftTaskRecurrence } from "@/app/microsoft-task-recurrence";
 
 type View = "calendar" | "tasks" | "focus";
 type Mode = "day" | "workweek" | "week" | "month";
@@ -508,12 +509,13 @@ function TaskSteps({task}:{task:Task}) {
   </div>;
 }
 function TaskEditor({ task, outlook, taskLists, onClose, onSave, onDelete, onMoved }: {task:Task;outlook:boolean;taskLists:TaskList[];onClose:()=>void;onDelete:()=>Promise<void>;onSave:(patch:Record<string,unknown>)=>Promise<void>;onMoved?:(task:Task)=>void}) {
-  const [saving,setSaving] = useState(false); const [reminderBusy,setReminderBusy] = useState(false); const [error,setError] = useState("");
+  const [saving,setSaving] = useState(false); const [reminderBusy,setReminderBusy] = useState(false); const [recurrenceBusy,setRecurrenceBusy] = useState(false); const [error,setError] = useState("");
   const [moveTarget,setMoveTarget] = useState(task.list_id||"");
   const [moving,setMoving] = useState(false);
+  const providerBusy=reminderBusy||recurrenceBusy;
   const googleLists=task.source==="google" ? taskLists.filter(l=>l.source==="google"&&l.account_id===task.account_id&&l.writable&&!l.stale) : [];
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); if (saving || moving || reminderBusy) return; const data = new FormData(event.currentTarget); setSaving(true); setError("");
+    event.preventDefault(); if (saving || moving || providerBusy) return; const data = new FormData(event.currentTarget); setSaving(true); setError("");
     try {
       const metadata: Record<string, unknown> = {};
       for (const field of ["title", "notes", "priority"] as const) if (!task.readonly_reason && data.get(field) !== task[field]) metadata[field] = data.get(field);
@@ -531,13 +533,13 @@ function TaskEditor({ task, outlook, taskLists, onClose, onSave, onDelete, onMov
     finally {setSaving(false);}
   }
   async function unschedule() {
-    if (saving || moving || reminderBusy) return; setSaving(true);
+    if (saving || moving || providerBusy) return; setSaving(true);
     try {await onSave({scheduled_at:null,mirror_requested:false});}
     catch(error) {setError(error instanceof Error ? error.message : "Nepavyko išsaugoti.");}
     finally {setSaving(false);}
   }
   async function moveToList() {
-    if (!moveTarget||moveTarget===task.list_id||saving||moving||reminderBusy) return;
+    if (!moveTarget||moveTarget===task.list_id||saving||moving||providerBusy) return;
     setMoving(true);setError("");
     try {
       const res=await fetch("/api/tasks/move",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({source:task.source,account_id:task.account_id,list_id:task.list_id,id:task.id,destination_list_id:moveTarget,schedule_version:task.schedule_version})});
@@ -561,14 +563,15 @@ function TaskEditor({ task, outlook, taskLists, onClose, onSave, onDelete, onMov
       <div className="formRow"><label>Suplanuota pradžia<input name="scheduled" type="datetime-local" disabled={Boolean(task.completed)} defaultValue={task.scheduled_at ? localInput(new Date(task.scheduled_at)) : ""}/></label><label>Trukmė minutėmis<input name="duration" type="number" min="5" max="1440" step="5" required defaultValue={task.duration_minutes}/></label></div>
       <p className="formHint">{task.source === "google" ? "Google diena ir vietinis darbo laikas yra atskiri. Prioritetas taip pat saugomas tik čia." : "Planavimas nekeičia užduoties termino. Laikas saugomas šioje programėlėje."}</p>
       <label className="onlineSwitch"><input name="mirror" type="checkbox" disabled={!outlook && !task.mirror_requested} defaultChecked={Boolean(task.mirror_requested)}/><i/>Papildomas Outlook blokas · laisvas laikas</label>
-      <div className="modalActions">{task.scheduled_at && <button type="button" disabled={saving || moving || reminderBusy} onClick={unschedule}>Pašalinti planavimą</button>}<button className="newButton" disabled={saving || moving || reminderBusy}>{saving ? "Saugoma…" : "Išsaugoti"}</button></div>
+      <div className="modalActions">{task.scheduled_at && <button type="button" disabled={saving || moving || providerBusy} onClick={unschedule}>Pašalinti planavimą</button>}<button className="newButton" disabled={saving || moving || providerBusy}>{saving ? "Saugoma…" : "Išsaugoti"}</button></div>
     </form>
     {task.source === "microsoft" && <TaskSteps task={task}/>}
+    {task.source === "microsoft" && <MicrosoftTaskRecurrence task={task} disabled={saving||reminderBusy} onBusyChange={setRecurrenceBusy}/>}
     {task.source === "microsoft" && (
-      <MicrosoftTaskReminder key={task.key} task={task} disabled={saving} onBusyChange={setReminderBusy}/>
+      <MicrosoftTaskReminder task={task} disabled={saving||recurrenceBusy} onBusyChange={setReminderBusy}/>
     )}
-    {googleLists.length>1 && <div className="moveToList"><span className="fieldLabel">Perkelti į sąrašą</span><div className="addAttendee"><select value={moveTarget} onChange={e=>setMoveTarget(e.target.value)} disabled={saving||moving||reminderBusy}>{googleLists.map(l=><option key={l.key} value={l.list_id}>{l.name}</option>)}</select><button type="button" disabled={saving||moving||reminderBusy||moveTarget===task.list_id} onClick={()=>void moveToList()}>{moving?"Keliama…":"Perkelti"}</button></div></div>}
-    <div className="modalActions"><button type="button" disabled={saving || moving || reminderBusy || Boolean(task.readonly_reason)} onClick={async()=>{if(saving || moving || reminderBusy)return;if(!window.confirm(`Ištrinti „${task.title}“${task.source === "local" ? "" : " ir jos šaltinyje"}?`))return;setSaving(true);setError("");try{await onDelete();}catch(error){setError(error instanceof Error ? error.message : "Nepavyko ištrinti.");}finally{setSaving(false);}}}>Ištrinti užduotį</button></div>
+    {googleLists.length>1 && <div className="moveToList"><span className="fieldLabel">Perkelti į sąrašą</span><div className="addAttendee"><select value={moveTarget} onChange={e=>setMoveTarget(e.target.value)} disabled={saving||moving||providerBusy}>{googleLists.map(l=><option key={l.key} value={l.list_id}>{l.name}</option>)}</select><button type="button" disabled={saving||moving||providerBusy||moveTarget===task.list_id} onClick={()=>void moveToList()}>{moving?"Keliama…":"Perkelti"}</button></div></div>}
+    <div className="modalActions"><button type="button" disabled={saving || moving || providerBusy || Boolean(task.readonly_reason)} onClick={async()=>{if(saving || moving || providerBusy)return;if(!window.confirm(`Ištrinti „${task.title}“${task.source === "local" ? "" : " ir jos šaltinyje"}?`))return;setSaving(true);setError("");try{await onDelete();}catch(error){setError(error instanceof Error ? error.message : "Nepavyko ištrinti.");}finally{setSaving(false);}}}>Ištrinti užduotį</button></div>
   </Modal>;
 }
 
