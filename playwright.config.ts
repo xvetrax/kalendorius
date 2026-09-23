@@ -43,7 +43,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "node scripts/start.mjs",
-    url: `${baseURL}/api/config`,
+    url: `${baseURL}/api/health`,
     reuseExistingServer: false,
     env: {
       NODE_ENV: "production",

@@ -8,7 +8,7 @@ export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Public paths that don't require auth
-  if (pathname === "/login" || pathname.startsWith("/api/auth/")) {
+  if (pathname === "/login" || pathname === "/api/health" || pathname.startsWith("/api/auth/")) {
     return NextResponse.next();
   }
 

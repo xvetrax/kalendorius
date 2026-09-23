@@ -137,7 +137,7 @@ export default function Planner() {
   useEffect(() => { if (!running) return; const id = window.setInterval(() => setSeconds((value) => Math.max(0, value - 1)), 1000); return () => clearInterval(id); }, [running]);
   useEffect(() => { if (!seconds) { setRunning(false); setToast("Fokusavimo sesija baigta — metas atsikvėpti."); } }, [seconds]);
   useEffect(() => { if (restoredFocus.current || !tasks.length || focusTask) return; restoredFocus.current=true; try { const raw=localStorage.getItem("focus-session"); if (!raw) return; const data=JSON.parse(raw); if (typeof data.seconds!=="number" || !data.taskKey) return; const task=tasks.find(t=>t.key===data.taskKey && !t.completed); if (task) { setFocusTask(task); setSeconds(data.seconds); } } catch {} }, [tasks]);
-  useEffect(() => { try { if (focusTask && seconds>0) localStorage.setItem("focus-session",JSON.stringify({taskKey:focusTask.key,seconds})); else localStorage.removeItem("focus-session"); } catch {} }, [focusTask,seconds]);
+  useEffect(() => { if (!restoredFocus.current) return; try { if (focusTask && seconds>0) localStorage.setItem("focus-session",JSON.stringify({taskKey:focusTask.key,seconds})); else localStorage.removeItem("focus-session"); } catch {} }, [focusTask,seconds]);
 
   function report(error: unknown) { setToast(error instanceof Error ? error.message : "Veiksmo atlikti nepavyko."); }
   async function createTask(data: Record<string, unknown>) {

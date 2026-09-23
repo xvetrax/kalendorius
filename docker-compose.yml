@@ -25,7 +25,7 @@ services:
       # APP_PASSWORD — prisijungimo slaptažodis (openssl rand -base64 24)
       # TOKEN_ENCRYPTION_KEY — 64 hex simboliai (openssl rand -hex 32)
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/config"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 5s
       start_period: 15s
