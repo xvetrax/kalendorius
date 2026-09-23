@@ -27,6 +27,7 @@ const {db,saveSetting}=await import("../lib/db.ts");
 const {encrypt}=await import("../lib/secrets.ts");
 const route=await import("../app/api/tasks/route.ts");
 const moveRoute=await import("../app/api/tasks/move/route.ts");
+const cleanupRoute=await import("../app/api/tasks/mirror-cleanup/route.ts");
 
 const taskScope="https://www.googleapis.com/auth/tasks";
 function connect() {
@@ -115,4 +116,22 @@ test("actual Google move route preserves the plan under its destination identity
   const refreshed=await (await list()).json(),listed=refreshed.items.find(entry=>entry.key===moved.key);
   assert.ok(listed);assert.equal(listed.scheduled_at,moved.scheduled_at);assert.equal(refreshed.items.some(entry=>entry.key===task.key),false);
   assert.equal((await moveRoute.POST(request("POST",{...ref(moved),destination_list_id:"google-list"},"https://attacker.example"))).status,403);
+});
+
+test("Outlook mirror cleanup route enforces same-origin and removes a local-only orphan",async()=>{
+  const taskKey=JSON.stringify(["google","google-account","google-list","deleted-task"]);
+  const orphanedAt="2026-09-23 10:00:00";
+  db.prepare(`INSERT INTO task_plans(task_key,mirror_requested,mirror_orphaned_at,mirror_orphan_title,mirror_error)
+    VALUES (?,1,?,?,?)`).run(taskKey,orphanedAt,"Ištrinta", "Užduotis pašalinta šaltinyje. Pašalink likusį Outlook bloką nustatymuose.");
+  const cleanupUrl=url+"/mirror-cleanup";
+  const body={task_key:taskKey,orphaned_at:orphanedAt,mirror_event_id:null};
+  const hostile=await cleanupRoute.POST(new Request(cleanupUrl,{method:"POST",headers:{Origin:"https://attacker.example","Content-Type":"application/json"},body:JSON.stringify(body)}));
+  assert.equal(hostile.status,403);
+  const invalid=await cleanupRoute.POST(new Request(cleanupUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:"null"}));
+  assert.equal(invalid.status,400);
+  const response=await cleanupRoute.POST(new Request(cleanupUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify(body)}));
+  assert.equal(response.status,200);assert.deepEqual(await response.json(),{ok:true});
+  assert.equal(db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(taskKey),undefined);
+  const repeated=await cleanupRoute.POST(new Request(cleanupUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify(body)}));
+  assert.equal(repeated.status,200);assert.deepEqual(await repeated.json(),{ok:true});
 });

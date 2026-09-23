@@ -2,7 +2,7 @@
 
 import { createContext, DragEvent, FormEvent, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {createPortal} from "react-dom";
-import type { Task, TaskList } from "@/lib/task-service";
+import type { MirrorCleanup, Task, TaskList } from "@/lib/task-service";
 import type { CalendarEvent as CalEvent } from "@/lib/calendar-events";
 import { visibleCalendarEvents } from "@/lib/calendar-mirrors";
 import { EventActions, EventBlock } from "@/app/calendar-event";
@@ -55,6 +55,7 @@ export default function Planner() {
   const [clock,setClock]=useState<Date|null>(null);
   useEffect(()=>{const now=new Date();setClock(now);setAnchor(now);const timer=window.setInterval(()=>setClock(new Date()),60000);return ()=>window.clearInterval(timer);},[]);
   const [tasks, setTasks] = useState<Task[]>([]); const [events, setEvents] = useState<CalEvent[]>([]);
+  const [mirrorCleanups,setMirrorCleanups]=useState<MirrorCleanup[]>([]);const [cleanupBusy,setCleanupBusy]=useState<string|null>(null);
   const [outlook, setOutlook] = useState(false); const [google, setGoogle] = useState(false);
   const [outlookReady, setOutlookReady] = useState(false); const [googleReady, setGoogleReady] = useState(false);
   const [outlookAccount, setOutlookAccount] = useState<string | null>(null); const [googleAccount, setGoogleAccount] = useState<string | null>(null);
@@ -95,7 +96,7 @@ export default function Planner() {
     const rangeStart = mode === "month" ? monthDays[0] : days[0];
     const last = mode === "month" ? monthDays[41] : days[days.length - 1];
     const query = new URLSearchParams({timeMin:rangeStart.toISOString(), timeMax:addDays(last, 1).toISOString()});
-    const tasksRequest = fetch("/api/tasks?envelope=1").then(responseJson<{items:Task[];warnings:string[];lists:TaskList[]}>);
+    const tasksRequest = fetch("/api/tasks?envelope=1").then(responseJson<{items:Task[];warnings:string[];lists:TaskList[];cleanups:MirrorCleanup[]}>);
     const googleStatus = () => fetch("/api/google/status").then(responseJson<IntegrationStatus>);
     const results = await Promise.allSettled([
       fetch("/api/microsoft/status").then(responseJson<IntegrationStatus>),
@@ -109,7 +110,7 @@ export default function Planner() {
     if (ms.status === "fulfilled") { setOutlook(ms.value.connected); setOutlookReady(ms.value.configured); setOutlookAccount(ms.value.account); }
     if (gs.status === "fulfilled") { setGoogle(gs.value.connected); setGoogleReady(gs.value.configured); setGoogleAccount(gs.value.account); setGoogleTasks(Boolean(gs.value.tasksConnected)); setGoogleTasksStatus(gs.value.tasksStatus); }
     if (ts.status === "fulfilled") {
-      setTasks(ts.value.items); setTaskLists(ts.value.lists);
+      setTasks(ts.value.items); setTaskLists(ts.value.lists);setMirrorCleanups(ts.value.cleanups || []);
       if (ts.value.warnings.length) setToast(ts.value.warnings.join(" "));
     }
     setEvents((previous) => [
@@ -161,6 +162,14 @@ export default function Planner() {
     await responseJson(await fetch(`/api/tasks?${query}`,{method:"DELETE"}));
     setTasks(current=>current.filter(item=>item.key!==task.key));
     setEditingTask(null);setToast("Užduotis ištrinta.");await load();
+  }
+  async function cleanupMirror(item:MirrorCleanup) {
+    if(cleanupBusy)return;setCleanupBusy(item.task_key);
+    try {
+      await responseJson(await fetch("/api/tasks/mirror-cleanup",{method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({task_key:item.task_key,orphaned_at:item.orphaned_at,mirror_event_id:item.mirror_event_id})}));
+      setMirrorCleanups(current=>current.filter(cleanup=>cleanup.task_key!==item.task_key));setToast("Likęs Outlook blokas pašalintas.");await load();
+    } catch(error) {report(error);await load().catch(()=>{});} finally {setCleanupBusy(null);}
   }
   async function saveEvent(event:CalEvent,patch:Record<string,unknown>) {
     ++loadVersion.current;
@@ -242,7 +251,7 @@ export default function Planner() {
       <p className="panelHint">{isMobile ? "Paspausk užduotį ir pasirink suplanuotą pradžią." : "Tempk užduotį į kalendorių."}<br/>Terminas ir darbo laikas – atskirai.</p>
 
     </aside>
-    {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div><h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><Connection name="Outlook + To Do" providerLabel="Microsoft" letter="O" tone="blue" connected={outlook} ready={outlookReady} account={outlookAccount} href="/api/microsoft/connect" onDisconnect={() => disconnect("microsoft")}/><Connection name="Google Calendar + Tasks" providerLabel="Google" letter="G" tone="multi" connected={google} ready={googleReady} account={googleAccount} href="/api/google/connect" onDisconnect={() => disconnect("google")}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href="/api/google/connect">Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p><LogoutButton/>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p><h3>Duomenys</h3><BackupPanel/></section></Modal>}
+    {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div><h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><Connection name="Outlook + To Do" providerLabel="Microsoft" letter="O" tone="blue" connected={outlook} ready={outlookReady} account={outlookAccount} href="/api/microsoft/connect" onDisconnect={() => disconnect("microsoft")}/><Connection name="Google Calendar + Tasks" providerLabel="Google" letter="G" tone="multi" connected={google} ready={googleReady} account={googleAccount} href="/api/google/connect" onDisconnect={() => disconnect("google")}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href="/api/google/connect">Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p>{mirrorCleanups.length>0&&<><h3>Likę Outlook blokai</h3><section className="settingsBlock" aria-label="Likusių Outlook blokų valymas">{mirrorCleanups.map(item=><div className="connection" key={item.task_key}><b className="blue">O</b><div><strong>{item.title}</strong><small>{item.source==="google"?"Google Tasks":"Microsoft To Do"} užduotis pašalinta šaltinyje</small></div><button disabled={!item.can_retry||cleanupBusy===item.task_key} onClick={()=>void cleanupMirror(item)}>{cleanupBusy===item.task_key?"Valoma…":item.can_retry?"Pašalinti bloką":"Prijunk paskyrą"}</button></div>)}</section></>}<LogoutButton/>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p><h3>Duomenys</h3><BackupPanel/></section></Modal>}
     {taskListManagerOpen && <Modal eyebrow="UŽDUOTYS" title="Tvarkyti sąrašus" onClose={()=>setTaskListManagerOpen(false)}><TaskListManager onChanged={load} onDeleted={(key)=>setTaskDestination(current=>current===key ? "local" : current)} onListCreated={setTaskDestination}/></Modal>}
     {editingEvent && <ExistingEventEditor key={editingEvent.event.key} value={editingEvent} onClose={()=>setEditingEvent(null)} onSave={async(patch)=>{await saveEvent(editingEvent.event,patch);setEditingEvent(null);}} onRefresh={()=>{void load();setEditingEvent(null);}}/>}
     {editingTask && <TaskEditor task={editingTask} outlook={outlook} taskLists={taskLists} onDelete={()=>deleteTask(editingTask)} onClose={() => setEditingTask(null)} onSave={async (patch) => { await patchTask(editingTask, patch); setEditingTask(null); }} onMoved={(moved)=>{setTasks(current=>current.map(item=>item.key===editingTask.key?moved:item));setFocusTask(current=>current?.key===editingTask.key?moved:current);setToast("Užduotis perkelta.");void load();}}/>}

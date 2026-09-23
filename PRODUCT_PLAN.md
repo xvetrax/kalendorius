@@ -140,7 +140,8 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [x] Google užduočių ir pavaldžių užduočių skaitymas bei bendras planavimas; papildomas Tasks OAuth leidimas ir pakartotinio sutikimo eiga (imitacinė patikra).
 - [ ] Google hierarchijos ir eilės tvarkos keitimas. Perkėlimas tarp sąrašų jau saugiai perkelia vietinį planą ir Outlook ryšį į naują tapatybės raktą, tačiau dar nenaudoja `parent` / `previous` hierarchijai ir eiliškumui valdyti.
 - [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
-- [ ] Gyvų paskyrų patikra ir šaltinyje ištrintų užduočių pasirenkamų Outlook blokų pasiekiamas, pakartojamas sutvarkymas.
+- [x] Šaltinyje ištrintų užduočių pasirenkamų Outlook blokų pasiekiamas, pakartojamas sutvarkymas nustatymuose.
+- [ ] Gyvų Google ir Microsoft paskyrų patikra pagal priėmimo scenarijus.
 - [ ] Fokusavimo sesijos su išsaugomu pradžios laiku, veikimo / pauzės būsena ir užduoties ryšiu. Dabartinis pradinis efektas gali ištrinti sesiją prieš įkeliant užduotis.
 
 Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti, perkelti, užbaigti ir atkurti; persikrovus bei pasikeitus duomenims šaltinyje rodoma teisinga būsena. Nepalaikomi laukai nepateikiami kaip tariamai sinchronizuojami.
@@ -165,7 +166,7 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P1 — Google užduoties tapatybė.** Perkėlimas tarp sąrašų per bendrą užduočių adapterį tikrina paskyrą, paskirties sąrašą ir plano versiją. Tik Google patvirtinus rezultatą viena vietine transakcija pakeičiamas užduoties raktas, perkeliama visa `task_plans` eilutė su Outlook bloko ryšiu ir atnaujinama nuotolinė kopija; nutrūkus tarp tiekėjo ir vietinės transakcijos, patvarus ketinimas suderinamas per kitą atnaujinimą.
 - [x] **P1 — kalendoriaus įvykio tapatybė.** Bendras raktas apima tiekėją, prisijungimą, kalendorių ir įvykį. UI atnaujina tik pasirinktą įrašą; PATCH ir DELETE privalo pateikti kalendorių, prisijungimą bei versiją ir naudoja to kalendoriaus kelią. Vienodi ID skirtinguose Google / Outlook kalendoriuose patikrinti integraciniais testais.
 - [x] **Outlook bloko rodymo susiejimas.** Serveris susieja Graph įvykį tik pagal dabartinę Microsoft paskyrą, pirminį kalendorių, įvykio ID ir kuriant išsaugotą `transactionId`; neatitinkantis to paties ID įvykis kitame kalendoriuje lieka matomas. UI bloką sutraukia į užduoties planą tik kai sutampa dabartinis laikas, trukmė, pavadinimas ir saugios bloko savybės.
-- [ ] **P1 — našlaičių Outlook blokų valymas.** Ištrintų šaltinio užduočių susieti blokai patenka į pasiekiamą, pakartojamą valymo eilę.
+- [x] **P1 — našlaičių Outlook blokų valymas.** Ištrintų šaltinio užduočių susieti blokai patenka į pasiekiamą, pakartojamą valymo eilę.
 - [ ] **P1 — produkto paviršius.** Pridėti Microsoft kartojimo UI; žingsnius perkelti į bendrą saugų adapterį; užbaigti Google `parent` / `previous`; pataisyti fokusavimo sesijos laiką ir būseną.
 - [ ] **P1 — diegimas.** Viešas minimalus health endpoint neturi apeiti jokių duomenų API ir turi veikti su `APP_PASSWORD`; Docker image realiai paleidžiamas bei patikrinamas.
 - [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo ir RSVP spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
@@ -183,6 +184,12 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - Graph įvykio ryšys patvirtinamas serveryje pagal aktyvią Microsoft paskyrą, pirminį kalendorių, įvykio ID ir programėlės sukūrimo `transactionId`; šis identifikatorius klientui neatskleidžiamas. Tikras pirminio kalendoriaus ID patvirtinamas per Graph ir pririšamas prie paskyros bei prisijungimo kartos, o išsaugotas kalendorių pasirinkimas — prie paskyros. To paties ID įvykiai kituose kalendoriuose, neaiškūs arba dubliuoti ryšiai ir vartotojo pakeisti blokai lieka matomi.
 - UI paslepia tik vienintelį patvirtintą `free`, vienkartinį, be dalyvių bloką, kai rodomos užduoties raktas, dabartinis pavadinimas, pradžia ir trukmė vis dar sutampa. Ta pati taisyklė taikoma dienos skaitikliui, laiko tinkleliui ir mėnesio rodiniui.
 - Patikra: `typecheck`, 182/182 vienetiniai / integraciniai testai, produkcinis build ir 22/22 izoliuoti Playwright scenarijai. Gyva Graph paskyra nepatikrinta; ištrintos šaltinio užduoties našlaičio valymo eilė lieka kitu žingsniu.
+
+### 2026-09-23 našlaičių Outlook blokų valymas
+
+- Tik sėkmingai atnaujintas tiekėjo sąrašas gali pažymėti dingusios užduoties planą našlaičiu. Eilėje išsaugoma stabili valymo versija, paskutinis pavadinimas, Outlook įvykio tapatybė ir jį sukūrusios Microsoft paskyros ryšys; šaltinyje vėl atsiradusi užduotis iš eilės pašalinama.
+- Nustatymuose rodoma pasiekiama valymo eilė. Nuotolinis blokas trinamas tik prisijungus prie tos pačios Microsoft paskyros; neaiškus sukūrimas pirmiausia saugiai atkuriamas pagal išsaugotą `transactionId`, o 404 laikomas jau pasiektu rezultatu. Klaida palieka įrašą pakartojimui, pasikeitusi eilės versija atmetama, pakartotas jau įvykdytas prašymas yra idempotentiškas. Jei nuotolinis blokas negalėjo būti sukurtas, vietinis našlaitis išvalomas be paskyros.
+- Patikra: `typecheck`, 187/187 vienetiniai / integraciniai testai, produkcinis build ir 23/23 izoliuoti Playwright scenarijai. Patikrintos migracijos, atsarginės kopijos, same-origin API, pašalintas visas tiekėjo sąrašas, svetima paskyra, 404 ir laikina trynimo klaida. Gyva Graph paskyra šiame žingsnyje nepatikrinta.
 
 ### 2026-09-15 tęsinio patikra
 

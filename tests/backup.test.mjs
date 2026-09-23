@@ -55,8 +55,8 @@ describe("backup", { concurrency: false }, () => {
       .run("Backup task", "Notes", "2026-10-01T09:00:00.000Z", 45, "Darbas", "high", "high", "audit");
     db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("google_refresh_token", "SECRET_TOKEN");
     db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("color_theme", "dark");
-    db.prepare("INSERT INTO task_plans (task_key, scheduled_at, duration_minutes, project, tags, energy) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(`local:${task.lastInsertRowid}`, "2026-10-01T08:00:00.000Z", 45, "Darbas", "audit", "high");
+    db.prepare("INSERT INTO task_plans (task_key, scheduled_at, duration_minutes, project, tags, energy, mirror_orphaned_at, mirror_orphan_title) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(`local:${task.lastInsertRowid}`, "2026-10-01T08:00:00.000Z", 45, "Darbas", "audit", "high", "2026-09-23 10:00:00", "Likęs blokas");
     db.prepare("INSERT INTO remote_tasks (task_key, account_id, list_id, task_json, source) VALUES (?, ?, ?, ?, ?)")
       .run("google:acct:list:task", "acct", "list", JSON.stringify({ title: "Remote task" }), "google");
     db.prepare("INSERT INTO remote_task_lists (list_key, source, account_id, list_json) VALUES (?, ?, ?, ?)")
@@ -81,6 +81,7 @@ describe("backup", { concurrency: false }, () => {
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM tasks").get().count, 1);
     assert.equal(db.prepare("SELECT value FROM settings WHERE key = ?").get("google_refresh_token")?.value, "SECRET_TOKEN");
     assert.equal(db.prepare("SELECT scheduled_at FROM task_plans").get()?.scheduled_at, "2026-10-01T08:00:00.000Z");
+    assert.equal(db.prepare("SELECT mirror_orphan_title FROM task_plans").get()?.mirror_orphan_title, "Likęs blokas");
     assert.equal(db.prepare("SELECT source FROM remote_tasks").get()?.source, "google");
     assert.equal(db.prepare("SELECT source FROM remote_task_lists").get()?.source, "google");
     assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");

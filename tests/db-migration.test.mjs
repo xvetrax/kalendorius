@@ -71,6 +71,12 @@ describe("db migration from v0 schema", () => {
     );
     assert.ok(tables.has("task_plans"), "task_plans table missing");
     assert.ok(tables.has("remote_tasks"), "remote_tasks table missing");
+    const planColumns = new Set(
+      (db.prepare("PRAGMA table_info(task_plans)").all()).map((row) => row.name)
+    );
+    for (const column of ["mirror_orphaned_at", "mirror_orphan_title"]) {
+      assert.ok(planColumns.has(column), `Missing task_plans column after migration: ${column}`);
+    }
   });
 
   it("migrates legacy due_at to task_plans with legacy_schedule flag", async () => {
