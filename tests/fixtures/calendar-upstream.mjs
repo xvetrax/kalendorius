@@ -20,6 +20,11 @@ globalThis.fetch=async(input,init={})=>{
   if(url.hostname!=="www.googleapis.com" && url.hostname!=="graph.microsoft.com")throw new Error("Fixture blocks external network");
   if(url.pathname==="/v1.0/me/todo/lists")return Response.json({value:[{id:"fixture-list",wellknownListName:"defaultList"}]});
   if(url.pathname==="/v1.0/me/todo/lists/fixture-list/tasks")return Response.json({value:[]});
+  if(url.pathname==="/v1.0/me/calendars")return Response.json({value:[
+    {id:"opaque-default",name:"Pagrindinis",color:"auto",isDefaultCalendar:true,canEdit:true},
+    {id:"other/calendar",name:"Kitas",color:"lightBlue",isDefaultCalendar:false,canEdit:true},
+  ]});
+  if(url.pathname==="/v1.0/me/calendar")return Response.json({id:"opaque-default"});
   const isGoogle=url.hostname==="www.googleapis.com";
   const match=isGoogle ? url.pathname.match(/^\/calendar\/v3\/calendars\/([^/]+)\/events(?:\/(.+))?$/)
     : url.pathname.match(/^\/v1\.0\/me\/calendars\/([^/]+)\/(?:calendarView|events)(?:\/(.+))?$/);

@@ -1,24 +1,47 @@
 import { CalendarError, createCalendarService } from "@/lib/calendar-events";
-import { setting } from "@/lib/db";
+import { db, saveSetting, setting } from "@/lib/db";
+import { OUTLOOK_DEFAULT_CALENDAR_SETTING, outlookDefaultCalendarId, outlookMirrorTaskKey } from "@/lib/outlook-mirror-link";
 import { graphFetch, isMicrosoftConnected } from "@/lib/microsoft";
 import { apiError, assertSameOrigin } from "@/lib/http";
 import { buildOutlookEvent } from "@/lib/planning";
 
 export const runtime = "nodejs";
-const calendar=createCalendarService("outlook",{connection:()=>isMicrosoftConnected() ? setting("microsoft_connection_generation") || "legacy" : null,request:graphFetch});
+const calendar=createCalendarService("outlook",{
+  connection:()=>isMicrosoftConnected() ? setting("microsoft_connection_generation") || "legacy" : null,
+  request:graphFetch,
+  mirrorTaskKey:(raw,calendarId)=>{
+    const accountId=setting("microsoft_account_id"),connectionId=setting("microsoft_connection_generation") || "legacy";
+    return outlookMirrorTaskKey(db,accountId,calendarId,outlookDefaultCalendarId(setting(OUTLOOK_DEFAULT_CALENDAR_SETTING),accountId,connectionId),raw);
+  },
+});
 function failure(error:unknown) {return error instanceof CalendarError ? Response.json({error:error.message},{status:error.status}) : apiError(error);}
 
-function enabledCalendars(key:string):{id:string;name?:string;color?:string}[]|undefined {
-  const stored=setting(key);if (!stored) return undefined;
+function enabledCalendars(accountId:string|undefined):{id:string;name?:string;color?:string}[]|undefined {
+  const stored=setting("microsoft_enabled_calendars");if (!stored || !accountId) return undefined;
   try {
-    const parsed=JSON.parse(stored);if (!Array.isArray(parsed)) return undefined;
-    return parsed.map((c:any)=>typeof c==="string"?{id:c}:{id:String(c.id||""),name:c.name||undefined,color:c.color||undefined}).filter(c=>c.id);
+    const parsed=JSON.parse(stored);
+    return parsed?.accountId===accountId && Array.isArray(parsed.items)
+      ? parsed.items.map((c:any)=>({id:String(c.id||""),name:c.name||undefined,color:c.color||undefined})).filter((c:{id:string})=>c.id)
+      : undefined;
   } catch {return undefined;}
+}
+async function ensureDefaultCalendarIdentity(accountId:string|undefined,connectionId:string,calendars:{id:string}[]|undefined) {
+  if (!accountId || !calendars?.some(calendar=>calendar.id!=="primary")
+    || outlookDefaultCalendarId(setting(OUTLOOK_DEFAULT_CALENDAR_SETTING),accountId,connectionId)) return;
+  const current=await graphFetch("/me/calendar?$select=id");
+  if (!current?.id || !isMicrosoftConnected() || setting("microsoft_account_id")!==accountId
+    || (setting("microsoft_connection_generation") || "legacy")!==connectionId)
+    throw new CalendarError("Microsoft paskyra pasikeitė. Atnaujink kalendorių.",409);
+  saveSetting(OUTLOOK_DEFAULT_CALENDAR_SETTING,JSON.stringify([accountId,connectionId,String(current.id)]));
 }
 export async function GET(request:Request) {
   if (!isMicrosoftConnected()) return Response.json({items:[]});
   const input=new URL(request.url).searchParams;
-  try {return Response.json({items:await calendar.list(input.get("timeMin") || new Date().toISOString(),input.get("timeMax") || new Date(Date.now()+7*864e5).toISOString(),enabledCalendars("microsoft_enabled_calendars"))},{headers:{"Cache-Control":"no-store"}});}
+  try {
+    const accountId=setting("microsoft_account_id"),connectionId=setting("microsoft_connection_generation") || "legacy",calendars=enabledCalendars(accountId);
+    await ensureDefaultCalendarIdentity(accountId,connectionId,calendars);
+    return Response.json({items:await calendar.list(input.get("timeMin") || new Date().toISOString(),input.get("timeMax") || new Date(Date.now()+7*864e5).toISOString(),calendars)},{headers:{"Cache-Control":"no-store"}});
+  }
   catch(error) {return failure(error);}
 }
 

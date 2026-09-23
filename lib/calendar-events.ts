@@ -2,6 +2,7 @@ export type CalendarProvider = "google" | "outlook";
 export type CalendarEvent = {
   id:string; key:string; provider:CalendarProvider; connectionId:string; version:string;
   calendarId:string; calendarName?:string; calendarColor?:string;
+  mirrorTaskKey?:string|null;
   summary:string; description?:string; location?:string; start:{dateTime?:string;date?:string}; end:{dateTime?:string;date?:string};
   htmlLink?:string; hangoutLink?:string; editable:boolean; readOnlyReason:string;
   attendeeCount:number; attendees?:{email:string;name?:string;self?:boolean;responseStatus:string}[]; recurring:boolean; allDay:boolean;
@@ -10,7 +11,7 @@ export class CalendarError extends Error {
   status:number;
   constructor(message:string,status=400) {super(message);this.status=status;}
 }
-type Gateway = {connection:()=>string|null;request:(path:string,init?:RequestInit)=>Promise<any>};
+type Gateway = {connection:()=>string|null;request:(path:string,init?:RequestInit)=>Promise<any>;mirrorTaskKey?:(raw:any,calendarId:string)=>string|null};
 const locks=new Map<string,Promise<unknown>>();
 function instant(value:unknown) {
   if (typeof value !== "string" || !/(Z|[+-]\d{2}:\d{2})$/i.test(value) || !Number.isFinite(Date.parse(value))) throw new CalendarError("Pateik teisingą laiką su laiko zona.");
@@ -64,6 +65,11 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
 }
 export function createCalendarService(provider:CalendarProvider,gateway:Gateway) {
   const google=provider === "google";
+  function normalize(raw:any,connectionId:string,calendarId:string,calendarName?:string,calendarColor?:string) {
+    const event=normalizeEvent(provider,raw,connectionId,calendarId,calendarName,calendarColor);
+    // Explicit null also clears a previously confirmed link after a PATCH.
+    return {...event,mirrorTaskKey:google ? null : gateway.mirrorTaskKey?.(raw,calendarId) ?? null};
+  }
   const headers={Prefer:'outlook.timezone="UTC"'};
   function connected(id?:unknown) {
     const current=gateway.connection();
@@ -98,7 +104,7 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
         if (next) {const url=new URL(next);if (url.origin !== "https://graph.microsoft.com" || url.pathname !== expectedOutlookPath || url.username || url.password || url.hash) throw new CalendarError("Nesaugi kalendoriaus puslapiavimo nuoroda.",502);next=url.pathname.slice(5)+url.search;}
       }
     }
-    return raw.filter(r=>google ? r.status !== "cancelled" : !r.isCancelled).map(r=>normalizeEvent(provider,r,connectionId,calId||"primary",calName,calColor));
+    return raw.filter(r=>google ? r.status !== "cancelled" : !r.isCancelled).map(r=>normalize(r,connectionId,calId||"primary",calName,calColor));
   }
   async function list(start:string,end:string,calendars?:{id:string;name?:string;color?:string}[]) {
     const times=eventTimes(start,end); const connectionId=connected();
@@ -142,7 +148,7 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       const updated=await gateway.request(base+(google ? "?sendUpdates=all&conferenceDataVersion=1" : ""),{method:"PATCH",headers:{...headers,...((google || raw["@odata.etag"]) ? {"If-Match":current.version} : {})},body:JSON.stringify(patch)});
       connected(connectionId);
       if (updated?.id!==eventId) throw new CalendarError("Tiekėjas nepatvirtino pasirinkto įvykio pakeitimo. Atnaujink kalendorių.",502);
-      return normalizeEvent(provider,updated,connectionId,calendarId);
+      return normalize(updated,connectionId,calendarId);
     });
     locks.set(key,operation);
     try {return await operation;} finally {if (locks.get(key)===operation) locks.delete(key);}

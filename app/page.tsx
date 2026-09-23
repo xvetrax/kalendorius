@@ -4,6 +4,7 @@ import { createContext, DragEvent, FormEvent, useContext, useEffect, useMemo, us
 import {createPortal} from "react-dom";
 import type { Task, TaskList } from "@/lib/task-service";
 import type { CalendarEvent as CalEvent } from "@/lib/calendar-events";
+import { visibleCalendarEvents } from "@/lib/calendar-mirrors";
 import { EventActions, EventBlock } from "@/app/calendar-event";
 import { dateAtMinute, dayBounds, layoutDay, minuteOfDay, segmentStyle, touchesDay, type DaySegment } from "@/lib/calendar-layout";
 
@@ -83,7 +84,9 @@ export default function Planner() {
   const openTasks = tasks.filter((task) => !task.completed);
   const filtered = openTasks.filter((task) => (project === "Visi" || (task.project || "Asmeniniai") === project) && `${task.title} ${task.notes || ""}`.toLowerCase().includes(search.toLowerCase()));
   const unplanned = filtered.filter((task) => !task.scheduled_at);
-  const todayEvents = clock ? events.filter((event) => sameDay(new Date(event.start.dateTime || event.start.date || 0), clock)) : [];
+  const calendarTasks = tasks.filter(task=>`${task.title} ${task.notes || ""}`.toLowerCase().includes(search.toLowerCase()));
+  const calendarEvents = visibleCalendarEvents(events,calendarTasks).filter(event=>event.summary.toLowerCase().includes(search.toLowerCase()));
+  const todayEvents = clock ? visibleCalendarEvents(events,openTasks).filter((event) => sameDay(new Date(event.start.dateTime || event.start.date || 0), clock)) : [];
   const todayTasks = clock ? openTasks.filter((task) => task.scheduled_at && sameDay(new Date(task.scheduled_at), clock)) : [];
   const todayMinutes = todayTasks.reduce((sum, task) => sum + (task.duration_minutes || 30), 0);
 
@@ -225,7 +228,7 @@ export default function Planner() {
       </header>
       {toast && <button role="status" className="toast" onClick={() => setToast("")}>{toast}<span>×</span></button>}
       {view === "calendar" && !clock && <div className="loading" role="status" aria-label="Kraunamas kalendorius"><i/><i/><i/></div>}
-      {view === "calendar" && clock && <Calendar mode={mode} setMode={setMode} anchor={anchor} setAnchor={setAnchor} days={days} monthDays={monthDays} events={events.filter(event=>event.summary.toLowerCase().includes(search.toLowerCase()))} tasks={tasks.filter(task=>`${task.title} ${task.notes || ""}`.toLowerCase().includes(search.toLowerCase()))} loading={loading} move={move} onDrop={dropTask} onCreate={setEventDate}/>} 
+      {view === "calendar" && clock && <Calendar mode={mode} setMode={setMode} anchor={anchor} setAnchor={setAnchor} days={days} monthDays={monthDays} events={calendarEvents} tasks={calendarTasks} loading={loading} move={move} onDrop={dropTask} onCreate={setEventDate}/>}
       {view === "tasks" && <TaskBoard tasks={tasks.filter((task) => `${task.title} ${task.notes || ""}`.toLowerCase().includes(search.toLowerCase()))} onDone={(task) => { void patchTask(task, { completed: !task.completed }).catch(report); }} onFocus={startFocus} onAdd={() => setTaskModal(true)}/>} 
       {view === "focus" && <Focus task={focusTask || openTasks[0]} tasks={openTasks} seconds={seconds} running={running} onToggle={() => setRunning(!running)} onReset={() => { setRunning(false); setSeconds(25 * 60); }} onSelect={setFocusTask} onDone={async () => { if (focusTask) await patchTask(focusTask, { completed: true }); setFocusTask(null); setRunning(false); setSeconds(25 * 60); }}/>} 
     </section>

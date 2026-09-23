@@ -46,7 +46,7 @@ export async function exchangeMicrosoftCode(code: string, codeVerifier: string) 
   const encrypted = encrypt(body.refresh_token);
   db.exec("BEGIN IMMEDIATE");
   try {
-    db.prepare("DELETE FROM settings WHERE key = 'microsoft_task_list_id'").run();
+    db.prepare("DELETE FROM settings WHERE key IN ('microsoft_task_list_id','microsoft_default_calendar_identity')").run();
     saveSetting("microsoft_refresh_token", encrypted);
     saveSetting("microsoft_account_id", String(account.id));
     saveSetting("microsoft_account", String(account.displayName || account.mail || account.userPrincipalName || "Microsoft paskyra"));
@@ -98,7 +98,7 @@ export async function microsoftAccountId() {
   saveSetting("microsoft_account_id", String(profile.id));
   return String(profile.id);
 }
-export function disconnectMicrosoft() { cachedToken = null; deleteSettings("microsoft_refresh_token", "microsoft_task_list_id", "microsoft_account", "microsoft_account_id"); saveSetting("microsoft_connection_generation", randomUUID()); }
+export function disconnectMicrosoft() { cachedToken = null; deleteSettings("microsoft_refresh_token", "microsoft_task_list_id", "microsoft_account", "microsoft_account_id", "microsoft_default_calendar_identity"); saveSetting("microsoft_connection_generation", randomUUID()); }
 export function isMicrosoftConfigured() {
   try { config(); return isTokenEncryptionConfigured(); } catch { return false; }
 }

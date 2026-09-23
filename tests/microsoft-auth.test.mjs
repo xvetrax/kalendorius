@@ -49,12 +49,14 @@ test("parallel Graph calls share one refresh and safely retain the rotated encry
 
 test("late refresh cannot reconnect a disconnected account or send its Graph request",async () => {
   const waiting=deferred();let calls=0;
+  saveSetting("microsoft_default_calendar_identity",JSON.stringify(["old-account","generation-a","old-calendar"]));
   globalThis.fetch=async () => {calls++;return waiting.promise;};
   const request=ms.graphFetch("/me/events");
   ms.disconnectMicrosoft();
   waiting.resolve(json({access_token:"old-access",refresh_token:"late-refresh"}));
   await assert.rejects(request,/pasikeitė/);
   assert.equal(calls,1);assert.equal(ms.isMicrosoftConnected(),false);assert.equal(ms.cachedMicrosoftAccountId(),null);
+  assert.equal(setting("microsoft_default_calendar_identity"),undefined);
 });
 
 test("failed new profile lookup leaves the previous token and account paired",async () => {
@@ -65,10 +67,12 @@ test("failed new profile lookup leaves the previous token and account paired",as
 
 test("successful account switch atomically replaces identity and clears the old task list",async () => {
   saveSetting("microsoft_task_list_id","old-list");
+  saveSetting("microsoft_default_calendar_identity",JSON.stringify(["old-account","generation-a","old-calendar"]));
   globalThis.fetch=async (url) => url.includes("/token") ? json({access_token:"new-access",refresh_token:"new-refresh"}) : json({id:"new-account",displayName:"Test account"});
   await ms.exchangeMicrosoftCode("test-code","test-verifier");
   assert.equal(ms.cachedMicrosoftAccountId(),"new-account");assert.equal(decrypt(setting("microsoft_refresh_token")),"new-refresh");
-  assert.equal(setting("microsoft_task_list_id"),undefined);assert.notEqual(setting("microsoft_connection_generation"),"generation-a");
+  assert.equal(setting("microsoft_task_list_id"),undefined);assert.equal(setting("microsoft_default_calendar_identity"),undefined);
+  assert.notEqual(setting("microsoft_connection_generation"),"generation-a");
 });
 
 test("in-flight sign-in cannot undo a newer disconnect",async () => {

@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { graphRecurrence, parseTaskRecurrence, providerRecurrence, sameTaskRecurrence, taskRecurrenceDate } from "./task-recurrence.ts";
 import { ProviderError } from "./provider-error.ts";
+import { OUTLOOK_MIRROR_BODY } from "./outlook-mirror-link.ts";
 
 export type RemoteTaskSource = "microsoft" | "google";
 export type TaskList = { key: string; source: RemoteTaskSource; account_id: string; list_id: string; name: string; writable: boolean; stale?: boolean;
@@ -573,7 +574,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       const transactionId = current.mirror_transaction_id || randomUUID();
       db.prepare("UPDATE task_plans SET mirror_account_id=?, mirror_transaction_id=? WHERE task_key=?").run(account, transactionId, task.key);
       const start = new Date(current.scheduled_at);
-      const payload = { subject: `✓ ${task.title}`, body: {contentType: "text", content: "Dienos planas: pasirenkamas užduoties darbo laikas."},
+      const payload = { subject: `✓ ${task.title}`, body: {contentType: "text", content: OUTLOOK_MIRROR_BODY},
         start: {dateTime: start.toISOString().replace(/Z$/, ""), timeZone:"UTC"},
         end: {dateTime: new Date(start.getTime() + current.duration_minutes * 60000).toISOString().replace(/Z$/, ""), timeZone:"UTC"},
         showAs: "free", isReminderOn: false };

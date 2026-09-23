@@ -1,6 +1,7 @@
-import { saveSetting, setting } from "@/lib/db";
+import { deleteSettings, saveSetting, setting } from "@/lib/db";
 import { graphFetch, isMicrosoftConnected } from "@/lib/microsoft";
 import { apiError, assertSameOrigin } from "@/lib/http";
+import { OUTLOOK_DEFAULT_CALENDAR_SETTING } from "@/lib/outlook-mirror-link";
 
 export const runtime = "nodejs";
 
@@ -14,6 +15,7 @@ const outlookColors: Record<string, string> = {
 export async function GET() {
   if (!isMicrosoftConnected()) return Response.json({ items: [] });
   try {
+    const accountId=setting("microsoft_account_id"),connectionId=setting("microsoft_connection_generation") || "legacy";
     const items: {id:string;name:string;color?:string;isDefault?:boolean;writable:boolean}[] = [];
     let next: string | null = "/me/calendars?$top=50&$select=id,name,color,isDefaultCalendar,canEdit";
     const visited = new Set<string>();
@@ -31,8 +33,14 @@ export async function GET() {
         next = url.pathname.slice(5) + url.search;
       } else next = null;
     }
+    if (!isMicrosoftConnected() || setting("microsoft_account_id")!==accountId || (setting("microsoft_connection_generation") || "legacy")!==connectionId)
+      return Response.json({error:"Microsoft paskyra pasikeitė. Atnaujink kalendorius."},{status:409});
+    const primary=items.find(item=>item.isDefault);
+    if (primary && accountId) saveSetting(OUTLOOK_DEFAULT_CALENDAR_SETTING,JSON.stringify([accountId,connectionId,primary.id]));
+    else deleteSettings(OUTLOOK_DEFAULT_CALENDAR_SETTING);
     const stored = setting("microsoft_enabled_calendars");
-    const enabled: string[] = stored ? JSON.parse(stored) : null;
+    let enabled:string[]|null=null;
+    try {const parsed=stored ? JSON.parse(stored) : null;if(parsed?.accountId===accountId&&Array.isArray(parsed.items))enabled=parsed.items.map((item:any)=>String(item.id||"")).filter(Boolean);} catch {}
     return Response.json({ items, enabled }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return apiError(error); }
 }
@@ -41,10 +49,12 @@ export async function PATCH(request: Request) {
   try {
     assertSameOrigin(request);
     const body = await request.json();
+    const accountId=setting("microsoft_account_id");
+    if (!isMicrosoftConnected() || !accountId) return Response.json({error:"Microsoft paskyra neprijungta."},{status:401});
     if (!Array.isArray(body.enabled) || body.enabled.some((c: unknown) => typeof (c as any)?.id !== "string" || !(c as any).id || (c as any).id.length > 1024))
       return Response.json({ error: "Neteisingas kalendorių sąrašas." }, { status: 400 });
     const safe = (body.enabled as any[]).map((c: any) => ({id:String(c.id),...(c.name?{name:String(c.name).slice(0,200)}:{}),...(c.color?{color:String(c.color).slice(0,30)}:{})}));
-    saveSetting("microsoft_enabled_calendars", JSON.stringify(safe));
+    saveSetting("microsoft_enabled_calendars", JSON.stringify({accountId,items:safe}));
     return Response.json({ ok: true });
   } catch (error) { return apiError(error); }
 }
