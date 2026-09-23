@@ -320,6 +320,20 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - 2026-09-22 audito taisymas: `scripts/test-e2e.mjs` parenka laisvą prievadą, sukuria unikalų laikinos DB katalogą, perduoda jį Playwright serveriui ir pašalina `finally` bloke. `reuseExistingServer` išjungtas, o konfigūracija be wrapperio atsisako startuoti. Testinis serveris išjungia programėlės slaptažodį ir tikrų OAuth tiekėjų konfigūraciją; `/api/config` testas patvirtina laikinos DB kelią.
 - Mobilus testas skaičiuoja vieną `.dayHead` ir `.dayLane`; DST testas fiksuoja laiką ties 2026-03-29 ir tikrina 23 valandų žymą; klaidų testai tikrina matomą lietuvišką pranešimą, lėto atsakymo loading būseną ir nesėkmingo kūrimo UI / DB rollback. CRUD scenarijus sukuria, perkrauna, redaguoja, užbaigia, atkuria ir ištrina vietinę užduotį.
 
+### 2026-09-22 F6 (dalinai) — našlaičių Outlook blokų valymas, health endpoint, focus sesija
+
+- `task_plans`: nauji stulpeliai `mirror_orphaned_at` ir `mirror_orphan_title` (su migracija ir `ALTER TABLE` idempotenčiai). Orphan auto-aiškinama, kai šaltinio užduotis vėl matoma refresh metu.
+- `task-service.ts`: `mirrorCleanups()` grąžina sąrašą orphan planų; `cleanupMirror()` saugiai pašalina Outlook įvykį (atkuria nebaigtas kūrimo operacijas per `mirror_create_payload`) ir tada pašalina plan eilutę. Stale snapshot apsauga per 409.
+- `/api/tasks/mirror-cleanup` (POST): `assertSameOrigin` + sesijos tikrinimas; 409 kai snapshot pasikeičia tarp GET ir POST.
+- `/api/tasks?envelope=1` dabar grąžina `cleanups[]` masyvą kartu su `items` ir `lists`.
+- Nustatymų lange: „Likę Outlook blokai" sekcija su „Pašalinti bloką" mygtuku kiekvienam orphan įrašui; mygtuko būsena atspindi ar paskyra prijungta.
+- Testai: `tests/mirror-cleanup.test.mjs` (išplėstas), `tests/tasks-routes.test.mjs` (naujas testas), `tests/db-migration.test.mjs` (stulpelių tikrinimas), `tests/e2e/mirror-cleanup.spec.ts`.
+- `/api/health` (GET, viešas, be autentifikacijos): grąžina `{ok:true,version}` — Docker HEALTHCHECK veikia net kai `APP_PASSWORD` nustatytas. `proxy.ts` leidžia `/api/health` be sesijos. Dockerfile ir docker-compose perjungti nuo `/api/config` prie `/api/health`. Playwright webServer readiness probe taip pat perjungtas.
+- Focus sesijos race condition pataisa: `localStorage.removeItem("focus-session")` buvo iškviečiamas pradiniam render metu prieš užkraunant užduotis ir prieš paleidžiant restoration effect. Dabar saugoma/ištrinama tik po `restoredFocus.current = true`.
+- `tests/calendar-smoke.mjs` pataisa: `meeting` PATCH siuntė tą patį laiką → `timeChanged=false` → 200 vietoj 409. Pataisyta siųsti +30 min. laiko poslinkį.
+- 187 vienetiniai + 23 naršyklės testai praeina. TypeScript ir produkcinis build švarūs.
+- Ribos: gyvas Graph Outlook bloko šalinimas nepatikrintas su tikra paskyra. Microsoft kartojimo UI, Google hierarchija/eiliškumas, RSVP veiksmas ir detalaus įvykio redagavimo spragos lieka.
+
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.
 
 Tikram OAuth prisijungimui ir paskyrų patikrai reikės naudotojo veiksmų oficialiuose prisijungimo puslapiuose. Tai netrukdo įgyvendinti ir imituotomis API tikrinti integracijas. Viešas publikavimas, tikrų susitikimų siuntimas ir tiekėjų paskyrų konfigūravimas nėra atliekami vien audito metu.
