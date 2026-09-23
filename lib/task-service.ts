@@ -518,6 +518,10 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       }
       requireAccount(account, source);
       const previousTasks=new Map(cachedTasks(account,source).map(task=>[task.key,task]));
+      const markOrphan=db.prepare(`UPDATE task_plans SET mirror_error=?,mirror_orphaned_at=COALESCE(mirror_orphaned_at,?),
+        mirror_orphan_title=COALESCE(mirror_orphan_title,?) WHERE task_key=?
+        AND (mirror_event_id IS NOT NULL OR mirror_requested<>0 OR mirror_transaction_id IS NOT NULL OR mirror_create_payload IS NOT NULL)`);
+      const orphanVersion=()=>`${new Date().toISOString()}#${randomUUID()}`;
       // Commit only after all reads and account checks. Planning rows survive
       // remote deletion; a failed list never replaces its last good snapshot.
       db.exec("BEGIN IMMEDIATE");
@@ -544,28 +548,23 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
         }
         if (source === "google") reconcilePendingMoves(account,staged,warnings);
         for (const task of cachedTasks(account,source)) if (!available.some(list=>list.list_id === task.list_id)) db.prepare("DELETE FROM remote_tasks WHERE task_key=?").run(task.key);
+        // Mark orphaned plans in the same transaction that removes their last
+        // provider snapshot. A crash can never discard the evidence first.
+        for (const entry of staged) {
+          if (!entry.fresh) continue;
+          const orphans = (db.prepare("SELECT tp.task_key FROM task_plans tp WHERE tp.task_key NOT IN (SELECT task_key FROM remote_tasks WHERE source=? AND account_id=? AND list_id=?) AND (tp.mirror_event_id IS NOT NULL OR tp.mirror_requested<>0 OR tp.mirror_transaction_id IS NOT NULL OR tp.mirror_create_payload IS NOT NULL)").all(source, account, entry.list.list_id) as {task_key:string}[]).filter(row => {
+            try { const parts = JSON.parse(row.task_key); return Array.isArray(parts) && parts.length === 4 && parts[0] === source && parts[1] === account && parts[2] === entry.list.list_id; } catch { return false; }
+          });
+          for (const orphan of orphans) markOrphan.run(ORPHAN_MIRROR_ERROR,orphanVersion(),previousTasks.get(orphan.task_key)?.title ?? null,orphan.task_key);
+        }
+        // A successful list catalog is authoritative. Removed lists queue every
+        // cached task that may still own an Outlook block.
+        const availableListIds=new Set(available.map(list=>list.list_id));
+        for (const task of previousTasks.values()) {
+          if (!availableListIds.has(task.list_id!)) markOrphan.run(ORPHAN_MIRROR_ERROR,orphanVersion(),task.title,task.key);
+        }
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
-      const markOrphan=db.prepare(`UPDATE task_plans SET mirror_error=?,mirror_orphaned_at=COALESCE(mirror_orphaned_at,CURRENT_TIMESTAMP),
-        mirror_orphan_title=COALESCE(mirror_orphan_title,?) WHERE task_key=?
-        AND (mirror_event_id IS NOT NULL OR mirror_requested<>0 OR mirror_transaction_id IS NOT NULL OR mirror_create_payload IS NOT NULL)`);
-      // Mark orphaned plans for lists that were refreshed successfully:
-      // tasks deleted externally will have no matching remote_tasks row.
-      for (const entry of staged) {
-        if (!entry.fresh) continue;
-        const orphans = (db.prepare("SELECT tp.task_key FROM task_plans tp WHERE tp.task_key NOT IN (SELECT task_key FROM remote_tasks WHERE source=? AND account_id=? AND list_id=?) AND (tp.mirror_event_id IS NOT NULL OR tp.mirror_requested<>0 OR tp.mirror_transaction_id IS NOT NULL OR tp.mirror_create_payload IS NOT NULL)").all(source, account, entry.list.list_id) as {task_key:string}[]).filter(row => {
-          try { const parts = JSON.parse(row.task_key); return Array.isArray(parts) && parts.length === 4 && parts[0] === source && parts[1] === account && parts[2] === entry.list.list_id; } catch { return false; }
-        });
-        for (const orphan of orphans) {
-          markOrphan.run(ORPHAN_MIRROR_ERROR,previousTasks.get(orphan.task_key)?.title ?? null,orphan.task_key);
-        }
-      }
-      // A successful list catalog is also authoritative: if an entire list was
-      // removed at the provider, every cached task from it needs the same queue.
-      const availableListIds=new Set(available.map(list=>list.list_id));
-      for (const task of previousTasks.values()) {
-        if (!availableListIds.has(task.list_id!)) markOrphan.run(ORPHAN_MIRROR_ERROR,task.title,task.key);
-      }
       for (const entry of staged) {lists.push(entry.list);items.push(...entry.tasks.map(decorate));}
     } catch {
       if (account && provider.connected() && provider.cachedAccountId() === account) {
@@ -793,7 +792,13 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       || typeof input.orphaned_at!=="string" || !input.orphaned_at
       || (input.mirror_event_id!==null && typeof input.mirror_event_id!=="string")) throw new TaskError("Neteisingi Outlook bloko valymo duomenys.");
     const taskKey=input.task_key,orphanedAt=input.orphaned_at,eventSnapshot=input.mirror_event_id;
-    return serial("task-provider:microsoft",()=>serial("mirror-cleanup:"+taskKey,async()=>{
+    let source:RemoteTaskSource;
+    try {
+      const parts=JSON.parse(taskKey);
+      if (!Array.isArray(parts) || parts.length!==4 || (parts[0]!=="google"&&parts[0]!=="microsoft")) throw new Error();
+      source=parts[0];
+    } catch {throw new TaskError("Neteisinga Outlook bloko užduoties tapatybė.");}
+    const operation=()=>serial("task-provider:microsoft",()=>serial("mirror-cleanup:"+taskKey,async()=>{
       let current=plan(taskKey);
       if (!current || !current.mirror_orphaned_at) return {ok:true};
       if (current.mirror_orphaned_at!==orphanedAt || current.mirror_event_id!==eventSnapshot)
@@ -829,6 +834,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
         throw error;
       }
     }));
+    return source==="google" ? serial("task-provider:google",operation) : operation();
   }
   async function remove(input: Input) {
     return serial(reference(input), async () => {

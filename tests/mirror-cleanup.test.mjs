@@ -263,6 +263,25 @@ test("removing a whole provider list queues its cached Outlook mirrors",async()=
   assert.equal(graph.events.size,0);
 });
 
+test("orphan marking rolls provider cache deletion back when queue persistence fails",async()=>{
+  const key=JSON.stringify(["microsoft","account-a","list-a","atomic-orphan"]);
+  const {db,service}=fixture({request:(url,method)=>{
+    if((url.startsWith("/me/todo/lists?")||url==="/me/todo/lists")&&method==="GET")return {value:[{id:"list-a",displayName:"Darbai",wellknownListName:"defaultList"}]};
+    if(url.startsWith("/me/todo/lists/list-a/tasks")&&method==="GET")return {value:[]};
+    throw new Error(`Unexpected: ${method} ${url}`);
+  }});
+  seedMicrosoftTask(db,{key,mirrorEventId:"atomic-event",mirrorRequested:0,scheduledAt:null});
+  db.exec(`CREATE TRIGGER fail_orphan_queue BEFORE UPDATE OF mirror_orphaned_at ON task_plans
+    WHEN NEW.mirror_orphaned_at IS NOT OLD.mirror_orphaned_at
+    BEGIN SELECT RAISE(ABORT,'injected orphan queue failure'); END`);
+  const failed=await service.list();
+  assert.equal(failed.warnings.length,1);assert.ok(db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=?").get(key));
+  assert.equal(db.prepare("SELECT mirror_orphaned_at FROM task_plans WHERE task_key=?").get(key).mirror_orphaned_at,null);
+  db.exec("DROP TRIGGER fail_orphan_queue");
+  const retried=await service.list();
+  assert.ok(retried.cleanups.some(item=>item.task_key===key));assert.equal(db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=?").get(key),undefined);
+});
+
 test("orphan cleanup keeps the queue when the connected Outlook account differs",async()=>{
   const key=JSON.stringify(["google","google-account","list-a","foreign-mirror"]);
   const {db,graph,service}=fixture();
@@ -293,6 +312,45 @@ test("orphan cleanup recovers an uncertain create and stays retryable after a fa
   assert.deepEqual(await service.cleanupMirror({task_key:key,orphaned_at:orphanedAt,mirror_event_id:"recovered-event"}),{ok:true});
   assert.equal(posts,1);assert.equal(deletes,2);assert.equal(graph.events.size,0);
   assert.equal(db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(key),undefined);
+});
+
+test("Google task restoration wins over concurrent Outlook orphan cleanup",async()=>{
+  const key=JSON.stringify(["google","google-account","list-a","restored"]),orphanedAt="2026-09-23T10:00:00.000Z#old";
+  let releaseTasks,startTasks;
+  const tasksStarted=new Promise(resolve=>{startTasks=resolve;});
+  const tasksGate=new Promise(resolve=>{releaseTasks=resolve;});
+  const db=new DatabaseSync(":memory:");schema(db);migrateTaskPlanning(db);
+  const graph=makeGateway({state:{connected:false,account:"account-a"}});
+  const google={connected:()=>true,cachedAccountId:()=>"google-account",accountId:async()=>"google-account",request:async(url)=>{
+    if(url.startsWith("/users/@me/lists"))return {items:[{id:"list-a",title:"Google darbai"}]};
+    if(url.startsWith("/lists/list-a/tasks")){startTasks();await tasksGate;return {items:[{id:"restored",title:"Sugrįžusi",status:"needsAction"}]};}
+    throw new Error(`Unexpected Google request: ${url}`);
+  }};
+  const service=createTaskService(db,graph,google);
+  db.prepare(`INSERT INTO task_plans(task_key,mirror_event_id,mirror_account_id,mirror_orphaned_at,mirror_orphan_title)
+    VALUES (?,'restored-event','account-a',?,'Sugrįžusi')`).run(key,orphanedAt);
+  graph.events.set("restored-event",{subject:"✓ Sugrįžusi"});
+  const listing=service.list();await tasksStarted;graph.state.connected=true;
+  let cleanupSettled=false;
+  const cleaning=service.cleanupMirror({task_key:key,orphaned_at:orphanedAt,mirror_event_id:"restored-event"}).finally(()=>{cleanupSettled=true;});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(cleanupSettled,false);assert.equal(graph.events.has("restored-event"),true);
+  releaseTasks();await listing;assert.deepEqual(await cleaning,{ok:true});
+  const plan=db.prepare("SELECT mirror_event_id,mirror_orphaned_at FROM task_plans WHERE task_key=?").get(key);
+  assert.equal(plan.mirror_orphaned_at,null);assert.equal(plan.mirror_event_id,"restored-event");assert.equal(graph.events.has("restored-event"),true);
+});
+
+test("each orphan episode gets a unique cleanup version",async()=>{
+  const key=JSON.stringify(["microsoft","account-a","list-a","repeat-orphan"]);let present=false;
+  const {db,service}=fixture({request:(url,method)=>{
+    if((url.startsWith("/me/todo/lists?")||url==="/me/todo/lists")&&method==="GET")return {value:[{id:"list-a",displayName:"Darbai",wellknownListName:"defaultList"}]};
+    if(url.startsWith("/me/todo/lists/list-a/tasks")&&method==="GET")return {value:present?[{id:"repeat-orphan",title:"Test",status:"notStarted",importance:"normal"}]:[]};
+    throw new Error(`Unexpected: ${method} ${url}`);
+  }});
+  seedMicrosoftTask(db,{key,mirrorEventId:"repeat-event",mirrorRequested:0,scheduledAt:null});
+  await service.list();const first=db.prepare("SELECT mirror_orphaned_at FROM task_plans WHERE task_key=?").get(key).mirror_orphaned_at;
+  present=true;await service.list();assert.equal(db.prepare("SELECT mirror_orphaned_at FROM task_plans WHERE task_key=?").get(key).mirror_orphaned_at,null);
+  present=false;await service.list();const second=db.prepare("SELECT mirror_orphaned_at FROM task_plans WHERE task_key=?").get(key).mirror_orphaned_at;
+  assert.match(first,/Z#[0-9a-f-]{36}$/);assert.match(second,/Z#[0-9a-f-]{36}$/);assert.notEqual(second,first);
 });
 
 // B1.2 test 4: task with mirror_requested!=0 is deleted externally → also gets orphan error

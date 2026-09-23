@@ -142,7 +142,8 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
 - [x] Šaltinyje ištrintų užduočių pasirenkamų Outlook blokų pasiekiamas, pakartojamas sutvarkymas nustatymuose.
 - [ ] Gyvų Google ir Microsoft paskyrų patikra pagal priėmimo scenarijus.
-- [ ] Fokusavimo sesijos su išsaugomu pradžios laiku, veikimo / pauzės būsena ir užduoties ryšiu. Dabartinis pradinis efektas gali ištrinti sesiją prieš įkeliant užduotis.
+- [x] Fokusavimo sesijos pradinis atkūrimas nebeištrina išsaugotos sesijos prieš įkeliant užduotis.
+- [ ] Fokusavimo sesijoje išsaugoti tikrą pradžios laiką ir veikimo / pauzės būseną; dabar išlieka užduoties ryšys ir likusios sekundės, o po perkrovimo sesija būna sustabdyta.
 
 Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti, perkelti, užbaigti ir atkurti; persikrovus bei pasikeitus duomenims šaltinyje rodoma teisinga būsena. Nepalaikomi laukai nepateikiami kaip tariamai sinchronizuojami.
 
@@ -151,7 +152,8 @@ Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti,
 - [x] Pačios programėlės prieigos apsauga, saugi sesija ir HTTPS diegimo instrukcija viešam / nuotoliniam naudojimui.
 - [x] OAuth PKCE / vienkartinė serverio operacija, konfigūracijos diagnostika, minimalūs leidimai, saugus žurnalų turinys.
 - [x] SQLite atsarginė kopija ir atkūrimas bei duomenų eksportas be žetonų. Pilnas penkių lentelių roundtrip, senesnės schemos migracija, žetonų pašalinimas eksporte ir klaidingos kopijos rollback patikrinti izoliuotoje SQLite bazėje.
-- [ ] Docker neprivilegijuotas procesas, versija, paleidimo vadovas ir sveikatos patikra. Įjungus `APP_PASSWORD`, dabartinis healthcheck gauna 401.
+- [x] Docker apraše naudojamas neprivilegijuotas procesas, versijos žyma, paleidimo komandos ir viešas minimalus `/api/health`, veikiantis su `APP_PASSWORD` ir neatskleidžiantis duomenų API.
+- [ ] Realiai sukurti ir paleisti Docker image; patikrinti sveikatą, versiją, neprivilegijuotą procesą ir duomenų tomo išlikimą.
 - [x] Izoliuoti ir prasmingi svarbiausi naršyklės scenarijai: mobilus ekranas, prieinamumas, konkreti DST diena, tinklo klaidos / rollback ir pilnas vietinių užduočių CRUD. Kiekvienas paleidimas naudoja laisvą prievadą bei unikalią laikiną DB ir ją pašalina.
 - [ ] Naudotojo patikra su tikromis paskyromis ir pašalintos rastos klaidos.
 
@@ -167,8 +169,9 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P1 — kalendoriaus įvykio tapatybė.** Bendras raktas apima tiekėją, prisijungimą, kalendorių ir įvykį. UI atnaujina tik pasirinktą įrašą; PATCH ir DELETE privalo pateikti kalendorių, prisijungimą bei versiją ir naudoja to kalendoriaus kelią. Vienodi ID skirtinguose Google / Outlook kalendoriuose patikrinti integraciniais testais.
 - [x] **Outlook bloko rodymo susiejimas.** Serveris susieja Graph įvykį tik pagal dabartinę Microsoft paskyrą, pirminį kalendorių, įvykio ID ir kuriant išsaugotą `transactionId`; neatitinkantis to paties ID įvykis kitame kalendoriuje lieka matomas. UI bloką sutraukia į užduoties planą tik kai sutampa dabartinis laikas, trukmė, pavadinimas ir saugios bloko savybės.
 - [x] **P1 — našlaičių Outlook blokų valymas.** Ištrintų šaltinio užduočių susieti blokai patenka į pasiekiamą, pakartojamą valymo eilę.
-- [ ] **P1 — produkto paviršius.** Pridėti Microsoft kartojimo UI; žingsnius perkelti į bendrą saugų adapterį; užbaigti Google `parent` / `previous`; pataisyti fokusavimo sesijos laiką ir būseną.
-- [ ] **P1 — diegimas.** Viešas minimalus health endpoint neturi apeiti jokių duomenų API ir turi veikti su `APP_PASSWORD`; Docker image realiai paleidžiamas bei patikrinamas.
+- [ ] **P1 — produkto paviršius.** Pridėti Microsoft kartojimo UI; žingsnius perkelti į bendrą saugų adapterį; užbaigti Google `parent` / `previous`; išsaugoti tikrą fokusavimo pradžios laiką ir veikimo / pauzės būseną.
+- [x] **P1 — diegimo health.** Viešas minimalus `/api/health` neapeina duomenų API ir veikia su `APP_PASSWORD`; Docker ir Playwright sveikatos patikros naudoja šį maršrutą.
+- [ ] **P1 — Docker priėmimas.** Realiai sukurti ir paleisti image; patikrinti sveikatą, versiją, neprivilegijuotą procesą ir duomenų tomo išlikimą.
 - [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo ir RSVP spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
 
 ## Darbo eiga ir ribos
@@ -189,7 +192,7 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 
 - Tik sėkmingai atnaujintas tiekėjo sąrašas gali pažymėti dingusios užduoties planą našlaičiu. Eilėje išsaugoma stabili valymo versija, paskutinis pavadinimas, Outlook įvykio tapatybė ir jį sukūrusios Microsoft paskyros ryšys; šaltinyje vėl atsiradusi užduotis iš eilės pašalinama.
 - Nustatymuose rodoma pasiekiama valymo eilė. Nuotolinis blokas trinamas tik prisijungus prie tos pačios Microsoft paskyros; neaiškus sukūrimas pirmiausia saugiai atkuriamas pagal išsaugotą `transactionId`, o 404 laikomas jau pasiektu rezultatu. Klaida palieka įrašą pakartojimui, pasikeitusi eilės versija atmetama, pakartotas jau įvykdytas prašymas yra idempotentiškas. Jei nuotolinis blokas negalėjo būti sukurtas, vietinis našlaitis išvalomas be paskyros.
-- Patikra: `typecheck`, 187/187 vienetiniai / integraciniai testai, produkcinis build ir 23/23 izoliuoti Playwright scenarijai. Patikrintos migracijos, atsarginės kopijos, same-origin API, pašalintas visas tiekėjo sąrašas, svetima paskyra, 404 ir laikina trynimo klaida. Gyva Graph paskyra šiame žingsnyje nepatikrinta.
+- Patikra: `typecheck`, 190/190 vienetinių / integracinių testų, produkcinis build ir 23/23 izoliuoti Playwright scenarijai. Patikrintos migracijos, atsarginės kopijos, same-origin API, pašalintas visas tiekėjo sąrašas, atominis rollback, Google užduoties atkūrimo lenktynė, unikali valymo versija, svetima paskyra, 404 ir laikina trynimo klaida. Gyva Graph paskyra šiame žingsnyje nepatikrinta.
 
 ### 2026-09-15 tęsinio patikra
 
@@ -322,7 +325,7 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 
 ### 2026-09-22 F6 (dalinai) — našlaičių Outlook blokų valymas, health endpoint, focus sesija
 
-- `task_plans`: nauji stulpeliai `mirror_orphaned_at` ir `mirror_orphan_title` (su migracija ir `ALTER TABLE` idempotenčiai). Orphan auto-aiškinama, kai šaltinio užduotis vėl matoma refresh metu.
+- `task_plans`: nauji stulpeliai `mirror_orphaned_at` ir `mirror_orphan_title` (su migracija ir `ALTER TABLE` idempotenčiai). Našlaitis automatiškai išvalomas, kai šaltinio užduotis vėl matoma atnaujinimo metu.
 - `task-service.ts`: `mirrorCleanups()` grąžina sąrašą orphan planų; `cleanupMirror()` saugiai pašalina Outlook įvykį (atkuria nebaigtas kūrimo operacijas per `mirror_create_payload`) ir tada pašalina plan eilutę. Stale snapshot apsauga per 409.
 - `/api/tasks/mirror-cleanup` (POST): `assertSameOrigin` + sesijos tikrinimas; 409 kai snapshot pasikeičia tarp GET ir POST.
 - `/api/tasks?envelope=1` dabar grąžina `cleanups[]` masyvą kartu su `items` ir `lists`.
@@ -331,7 +334,7 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 - `/api/health` (GET, viešas, be autentifikacijos): grąžina `{ok:true,version}` — Docker HEALTHCHECK veikia net kai `APP_PASSWORD` nustatytas. `proxy.ts` leidžia `/api/health` be sesijos. Dockerfile ir docker-compose perjungti nuo `/api/config` prie `/api/health`. Playwright webServer readiness probe taip pat perjungtas.
 - Focus sesijos race condition pataisa: `localStorage.removeItem("focus-session")` buvo iškviečiamas pradiniam render metu prieš užkraunant užduotis ir prieš paleidžiant restoration effect. Dabar saugoma/ištrinama tik po `restoredFocus.current = true`.
 - `tests/calendar-smoke.mjs` pataisa: `meeting` PATCH siuntė tą patį laiką → `timeChanged=false` → 200 vietoj 409. Pataisyta siųsti +30 min. laiko poslinkį.
-- 187 vienetiniai + 23 naršyklės testai praeina. TypeScript ir produkcinis build švarūs.
+- 190 vienetinių + 23 naršyklės testai praeina. TypeScript ir produkcinis build švarūs.
 - Ribos: gyvas Graph Outlook bloko šalinimas nepatikrintas su tikra paskyra. Microsoft kartojimo UI, Google hierarchija/eiliškumas, RSVP veiksmas ir detalaus įvykio redagavimo spragos lieka.
 
 Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, produkciniu build ir susijusiu naršyklės scenarijumi. Šio failo būsenos atnaujinamos pagal įrodymus. Jautrūs raktai, žetonai ir naudotojo SQLite duomenys nepatenka į planą, žurnalus ar versijų istoriją.
