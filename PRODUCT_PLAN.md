@@ -136,7 +136,7 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [x] Sukurti, redaguoti, užbaigti, atkurti ir ištrinti visų trijų šaltinių užduotis; pastabos, datos, vietiniai projektai / žymos ir trukmė (sintetinės API patikra).
 - [x] Microsoft svarba ir atskiras priminimo įjungimas, laiko keitimas bei išjungimas su versijos / paskyros patikra (imitacinė API).
 - [x] Microsoft kartojimo paslauga, API ir naudotojo sąsaja paprastoms `noEnd` taisyklėms su versijos / paskyros patikra, konflikto bei tik skaitymo būsenomis ir imitaciniu naršyklės testu.
-- [ ] Žingsnių adapterio paskyros / sąrašo / versijos / puslapiavimo apsauga. „My Day” nėra viešos Graph sinchronizacijos API ir neturi būti pateikiama kaip sinchronizuojama funkcija.
+- [x] Microsoft žingsnių adapterio paskyros / sąrašo / versijos / puslapiavimo apsauga, autoritetingi mutacijų rezultatai ir pasiekiamas konflikto atnaujinimas. „My Day” nėra viešos Graph sinchronizacijos API ir nėra pateikiama kaip sinchronizuojama funkcija.
 - [x] Google užduočių ir pavaldžių užduočių skaitymas bei bendras planavimas; papildomas Tasks OAuth leidimas ir pakartotinio sutikimo eiga (imitacinė patikra).
 - [ ] Google hierarchijos ir eilės tvarkos keitimas. Perkėlimas tarp sąrašų jau saugiai perkelia vietinį planą ir Outlook ryšį į naują tapatybės raktą, tačiau dar nenaudoja `parent` / `previous` hierarchijai ir eiliškumui valdyti.
 - [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
@@ -169,7 +169,7 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P1 — kalendoriaus įvykio tapatybė.** Bendras raktas apima tiekėją, prisijungimą, kalendorių ir įvykį. UI atnaujina tik pasirinktą įrašą; PATCH ir DELETE privalo pateikti kalendorių, prisijungimą bei versiją ir naudoja to kalendoriaus kelią. Vienodi ID skirtinguose Google / Outlook kalendoriuose patikrinti integraciniais testais.
 - [x] **Outlook bloko rodymo susiejimas.** Serveris susieja Graph įvykį tik pagal dabartinę Microsoft paskyrą, pirminį kalendorių, įvykio ID ir kuriant išsaugotą `transactionId`; neatitinkantis to paties ID įvykis kitame kalendoriuje lieka matomas. UI bloką sutraukia į užduoties planą tik kai sutampa dabartinis laikas, trukmė, pavadinimas ir saugios bloko savybės.
 - [x] **P1 — našlaičių Outlook blokų valymas.** Ištrintų šaltinio užduočių susieti blokai patenka į pasiekiamą, pakartojamą valymo eilę.
-- [ ] **P1 — produkto paviršius.** Žingsnius perkelti į bendrą saugų adapterį; užbaigti Google `parent` / `previous`; išsaugoti tikrą fokusavimo pradžios laiką ir veikimo / pauzės būseną.
+- [ ] **P1 — produkto paviršius.** Užbaigti Google `parent` / `previous`; išsaugoti tikrą fokusavimo pradžios laiką ir veikimo / pauzės būseną.
 - [x] **P1 — diegimo health.** Viešas minimalus `/api/health` neapeina duomenų API ir veikia su `APP_PASSWORD`; Docker ir Playwright sveikatos patikros naudoja šį maršrutą.
 - [ ] **P1 — Docker priėmimas.** Realiai sukurti ir paleisti image; patikrinti sveikatą, versiją, neprivilegijuotą procesą ir duomenų tomo išlikimą.
 - [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo ir RSVP spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
@@ -259,10 +259,10 @@ Visi neredaguojami tipai gauna aiškų `readOnlyReason` ir nuorodą į original�
 
 ### 2026-09-22 E etapo tęsinys
 
-- E5 (žingsniai): `GET/POST/PATCH/DELETE /api/tasks/steps` apgaubia Microsoft `checklistItems` API. `TaskSteps` komponentas `TaskEditor` leniviausiai įkrauna ir rodo žingsnių sąrašą su toggle, pridėjimu ir šalinimu — rodoma tik Microsoft užduotims. „My Day" — nėra viešos Graph sinchronizacijos API; tai žymėta galimybių lentelėje.
+- E5 (žingsniai): `GET/POST/PATCH/DELETE /api/tasks/steps` per bendrą užduočių adapterį apgaubia Microsoft `checklistItems` API. `TaskSteps` komponentas `TaskEditor` tingiai įkrauna ir rodo žingsnių sąrašą su būsenos keitimu, pridėjimu ir šalinimu — rodoma tik Microsoft užduotims. „My Day" nėra viešos Graph sinchronizacijos API; tai žymėta galimybių lentelėje.
 - E7 (perkelti tarp sąrašų): `POST /api/tasks/move` iškviečia Google Tasks `move` API su `destinationTasklist`. `TaskEditor` rodo „Perkelti į sąrašą" išskleidžiamąjį meniu Google užduotims, kai yra ≥2 rašytini sąrašai.
 - E8 (paskyrų patikra + blokų tvarkymas): `load()` aptinka `HttpError` 401 atmestuose įvykių gavimo rezultatuose ir rodo specifinį „sesija baigėsi — atidaryk nustatymus" pranešimą. Pasenusių Outlook blokų šalinimas jau buvo įgyvendintas per `syncMirror` užduoties pašalinimo kelyje.
-- TypeScript, produkcinis build ir 141/141 testai praėjo tuo metu. 2026-09-22 auditas patikslino, kad E etapas nėra baigtas: kartojimo API neturi UI, žingsnių maršrutas neturi bendrų tapatybės apsaugų, Google perkėlimas nemigruoja vietinio plano, našlaičių blokai nevalomi, o fokusavimo sesija neišlieka teisingai.
+- TypeScript, produkcinis build ir 141/141 testai praėjo tuo metu. 2026-09-22 auditas aptiko kartojimo UI, žingsnių tapatybės, Google plano migravimo, našlaičių blokų ir fokusavimo sesijos spragas; vėlesni įrašai šiame plane žymi jų taisymus ir likusias ribas.
 
 ### 2026-09-22 F1 — programėlės prieigos apsauga
 
@@ -388,6 +388,14 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - Naršyklės testas patikrina savaitinės taisyklės išsaugojimo užklausą ir saugo nuo kartojimo valdiklio dubliavimo keičiantis asinchroninei būsenai.
 - Patikra: `npm run typecheck`, 190/190 `npm test`, `npm run build` ir 24/24 `npm run test:e2e` praėjo.
 - Ribos: tikros Graph paskyros `If-Match` elgsena dar nepatvirtinta; sudėtingos taisyklės ir baigtinis kartojimas sąmoningai lieka tik skaitymui.
+
+### 2026-09-24 — Microsoft To Do žingsnių adapterio apsauga
+
+- Žingsnių GET/POST/PATCH/DELETE perkelti į bendrą užduočių adapterį. Kiekviena operacija iš naujo patvirtina Microsoft paskyrą, sąrašą ir užduotį, naudoja viso užduoties bei checklist snapshot versiją ir serializuojama su kitomis Microsoft To Do operacijomis.
+- Žingsnių sąrašas seka tik to paties Graph endpoint saugias `@odata.nextLink` nuorodas, atmeta pasikartojančius ID, o sukūrimą, pakeitimą ir pašalinimą patvirtina nauju tiekėjo snapshot.
+- Sąsaja siunčia pilną tapatybės raktą ir versiją, rodo konfliktus, tik skaitymo bei ryšio klaidas, leidžia aiškiai atnaujinti būseną ir blokuoja lygiagrečius užduoties, priminimo ar kartojimo pakeitimus.
+- Patikra: `npm run typecheck`, 195/195 `npm test`, `npm run build` ir 25/25 `npm run test:e2e` praėjo.
+- Ribos: gyvas Microsoft Graph checklist puslapiavimas ir pakeitimų nuoseklumas su tikra paskyra dar nepatvirtinti. „My Day” sąmoningai nerodoma kaip sinchronizuojama funkcija, nes viešos Graph API jai nėra.
 
 ## 2026-09-21 — D2 įvykių redagavimas ir C7 klaviatūros perkėlimas
 

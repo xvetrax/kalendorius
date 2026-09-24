@@ -2,7 +2,7 @@
 
 import { createContext, DragEvent, FormEvent, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {createPortal} from "react-dom";
-import type { MirrorCleanup, Task, TaskList } from "@/lib/task-service";
+import type { MirrorCleanup, Task, TaskList, TaskStep } from "@/lib/task-service";
 import type { CalendarEvent as CalEvent } from "@/lib/calendar-events";
 import { visibleCalendarEvents } from "@/lib/calendar-mirrors";
 import { EventActions, EventBlock } from "@/app/calendar-event";
@@ -471,48 +471,61 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
 }
 
 
-type TaskStep={id:string;displayName:string;isChecked:boolean};
-function TaskSteps({task}:{task:Task}) {
-  const [steps,setSteps]=useState<TaskStep[]|null>(null),[newStep,setNewStep]=useState(""),[busy,setBusy]=useState(false);
-  const listId=task.list_id,taskId=String(task.id);
-  useEffect(()=>{
-    if (!listId||!taskId) return;
-    fetch(`/api/tasks/steps?listId=${encodeURIComponent(listId)}&taskId=${encodeURIComponent(taskId)}`).then(r=>r.json()).then(d=>setSteps(d.items||[])).catch(()=>setSteps([]));
-  },[listId,taskId]);
-  async function toggle(step:TaskStep) {
-    setBusy(true);
-    const next={...step,isChecked:!step.isChecked};
-    setSteps(prev=>prev?.map(s=>s.id===step.id?next:s)||null);
-    try {await fetch("/api/tasks/steps",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({listId,taskId,stepId:step.id,isChecked:next.isChecked})});}
-    catch {setSteps(prev=>prev?.map(s=>s.id===step.id?step:s)||null);}
-    finally {setBusy(false);}
+type StepSnapshot={items:TaskStep[];version:string;readonly_reason?:string};
+class StepRequestError extends Error{constructor(message:string,readonly status:number){super(message);}}
+function stepReference(task:Task){if(!task.account_id||!task.list_id)throw new Error("Trūksta Microsoft To Do užduoties nuorodos. Atnaujink užduočių sąrašą.");return {source:"microsoft" as const,account_id:task.account_id,list_id:task.list_id,id:String(task.id)};}
+async function stepResponse(response:Response):Promise<StepSnapshot>{
+  const body:unknown=await response.json().catch(()=>({}));
+  const fallback="Žingsnių atnaujinti nepavyko.";
+  if(!response.ok)throw new StepRequestError(body&&typeof body==="object"&&"error" in body&&typeof body.error==="string"?body.error:fallback,response.status);
+  if(!body||typeof body!=="object"||!("items" in body)||!Array.isArray(body.items)||!("version" in body)||typeof body.version!=="string")throw new Error("Gautas netinkamas Microsoft To Do žingsnių atsakymas.");
+  const items=body.items.map(value=>{
+    if(!value||typeof value!=="object"||!("id" in value)||typeof value.id!=="string"||!("displayName" in value)||typeof value.displayName!=="string"||!("isChecked" in value)||typeof value.isChecked!=="boolean")throw new Error("Gautas netinkamas Microsoft To Do žingsnis.");
+    return value as TaskStep;
+  });
+  return {...body,items} as StepSnapshot;
+}
+function TaskSteps({task,disabled,onBusyChange}:{task:Task;disabled:boolean;onBusyChange:(busy:boolean)=>void}) {
+  const mounted=useRef(false),generation=useRef(0);
+  const [snapshot,setSnapshot]=useState<StepSnapshot|null>(null),[newStep,setNewStep]=useState(""),[busy,setBusy]=useState(false),[fresh,setFresh]=useState(false),[error,setError]=useState(""),[status,setStatus]=useState("");
+  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;generation.current+=1;onBusyChange(false);};},[onBusyChange]);
+  function current(value:number){return mounted.current&&generation.current===value;}
+  function begin(){const value=++generation.current;setBusy(true);onBusyChange(true);return value;}
+  function finish(value:number){if(!current(value))return;setBusy(false);onBusyChange(false);}
+  function apply(next:StepSnapshot){setSnapshot(next);setFresh(true);}
+  async function refresh(){
+    const request=begin();setError("");setStatus("");
+    try{const next=await stepResponse(await fetch(`/api/tasks/steps?${new URLSearchParams(stepReference(task))}`));if(current(request))apply(next);}
+    catch(caught){if(current(request)){setFresh(false);setError(caught instanceof Error?caught.message:"Žingsnių atnaujinti nepavyko.");}}
+    finally{finish(request);}
   }
-  async function addStep() {
-    const name=newStep.trim();if(!name)return;setBusy(true);
-    try {
-      const res=await fetch("/api/tasks/steps",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({listId,taskId,displayName:name})});
-      const created=await res.json();if(res.ok) {setSteps(prev=>[...(prev||[]),created]);setNewStep("");}
-    } finally {setBusy(false);}
+  useEffect(()=>{void refresh();/* eslint-disable-next-line react-hooks/exhaustive-deps */},[task.key]);
+  async function mutate(method:"POST"|"PATCH"|"DELETE",changes:Record<string,unknown>,success:string){
+    if(!snapshot||disabled||busy||!fresh||snapshot.readonly_reason||task.readonly_reason)return false;
+    const request=begin();setError("");setStatus("");
+    try{
+      const next=await stepResponse(await fetch("/api/tasks/steps",{method,headers:{"content-type":"application/json"},body:JSON.stringify({...stepReference(task),version:snapshot.version,...changes})}));
+      if(current(request)){apply(next);setStatus(success);return true;}
+    }catch(caught){if(current(request)){setFresh(false);setError(caught instanceof StepRequestError&&caught.status===409?"Žingsniai pasikeitė Microsoft To Do. Spausk „Atnaujinti“ ir bandyk dar kartą.":caught instanceof Error?caught.message:"Žingsnių pakeisti nepavyko.");}}
+    finally{finish(request);}
+    return false;
   }
-  async function deleteStep(step:TaskStep) {
-    setBusy(true);setSteps(prev=>prev?.filter(s=>s.id!==step.id)||null);
-    try {await fetch(`/api/tasks/steps?listId=${encodeURIComponent(listId!)}&taskId=${encodeURIComponent(taskId)}&stepId=${encodeURIComponent(step.id)}`,{method:"DELETE"});}
-    catch {setSteps(prev=>[...(prev||[]),step]);}
-    finally {setBusy(false);}
-  }
-  if (!listId) return null;
-  return <div className="taskSteps"><span className="fieldLabel">Žingsniai</span>
-    {steps===null ? <p className="formHint">Kraunama…</p> : <>
-      {steps.length>0 && <ul className="stepList">{steps.map(s=><li key={s.id} className={s.isChecked?"done":""}><label><input type="checkbox" checked={s.isChecked} disabled={busy} onChange={()=>void toggle(s)}/><span>{s.displayName}</span></label><button type="button" className="removeAttendee" disabled={busy} onClick={()=>void deleteStep(s)}>×</button></li>)}</ul>}
-      <div className="addAttendee"><input type="text" value={newStep} onChange={e=>setNewStep(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();void addStep();}}} placeholder="Naujas žingsnis…" disabled={busy}/><button type="button" onClick={()=>void addStep()} disabled={busy||!newStep.trim()}>Pridėti</button></div>
+  async function addStep(){const displayName=newStep.trim();if(!displayName)return;if(await mutate("POST",{displayName},"Žingsnis pridėtas."))setNewStep("");}
+  const readonlyReason=snapshot?.readonly_reason||task.readonly_reason,mutationDisabled=disabled||busy||!fresh||!snapshot||Boolean(readonlyReason);
+  if(!task.list_id)return null;
+  return <section className="taskSteps" aria-labelledby="task-steps-title"><div className="taskStepsHeading"><span id="task-steps-title" className="fieldLabel">Žingsniai</span><button type="button" disabled={disabled||busy} onClick={()=>void refresh()}>Atnaujinti</button></div>
+    {readonlyReason&&<p className="formHint">{readonlyReason}</p>}{error&&<p role="alert" className="formError">{error}</p>}{status&&<p role="status" className="reminderSuccess">{status}</p>}
+    {!snapshot ? <p className="formHint">Kraunama…</p> : <>
+      {snapshot.items.length>0&&<ul className="stepList">{snapshot.items.map(step=><li key={step.id} className={step.isChecked?"done":""}><label><input type="checkbox" checked={step.isChecked} disabled={mutationDisabled} onChange={()=>void mutate("PATCH",{step_id:step.id,isChecked:!step.isChecked},"Žingsnis atnaujintas.")}/><span>{step.displayName}</span></label><button type="button" aria-label={`Pašalinti žingsnį „${step.displayName}“`} className="removeAttendee" disabled={mutationDisabled} onClick={()=>void mutate("DELETE",{step_id:step.id},"Žingsnis pašalintas.")}>×</button></li>)}</ul>}
+      <div className="addAttendee"><input type="text" maxLength={1000} value={newStep} onChange={event=>{setNewStep(event.target.value);setStatus("");}} onKeyDown={event=>{if(event.key==="Enter"){event.preventDefault();void addStep();}}} placeholder="Naujas žingsnis…" disabled={mutationDisabled}/><button type="button" onClick={()=>void addStep()} disabled={mutationDisabled||!newStep.trim()}>Pridėti</button></div>
     </>}
-  </div>;
+  </section>;
 }
 function TaskEditor({ task, outlook, taskLists, onClose, onSave, onDelete, onMoved }: {task:Task;outlook:boolean;taskLists:TaskList[];onClose:()=>void;onDelete:()=>Promise<void>;onSave:(patch:Record<string,unknown>)=>Promise<void>;onMoved?:(task:Task)=>void}) {
-  const [saving,setSaving] = useState(false); const [reminderBusy,setReminderBusy] = useState(false); const [recurrenceBusy,setRecurrenceBusy] = useState(false); const [error,setError] = useState("");
+  const [saving,setSaving] = useState(false); const [stepsBusy,setStepsBusy] = useState(false); const [reminderBusy,setReminderBusy] = useState(false); const [recurrenceBusy,setRecurrenceBusy] = useState(false); const [error,setError] = useState("");
   const [moveTarget,setMoveTarget] = useState(task.list_id||"");
   const [moving,setMoving] = useState(false);
-  const providerBusy=reminderBusy||recurrenceBusy;
+  const providerBusy=stepsBusy||reminderBusy||recurrenceBusy;
   const googleLists=task.source==="google" ? taskLists.filter(l=>l.source==="google"&&l.account_id===task.account_id&&l.writable&&!l.stale) : [];
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (saving || moving || providerBusy) return; const data = new FormData(event.currentTarget); setSaving(true); setError("");
@@ -565,10 +578,10 @@ function TaskEditor({ task, outlook, taskLists, onClose, onSave, onDelete, onMov
       <label className="onlineSwitch"><input name="mirror" type="checkbox" disabled={!outlook && !task.mirror_requested} defaultChecked={Boolean(task.mirror_requested)}/><i/>Papildomas Outlook blokas · laisvas laikas</label>
       <div className="modalActions">{task.scheduled_at && <button type="button" disabled={saving || moving || providerBusy} onClick={unschedule}>Pašalinti planavimą</button>}<button className="newButton" disabled={saving || moving || providerBusy}>{saving ? "Saugoma…" : "Išsaugoti"}</button></div>
     </form>
-    {task.source === "microsoft" && <TaskSteps task={task}/>}
-    {task.source === "microsoft" && <MicrosoftTaskRecurrence task={task} disabled={saving||reminderBusy} onBusyChange={setRecurrenceBusy}/>}
+    {task.source === "microsoft" && <TaskSteps task={task} disabled={saving||reminderBusy||recurrenceBusy} onBusyChange={setStepsBusy}/>}
+    {task.source === "microsoft" && <MicrosoftTaskRecurrence task={task} disabled={saving||stepsBusy||reminderBusy} onBusyChange={setRecurrenceBusy}/>}
     {task.source === "microsoft" && (
-      <MicrosoftTaskReminder task={task} disabled={saving||recurrenceBusy} onBusyChange={setReminderBusy}/>
+      <MicrosoftTaskReminder task={task} disabled={saving||stepsBusy||recurrenceBusy} onBusyChange={setReminderBusy}/>
     )}
     {googleLists.length>1 && <div className="moveToList"><span className="fieldLabel">Perkelti į sąrašą</span><div className="addAttendee"><select value={moveTarget} onChange={e=>setMoveTarget(e.target.value)} disabled={saving||moving||providerBusy}>{googleLists.map(l=><option key={l.key} value={l.list_id}>{l.name}</option>)}</select><button type="button" disabled={saving||moving||providerBusy||moveTarget===task.list_id} onClick={()=>void moveToList()}>{moving?"Keliama…":"Perkelti"}</button></div></div>}
     <div className="modalActions"><button type="button" disabled={saving || moving || providerBusy || Boolean(task.readonly_reason)} onClick={async()=>{if(saving || moving || providerBusy)return;if(!window.confirm(`Ištrinti „${task.title}“${task.source === "local" ? "" : " ir jos šaltinyje"}?`))return;setSaving(true);setError("");try{await onDelete();}catch(error){setError(error instanceof Error ? error.message : "Nepavyko ištrinti.");}finally{setSaving(false);}}}>Ištrinti užduotį</button></div>

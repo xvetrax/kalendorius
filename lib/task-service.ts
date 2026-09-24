@@ -15,6 +15,7 @@ export type Task = {
   tags: string; energy: string; schedule_version: number; legacy_schedule: number;
   mirror_requested: number; mirror_event_id: string | null; mirror_error: string | null; stale?: boolean;
 };
+export type TaskStep = { id:string; displayName:string; isChecked:boolean };
 export type MirrorCleanup = {
   task_key:string; source:RemoteTaskSource; title:string; mirror_event_id:string|null;
   mirror_account_id:string|null; orphaned_at:string; can_retry:boolean;
@@ -437,8 +438,9 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     dateOnly(parts[1]);
     return dateValue(value,true)!;
   }
-  async function currentMicrosoftTask(input: Input, feature: "priminimai" | "kartojimas") {
-    if (input.source !== "microsoft") throw new TaskError(`${feature === "priminimai" ? "Priminimai palaikomi" : "Kartojimas palaikomas"} tik Microsoft To Do užduotims.`);
+  async function currentMicrosoftTask(input: Input, feature: "priminimai" | "kartojimas" | "žingsniai") {
+    const label=feature === "priminimai" ? "Priminimai palaikomi" : feature === "kartojimas" ? "Kartojimas palaikomas" : "Žingsniai palaikomi";
+    if (input.source !== "microsoft") throw new TaskError(`${label} tik Microsoft To Do užduotims.`);
     const id=identifier(input.id),list=await currentList(input);
     const path=`/me/todo/lists/${encodeURIComponent(list.list_id)}/tasks/${encodeURIComponent(id)}`;
     const raw=await microsoft.request(path);
@@ -496,6 +498,64 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     if (!result.supported || !sameTaskRecurrence(result.recurrence,desired)) throw new TaskError("Microsoft nepatvirtino pasirinktos kartojimo taisyklės. Atnaujink duomenis prieš kartodamas.",502);
     // Recurrence is provider-owned and never changes local planning or Outlook mirrors.
     return result;
+  }
+  function taskStep(raw:any):TaskStep {
+    return {id:identifier(raw?.id),displayName:typeof raw?.displayName === "string" ? raw.displayName : "",isChecked:raw?.isChecked === true};
+  }
+  async function stepsSnapshot(input:Input) {
+    const {raw,list,path}=await currentMicrosoftTask(input,"žingsniai"),stepPath=path+"/checklistItems";
+    const values=await pages("microsoft",stepPath,"");
+    requireAccount(list.account_id);
+    const items:TaskStep[]=[],seen=new Set<string>();
+    for(const value of values){const item=taskStep(value);if(seen.has(item.id))throw new TaskError("Microsoft grąžino pasikartojantį žingsnį. Atnaujink duomenis.",502);seen.add(item.id);items.push(item);}
+    const readonlyReason=!list.writable ? "Šio specialaus sąrašo žingsnių keisti negalima."
+      : raw?.status === "completed" ? "Užbaigtos užduoties žingsnius keisk atkūręs užduotį." : undefined;
+    return {items,version:fingerprint({key:remoteKey(list.account_id,list.list_id,identifier(raw?.id)),task:raw,items}),
+      ...(readonlyReason ? {readonly_reason:readonlyReason} : {}),list,path:stepPath};
+  }
+  function stepMutation(snapshot:Awaited<ReturnType<typeof stepsSnapshot>>,input:Input) {
+    if(typeof input.version!=="string"||!input.version)throw new TaskError("Pirmiausia atnaujink žingsnius.");
+    if(snapshot.readonly_reason)throw new TaskError(snapshot.readonly_reason,403);
+    if(input.version!==snapshot.version)throw new TaskError("Microsoft užduotis arba jos žingsniai jau pakeisti. Atnaujink žingsnius.",409);
+  }
+  function stepName(value:unknown) {
+    if(typeof value!=="string"||!value.trim()||value.length>1000)throw new TaskError("Įvesk žingsnio pavadinimą (iki 1000 simbolių).");
+    return value.trim();
+  }
+  function publicSteps(snapshot:Awaited<ReturnType<typeof stepsSnapshot>>) {
+    return {items:snapshot.items,version:snapshot.version,...(snapshot.readonly_reason?{readonly_reason:snapshot.readonly_reason}:{})};
+  }
+  async function readSteps(input:Input){return publicSteps(await stepsSnapshot(input));}
+  async function createStep(input:Input) {
+    const name=stepName(input.displayName),current=await stepsSnapshot(input);stepMutation(current,input);requireAccount(current.list.account_id);
+    const created=taskStep(await microsoft.request(current.path,{method:"POST",body:JSON.stringify({displayName:name,isChecked:false})}));
+    requireAccount(current.list.account_id);
+    if(created.displayName!==name||created.isChecked)throw new TaskError("Naujo žingsnio rezultato patvirtinti nepavyko. Atnaujink žingsnius.",502);
+    const result=await stepsSnapshot(input);
+    if(!result.items.some(item=>item.id===created.id&&item.displayName===name&&!item.isChecked))throw new TaskError("Naujo žingsnio patvirtinti nepavyko. Atnaujink žingsnius.",502);
+    return publicSteps(result);
+  }
+  async function updateStep(input:Input) {
+    const id=identifier(input.step_id),patch:Record<string,unknown>={};
+    if(input.isChecked!==undefined){if(typeof input.isChecked!=="boolean")throw new TaskError("Neteisinga žingsnio būsena.");patch.isChecked=input.isChecked;}
+    if(input.displayName!==undefined)patch.displayName=stepName(input.displayName);
+    if(!Object.keys(patch).length)throw new TaskError("Nėra žingsnio pakeitimų.");
+    const current=await stepsSnapshot(input);stepMutation(current,input);
+    const existing=current.items.find(item=>item.id===id);if(!existing)throw new TaskError("Žingsnis neberastas. Atnaujink duomenis.",404);
+    requireAccount(current.list.account_id);
+    const updated=taskStep(await microsoft.request(`${current.path}/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(patch)}));
+    requireAccount(current.list.account_id);
+    if(updated.id!==id||("isChecked" in patch&&updated.isChecked!==patch.isChecked)||("displayName" in patch&&updated.displayName!==patch.displayName))throw new TaskError("Žingsnio pakeitimo patvirtinti nepavyko. Atnaujink žingsnius.",502);
+    const result=await stepsSnapshot(input),confirmed=result.items.find(item=>item.id===id);
+    if(!confirmed||("isChecked" in patch&&confirmed.isChecked!==patch.isChecked)||("displayName" in patch&&confirmed.displayName!==patch.displayName))throw new TaskError("Žingsnio pakeitimo patvirtinti nepavyko. Atnaujink žingsnius.",502);
+    return publicSteps(result);
+  }
+  async function deleteStep(input:Input) {
+    const id=identifier(input.step_id),current=await stepsSnapshot(input);stepMutation(current,input);
+    if(!current.items.some(item=>item.id===id))throw new TaskError("Žingsnis neberastas. Atnaujink duomenis.",404);
+    requireAccount(current.list.account_id);await microsoft.request(`${current.path}/${encodeURIComponent(id)}`,{method:"DELETE"});requireAccount(current.list.account_id);
+    const result=await stepsSnapshot(input);if(result.items.some(item=>item.id===id))throw new TaskError("Žingsnio pašalinimo patvirtinti nepavyko. Atnaujink žingsnius.",502);
+    return publicSteps(result);
   }
   async function listProvider(source: RemoteTaskSource) {
     const items: Task[] = [], lists: TaskList[] = [], warnings: string[] = [];
@@ -859,6 +919,8 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
   function mutation<T>(input: Input, operation: () => Promise<T>) {return input.source === "google" || input.source === "microsoft" ? serial("task-provider:" + input.source,operation) : operation();}
   return { list, listCatalog, readReminder:(input:Input)=>mutation(input,()=>readReminder(input)), updateReminder:(input:Input)=>mutation(input,()=>updateReminder(input)),
     readRecurrence:(input:Input)=>mutation(input,()=>readRecurrence(input)), updateRecurrence:(input:Input)=>mutation(input,()=>updateRecurrence(input)),
+    readSteps:(input:Input)=>mutation(input,()=>readSteps(input)),createStep:(input:Input)=>mutation(input,()=>createStep(input)),
+    updateStep:(input:Input)=>mutation(input,()=>updateStep(input)),deleteStep:(input:Input)=>mutation(input,()=>deleteStep(input)),
     createList:(input:Input)=>mutation(input,()=>createList(input)), renameList:(input:Input)=>mutation(input,()=>renameList(input)),
     previewListDeletion:(input:Input)=>mutation(input,()=>previewListDeletion(input)), deleteList:(input:Input)=>mutation(input,()=>deleteList(input)),
     create:(input:Input)=>mutation(input,()=>create(input)), update:(input:Input)=>mutation(input,()=>update(input)),

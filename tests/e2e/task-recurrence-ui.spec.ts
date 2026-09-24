@@ -7,7 +7,7 @@ test("Microsoft recurrence can be configured from the task editor",async({page})
   await page.route("**/api/tasks?envelope=1",route=>route.fulfill({json:{items:[task],warnings:[],lists:[],cleanups:[]}}));
   await page.route("**/api/microsoft/events**",route=>route.fulfill({json:{items:[]}}));
   await page.route("**/api/google/events**",route=>route.fulfill({json:{items:[]}}));
-  await page.route("**/api/tasks/steps**",route=>route.fulfill({json:{items:[]}}));
+  await page.route("**/api/tasks/steps**",route=>route.fulfill({json:{items:[],version:"steps-v1"}}));
   await page.route("**/api/tasks/reminder**",route=>route.fulfill({json:{enabled:false,at:null,source_time:null,version:"reminder-v1",recurring:false}}));
   await page.route("**/api/tasks/recurrence**",async route=>{
     if(route.request().method()==="PATCH"){
@@ -34,6 +34,6 @@ test("Microsoft recurrence can be configured from the task editor",async({page})
   await editor.getByLabel("Kartojimo intervalas").fill("3");
   await expect(editor.getByRole("status")).toHaveCount(0);
   await editor.getByLabel("Kartojimo pradžios diena").fill("");
-  await expect(editor.getByRole("alert")).toContainText("Patikrink kartojimo intervalą");
+  await expect(editor.getByRole("region",{name:"Microsoft To Do kartojimas"}).getByRole("alert")).toContainText("Patikrink kartojimo intervalą");
   await expect(editor.getByRole("button",{name:"Išsaugoti kartojimą"})).toBeDisabled();
 });

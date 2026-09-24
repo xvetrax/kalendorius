@@ -42,6 +42,25 @@ function taskApi(source, url, init) {
   if (!match) return Response.json({error: "Unknown fixture endpoint"}, {status: 404});
   const listId=decodeURIComponent(match[1]), map=taskMap(source,listId);
   if (!map) return Response.json({error: "Missing task list"}, {status: 404});
+  if(source === "microsoft"&&match[2]){
+    const checklist=match[2].match(/^([^/]+)\/checklistItems(?:\/([^/]+))?$/);
+    if(checklist){
+      const task=map.get(decodeURIComponent(checklist[1]));
+      if(!task)return Response.json({error:"Missing task"},{status:404});
+      const items=task.checklistItems||(task.checklistItems=[]),stepId=checklist[2]?decodeURIComponent(checklist[2]):null;
+      if(!stepId&&method==="GET")return Response.json({value:items.map(clone)});
+      if(!stepId&&method==="POST"){
+        const created={id:`step-${upstream.calls.length}`,displayName:String(body(init)?.displayName||""),isChecked:body(init)?.isChecked===true};
+        items.push(created);return taskResponse(created);
+      }
+      const index=items.findIndex(item=>item.id===stepId);
+      if(index<0)return Response.json({error:"Missing checklist item"},{status:404});
+      if(method==="GET")return taskResponse(items[index]);
+      if(method==="PATCH"){Object.assign(items[index],body(init));return taskResponse(items[index]);}
+      if(method==="DELETE"){items.splice(index,1);return new Response(null,{status:204});}
+      return Response.json({error:"Unsupported fixture operation"},{status:405});
+    }
+  }
   if (source === "google" && match[2]?.endsWith("/move") && method === "POST") {
     const id=decodeURIComponent(match[2].slice(0,-"/move".length)),task=map.get(id);
     const destinationId=url.searchParams.get("destinationTasklist"),destination=destinationId ? taskMap(source,destinationId) : undefined;
