@@ -153,7 +153,7 @@ Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti,
 - [x] OAuth PKCE / vienkartinė serverio operacija, konfigūracijos diagnostika, minimalūs leidimai, saugus žurnalų turinys.
 - [x] SQLite atsarginė kopija ir atkūrimas bei duomenų eksportas be žetonų. Pilnas penkių lentelių roundtrip, senesnės schemos migracija, žetonų pašalinimas eksporte ir klaidingos kopijos rollback patikrinti izoliuotoje SQLite bazėje.
 - [x] Docker apraše naudojamas neprivilegijuotas procesas, versijos žyma, paleidimo komandos ir viešas minimalus `/api/health`, veikiantis su `APP_PASSWORD` ir neatskleidžiantis duomenų API.
-- [ ] Realiai sukurti ir paleisti Docker image; patikrinti sveikatą, versiją, neprivilegijuotą procesą ir duomenų tomo išlikimą.
+- [x] Realiai sukurti ir paleisti Docker image; patikrinta sveikata, versija, neprivilegijuotas procesas ir duomenų tomo išlikimas.
 - [x] Izoliuoti ir prasmingi svarbiausi naršyklės scenarijai: mobilus ekranas, prieinamumas, konkreti DST diena, tinklo klaidos / rollback ir pilnas vietinių užduočių CRUD. Kiekvienas paleidimas naudoja laisvą prievadą bei unikalią laikiną DB ir ją pašalina.
 - [ ] Naudotojo patikra su tikromis paskyromis ir pašalintos rastos klaidos.
 
@@ -171,10 +171,16 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P1 — našlaičių Outlook blokų valymas.** Ištrintų šaltinio užduočių susieti blokai patenka į pasiekiamą, pakartojamą valymo eilę.
 - [x] **P1 — produkto paviršius.** Užbaigti Google `parent` / `previous` ir fokusavimo sesijos pradžios, veikimo bei pauzės išsaugojimą.
 - [x] **P1 — diegimo health.** Viešas minimalus `/api/health` neapeina duomenų API ir veikia su `APP_PASSWORD`; Docker ir Playwright sveikatos patikros naudoja šį maršrutą.
-- [ ] **P1 — Docker priėmimas.** Realiai sukurti ir paleisti image; patikrinti sveikatą, versiją, neprivilegijuotą procesą ir duomenų tomo išlikimą.
+- [x] **P1 — Docker priėmimas.** Realiai sukurtas ir paleistas image; patikrinta sveikata, versija, neprivilegijuotas procesas ir duomenų tomo išlikimas.
 - [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo ir RSVP spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
 
 ## Darbo eiga ir ribos
+
+### 2026-09-24 Docker priėmimas
+
+- Realus `linux/arm64` image sukurtas su `APP_VERSION=0.1.0` ir paleistas Docker Desktop. OCI žyma bei `/api/health` grąžino `0.1.0`, procesas veikė kaip `uid=100(planner)`, o įtaisytas Docker healthcheck pasiekė būseną `healthy`.
+- Priėmimo metu aptikta ir pataisyta paleidimo klaida: Docker įterptas konteinerio `HOSTNAME` vertė Next standalone serverį klausyti tik konteinerio hostname adresu, o Alpine `wget` naudojamas `localhost` kelias nepasiekė IPv4 serverio. Image dabar nustato `HOSTNAME=0.0.0.0`, o Dockerfile ir Compose healthcheck naudoja `127.0.0.1`.
+- Vardiniame `/app/data` tome per tikrą Tasks API sukurta vietinė užduotis. Pašalinus konteinerį ir sukūrus naują su tuo pačiu tomu, užduotis perskaityta su tuo pačiu `id=1`; taip pat atskirai patikrintas hosto ir konteinerio vidaus health kelias.
 
 ### 2026-09-24 fokusavimo sesijos išlikimas
 
