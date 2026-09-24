@@ -121,7 +121,7 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 
 - [x] Visų prieinamų kalendorių sąrašas, spalvos, rašymo teisės, skaitymo pasirinkimas ir pilnas puslapiavimas.
 - [ ] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė turi apimti kalendoriaus ID.
-- [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Esamų laiko įvykių redaktorius jau valdo matomumą, laisvo / užimto laiko būseną ir paprastą priminimą; liko esamo visos dienos įvykio bei laiko zonos redagavimas.
+- [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Esamų laiko įvykių redaktorius valdo matomumą, laisvo / užimto laiko būseną ir priminimą, o visos dienos redaktorius — pirmą bei paskutinę dieną; liko laiko zonos pasirinkimas ir konvertavimas tarp režimų.
 - [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. RSVP veiksmas patikrintas sintetiniais Google ir Microsoft tiekėjais.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
 - [ ] ETag / versijų konfliktai, išoriniai pakeitimai ir 401/403/429 apdorojami; dar reikia nedubliuojančio įvykių kūrimo po neaiškaus atsakymo ir gyvos Graph patikros.
@@ -439,3 +439,11 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - API priima tik kiekvieno tiekėjo palaikomas reikšmes, 0–40320 minučių intervalą ir pilną įvykio paskyros, kalendoriaus, ID bei versijos tapatybę. Sintetinė API patikra perskaito išsaugotą rezultatą iš naujo.
 - Patikra: `npm run typecheck`, 215/215 `npm test`, `npm run build`, 3/3 tiksliniai ir 31/31 visi `npm run test:e2e` scenarijai praėjo.
 - Ribos: tikros Google ir Microsoft paskyros šiame žingsnyje nekeistos. Esamo visos dienos įvykio ir laiko zonos redagavimas tebėra neįgyvendintas, todėl visas D2 punktas lieka neužbaigtas.
+
+### 2026-09-24 — esamo visos dienos įvykio datos
+
+- Savo organizuojamą Google arba Outlook visos dienos įvykį galima atverti ir pakeisti nuo pirmos iki paskutinės naudotojui rodomos dienos. API naudoja tiekėjų išskirtinę pabaigos ribą: Google siunčia `start.date` / `end.date`, Outlook — `isAllDay: true` ir abiejų ribų vidurnaktį toje pačioje UTC zonoje.
+- Serveris griežtai tikrina realias `YYYY-MM-DD` datas, pradžios ir pabaigos tvarką, įvykio režimą, paskyrą, kalendorių, ID bei versiją. Laiko įvykio negalima netyčia paversti visos dienos įvykiu ar atvirkščiai. Keičiant kvietimo dienas, kaip ir laiką, reikia patvirtinti dalyvių informavimą.
+- Normalizuotas Outlook visos dienos įvykis grąžina datos ribas, todėl sąsaja nepriklauso nuo naršyklės laiko zonos. Nesusiję aprašymo, Teams / Meet, priminimų ir kiti metaduomenys į tiekėjo PATCH nepatenka.
+- Patikra: `npm run typecheck`, 222/222 `npm test`, `npm run build`, 4/4 tiksliniai ir 32/32 visi `npm run test:e2e` scenarijai praėjo.
+- Ribos: tikros Google ir Microsoft paskyros nekeistos. Konvertavimas tarp laiko bei visos dienos režimų ir laiko zonos pasirinkimas palikti atskiriems žingsniams; D2 punktas dar neužbaigtas.

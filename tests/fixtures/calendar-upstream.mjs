@@ -8,6 +8,7 @@ const msEvent=(id,subject,day,hour,attendees=[])=>({id,subject,"@odata.etag":'W/
 const outlook=new Map([["outlook-personal",msEvent("outlook-personal","Outlook bandymas",1,10)],["outlook-meeting",msEvent("outlook-meeting","Susitikimo bandymas",2,14,[{emailAddress:{address:"synthetic@example.test"}}])],["outlook-readonly",{...msEvent("outlook-readonly","Svetimas kvietimas",3,11),isOrganizer:false}]]);
 const dayKey=(day)=>{const d=new Date(monday);d.setDate(d.getDate()+day);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;};
 google.set("google-all-day",{...structuredClone(google.get("google-personal")),id:"google-all-day",summary:"Visos dienos bandymas",start:{date:dayKey(0)},end:{date:dayKey(2)}});
+outlook.set("outlook-all-day",{...msEvent("outlook-all-day","Outlook visos dienos bandymas",4,0),isAllDay:true,start:{dateTime:`${dayKey(4)}T00:00:00`,timeZone:"UTC"},end:{dateTime:`${dayKey(5)}T00:00:00`,timeZone:"UTC"}});
 google.set("google-recurring",{...structuredClone(google.get("google-personal")),id:"google-recurring",summary:"Pasikartojimo bandymas",recurringEventId:"test-series",start:{dateTime:date(0,13)},end:{dateTime:date(0,14)}});
 google.set("google-overlap",{...structuredClone(google.get("google-personal")),id:"google-overlap",summary:"Persidengiantis įvykis",start:{dateTime:date(1,9)},end:{dateTime:date(1,11)}});
 google.set("google-night",{...structuredClone(google.get("google-personal")),id:"google-night",summary:"Naktinis įvykis",start:{dateTime:date(1,23)},end:{dateTime:date(2,1)}});
@@ -50,7 +51,7 @@ globalThis.fetch=async(input,init={})=>{
     if(isGoogle&&body.attendeesOmitted===true){
       const response=body.attendees?.[0],self=event.attendees?.find(attendee=>attendee.self);if(!response||!self||response.email!==self.email)throw new Error("Fixture caught unsafe RSVP update");self.responseStatus=response.responseStatus;
     }else{
-      const supported=isGoogle?["start","end","summary","subject","transparency","visibility","reminders"]:["start","end","summary","subject","showAs","sensitivity","isReminderOn","reminderMinutesBeforeStart"];
+      const supported=isGoogle?["start","end","summary","subject","transparency","visibility","reminders"]:["start","end","summary","subject","showAs","sensitivity","isReminderOn","reminderMinutesBeforeStart","isAllDay"];
       if(Object.keys(body).some(k=>!supported.includes(k)))throw new Error("Fixture caught destructive metadata update");Object.assign(event,body);
     }
     version++;event[isGoogle?"etag":"@odata.etag"]=`"v${version}"`;

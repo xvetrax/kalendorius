@@ -21,6 +21,7 @@ const routes={google:await import("../app/api/google/events/route.ts"),microsoft
 const microsoftCalendars=await import("../app/api/microsoft/calendars/route.ts");
 after(()=>{globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 const inputFor=e=>({id:e.id,calendarId:e.calendarId,version:e.version,connectionId:e.connectionId,start:e.start.dateTime,end:e.end.dateTime});
+const shiftDate=(value,days)=>{const date=new Date(`${value}T00:00:00Z`);date.setUTCDate(date.getUTCDate()+days);return date.toISOString().slice(0,10);};
 for(const provider of ["google","microsoft"]){
   const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
   const patch=(body,origin="http://localhost:3000")=>route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify(body)}));
@@ -46,6 +47,12 @@ for(const provider of ["google","microsoft"]){
     assert.equal(updated.showAs,"free");assert.equal(updated.visibility,"private");assert.deepEqual(updated.reminder,{mode:"minutes",minutes:30});
     const reloaded=(await (await route.GET(new Request(url))).json()).items.find(item=>item.key===event.key);
     assert.equal(reloaded.version,updated.version);assert.equal(reloaded.showAs,"free");assert.equal(reloaded.visibility,"private");assert.deepEqual(reloaded.reminder,{mode:"minutes",minutes:30});
+  });
+  test(`${provider} actual routes: all-day dates persist and reload`,async()=>{
+    const event=(await (await route.GET(new Request(url))).json()).items.find(item=>item.allDay&&item.editable);assert.ok(event);assert.ok(event.start.date);assert.ok(event.end.date);
+    const body={id:event.id,calendarId:event.calendarId,version:event.version,connectionId:event.connectionId,allDay:true,start:shiftDate(event.start.date,1),end:shiftDate(event.end.date,1)};
+    const response=await patch(body);assert.equal(response.status,200);const updated=await response.json();assert.equal(updated.start.date,body.start);assert.equal(updated.end.date,body.end);assert.equal(updated.allDay,true);
+    const reloaded=(await (await route.GET(new Request(url))).json()).items.find(item=>item.key===event.key);assert.equal(reloaded.version,updated.version);assert.equal(reloaded.start.date,body.start);assert.equal(reloaded.end.date,body.end);
   });
 }
 for(const provider of ["google","microsoft"])test(`${provider} actual route submits an account-bound RSVP and reloads its status`,async()=>{

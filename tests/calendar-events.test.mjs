@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {calendarEventKey,createCalendarService,normalizeEvent} from "../lib/calendar-events.ts";
+import {calendarEventKey,createCalendarService,eventDates,normalizeEvent} from "../lib/calendar-events.ts";
 const from="2026-10-25T10:00:00+02:00",to="2026-10-25T11:00:00+02:00";
 function fixture(provider) {
   const raw=provider==="google" ? {id:"event/a",summary:"Įvykis",etag:'"v1"',organizer:{self:true},start:{dateTime:"2026-10-24T08:00:00Z",timeZone:"Europe/Vilnius"},end:{dateTime:"2026-10-24T09:00:00Z",timeZone:"Europe/Vilnius"},attendees:[],description:"Keep description",conferenceData:{keep:true},transparency:"opaque",visibility:"default",reminders:{useDefault:true}} : {id:"event/a",subject:"Įvykis","@odata.etag":'W/"v1"',isOrganizer:true,type:"singleInstance",start:{dateTime:"2026-10-24T08:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00",timeZone:"UTC"},attendees:[],body:{content:"Keep Teams blob",contentType:"html"},isReminderOn:true,reminderMinutesBeforeStart:15,showAs:"busy",sensitivity:"normal"};
@@ -63,7 +63,7 @@ for(const provider of ["google","outlook"]) {
     if(provider==="google")assert.deepEqual(write.body,{start:{dateTime:new Date(current.start.dateTime).toISOString(),timeZone:"Europe/Vilnius"},end:{dateTime:new Date(current.end.dateTime).toISOString(),timeZone:"Europe/Vilnius"},transparency:"transparent",visibility:"private",reminders:{useDefault:false,overrides:[{method:"popup",minutes:30}]}});
     else assert.deepEqual(write.body,{start:{dateTime:"2026-10-24T08:00:00.000",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00.000",timeZone:"UTC"},showAs:"free",sensitivity:"private",isReminderOn:true,reminderMinutesBeforeStart:30});
   });
-  test(`${provider}: account changes, non-owner, all-day, and series master are blocked; instances are editable`,async()=>{
+  test(`${provider}: account changes, non-owner, and series master are blocked; instances are editable`,async()=>{
     const {service,input,raw,state,calls}=fixture(provider);
     state.connection="account-b";await assert.rejects(service.update(input),e=>e.status===409);assert.equal(calls.length,0);state.connection="account-a";
     if(provider==="google") raw.organizer.self=false;else raw.isOrganizer=false;
@@ -74,9 +74,6 @@ for(const provider of ["google","outlook"]) {
     // series MASTER is still blocked
     if(provider==="google") {delete raw.recurringEventId;raw.recurrence=["RRULE:FREQ=DAILY"];}else {raw.type="seriesMaster";delete raw.seriesMasterId;}
     await assert.rejects(service.update({...input,version:instanceResult.version}),e=>e.status===403);
-    // all-day events are still blocked
-    if(provider==="google") {delete raw.recurrence;raw.start={date:"2026-10-25"};raw.end={date:"2026-10-26"};}else {raw.type="singleInstance";raw.isAllDay=true;}
-    await assert.rejects(service.update({...input,version:instanceResult.version}),e=>e.status===403);
   });
   test(`${provider}: serial edits cannot apply an older version after the first accepted move`,async()=>{
     const {service,input,calls}=fixture(provider);
@@ -84,6 +81,30 @@ for(const provider of ["google","outlook"]) {
     assert.equal(results[0].status,"fulfilled");assert.equal(results[1].status,"rejected");assert.equal(results[1].reason.status,409);assert.equal(calls.filter(c=>c.method==="PATCH").length,1);
   });
 }
+for(const provider of ["google","outlook"])test(`${provider}: all-day dates use an exclusive end and round-trip without metadata loss`,async()=>{
+  const {service,raw,calls}=fixture(provider);
+  if(provider==="google"){raw.start={date:"2026-10-24"};raw.end={date:"2026-10-26"};}
+  else {raw.isAllDay=true;raw.start={dateTime:"2026-10-24T00:00:00",timeZone:"UTC"};raw.end={dateTime:"2026-10-26T00:00:00",timeZone:"UTC"};}
+  const current=normalizeEvent(provider,raw,"account-a");assert.equal(current.editable,true);assert.equal(current.allDay,true);assert.deepEqual(current.start,{date:"2026-10-24"});assert.deepEqual(current.end,{date:"2026-10-26"});
+  const updated=await service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,allDay:true,start:"2026-10-25",end:"2026-10-28"});
+  const write=calls.find(call=>call.method==="PATCH");assert.deepEqual(updated.start,{date:"2026-10-25"});assert.deepEqual(updated.end,{date:"2026-10-28"});
+  if(provider==="google")assert.deepEqual(write.body,{start:{date:"2026-10-25"},end:{date:"2026-10-28"}});
+  else assert.deepEqual(write.body,{isAllDay:true,start:{dateTime:"2026-10-25T00:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-28T00:00:00",timeZone:"UTC"}});
+  assert.equal(raw.description,provider==="google"?"Keep description":undefined);assert.deepEqual(raw.body,provider==="outlook"?{content:"Keep Teams blob",contentType:"html"}:undefined);
+});
+for(const provider of ["google","outlook"])test(`${provider}: all-day date changes require attendee confirmation and reject mode conversion`,async()=>{
+  const {service,raw,calls}=fixture(provider);
+  if(provider==="google"){raw.start={date:"2026-10-24"};raw.end={date:"2026-10-25"};raw.attendees=[{email:"guest@example.test"}];}
+  else {raw.isAllDay=true;raw.start={dateTime:"2026-10-24T00:00:00",timeZone:"UTC"};raw.end={dateTime:"2026-10-25T00:00:00",timeZone:"UTC"};raw.attendees=[{emailAddress:{address:"guest@example.test"}}];}
+  const current=normalizeEvent(provider,raw,"account-a"),input={id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,allDay:true,start:"2026-10-25",end:"2026-10-26"};
+  await assert.rejects(service.update(input),error=>error.status===409);assert.equal(calls.filter(call=>call.method).length,0);
+  await service.update({...input,confirmAttendees:true});assert.equal(calls.filter(call=>call.method).length,1);
+  const next=normalizeEvent(provider,raw,"account-a");
+  await assert.rejects(service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:next.version,start:"2026-10-25T00:00:00Z",end:"2026-10-26T00:00:00Z"}),error=>error.status===409);
+});
+test("all-day date validation rejects impossible, reversed and timestamp values",()=>{
+  for(const values of [["2026-02-30","2026-03-02"],["2026-10-25","2026-10-25"],["2026-10-26","2026-10-25"],["2026-10-25T00:00:00Z","2026-10-26"]])assert.throws(()=>eventDates(...values),error=>error.status===400);
+});
 test("Google custom reminders are exposed as read-only and preserved by unrelated edits",async()=>{
   const {service,raw,calls}=fixture("google");raw.reminders={useDefault:false,overrides:[{method:"email",minutes:60},{method:"popup",minutes:10}]};
   const current=normalizeEvent("google",raw,"account-a");assert.deepEqual(current.reminder,{mode:"custom"});
