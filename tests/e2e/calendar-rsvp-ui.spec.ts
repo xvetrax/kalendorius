@@ -2,7 +2,7 @@ import {test,expect} from "@playwright/test";
 
 test("invited attendee can submit and reload a Google RSVP",async({page})=>{
   await page.clock.setFixedTime(new Date("2026-09-23T09:00:00Z"));
-  const event={id:"invite-1",calendarId:"primary",provider:"google",connectionId:"connection-1",key:JSON.stringify(["google","connection-1","primary","invite-1"]),version:'"v1"',summary:"Komandos aptarimas",editable:false,readOnlyReason:"Šiame etape redaguojami tik tavo organizuojami įvykiai.",attendeeCount:2,attendees:[{email:"me@example.test",self:true,responseStatus:"needsAction"},{email:"host@example.test",responseStatus:"accepted"}],allDay:false,recurring:false,canRespond:true,responseStatus:"needsAction",start:{dateTime:"2026-09-23T10:00:00Z"},end:{dateTime:"2026-09-23T11:00:00Z"}};
+  const event={id:"invite-1",calendarId:"primary",provider:"google",connectionId:"connection-1",key:JSON.stringify(["google","connection-1","primary","invite-1"]),version:'"v1"',summary:"Komandos aptarimas",editable:false,readOnlyReason:"Šiame etape redaguojami tik tavo organizuojami įvykiai.",attendeeCount:2,attendees:[{email:"me@example.test",self:true,responseStatus:"needsAction"},{email:"host@example.test",responseStatus:"accepted"}],allDay:false,recurring:false,canRespond:true,responseStatus:"needsAction",showAs:"busy",visibility:"default",reminder:{mode:"default"},start:{dateTime:"2026-09-23T10:00:00Z"},end:{dateTime:"2026-09-23T11:00:00Z"}};
   let submitted:Record<string,unknown>|null=null;
   await page.route("**/api/google/events**",async route=>{
     if(route.request().method()==="PUT"){

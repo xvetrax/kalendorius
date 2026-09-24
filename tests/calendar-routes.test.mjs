@@ -39,6 +39,14 @@ for(const provider of ["google","microsoft"]){
     for(const input of [null,[],{}, {id:".."}, {id:"x",patch:{attendees:[]}}])assert.equal((await patch(input)).status,400);
     const broken=await route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:"http://localhost:3000"},body:"{"}));assert.equal(broken.status,400);
   });
+  test(`${provider} actual routes: detailed timed properties persist and reload`,async()=>{
+    const event=(await (await route.GET(new Request(url))).json()).items.find(item=>item.editable&&!item.attendeeCount&&!item.recurring);assert.ok(event);
+    const body={...inputFor(event),showAs:"free",visibility:"private",reminder:{mode:"minutes",minutes:30}};
+    const response=await patch(body);assert.equal(response.status,200);const updated=await response.json();
+    assert.equal(updated.showAs,"free");assert.equal(updated.visibility,"private");assert.deepEqual(updated.reminder,{mode:"minutes",minutes:30});
+    const reloaded=(await (await route.GET(new Request(url))).json()).items.find(item=>item.key===event.key);
+    assert.equal(reloaded.version,updated.version);assert.equal(reloaded.showAs,"free");assert.equal(reloaded.visibility,"private");assert.deepEqual(reloaded.reminder,{mode:"minutes",minutes:30});
+  });
 }
 for(const provider of ["google","microsoft"])test(`${provider} actual route submits an account-bound RSVP and reloads its status`,async()=>{
   const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;

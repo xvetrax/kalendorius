@@ -662,6 +662,7 @@ function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boole
 }
 function rsvpIcon(status:string) { return status==="accepted"?"✓":status==="declined"?"✗":status==="tentative"?"?":"·"; }
 function rsvpLabel(status:CalendarResponseStatus) {return status==="accepted"?"Dalyvausi":status==="declined"?"Nedalyvausi":status==="tentative"?"Galbūt dalyvausi":"Dar neatsakyta";}
+function eventReminderValue(event:CalEvent){return event.reminder.mode==="minutes"?`minutes:${event.reminder.minutes}`:event.reminder.mode;}
 function BackupPanel() {
   const [busy,setBusy]=useState<"export"|"backup"|"restore"|null>(null);
   const [msg,setMsg]=useState("");
@@ -742,9 +743,18 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{
       const start=new Date(String(data.get("start"))===localInput(new Date(originalStart)) ? originalStart : String(data.get("start"))),end=new Date(String(data.get("end"))===localInput(new Date(originalEnd)) ? originalEnd : String(data.get("end")));
       if(end<=start)throw new Error("Pabaiga turi būti vėliau už pradžią.");
       const attendeesChanged=JSON.stringify(attendees.map(a=>a.email).sort())!==JSON.stringify((event.attendees||[]).map(a=>a.email).sort());
+      const summary=data.get("summary"),description=data.get("description"),location=data.get("location");
+      const showAs=data.get("showAs"),visibility=data.get("visibility"),reminderValue=data.get("reminder"),originalReminder=eventReminderValue(event);
+      const reminder=typeof reminderValue==="string"&&reminderValue!==originalReminder ? reminderValue.startsWith("minutes:")?{mode:"minutes",minutes:Number(reminderValue.slice(8))}:{mode:reminderValue} : undefined;
       setConflict(false);
-      await onSave({start:start.toISOString(),end:end.toISOString(),summary:data.get("summary"),description:data.get("description")||undefined,location:data.get("location")||undefined,
+      await onSave({start:start.toISOString(),end:end.toISOString(),
+        ...(typeof summary==="string"&&summary!==event.summary?{summary}:{}),
+        ...(typeof description==="string"&&description!==(event.description||"")?{description}:{}),
+        ...(typeof location==="string"&&location!==(event.location||"")?{location}:{}),
         ...(attendeesChanged ? {attendees:attendees.map(a=>({email:a.email}))} : {}),
+        ...(typeof showAs==="string"&&showAs!==event.showAs?{showAs}:{}),
+        ...(typeof visibility==="string"&&visibility!==event.visibility?{visibility}:{}),
+        ...(reminder?{reminder}:{}),
         confirmAttendees:data.get("confirm")==="on"});
     } catch(err) {
       const msg=err instanceof Error ? err.message : "";
@@ -766,6 +776,8 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{
       <label>Aprašymas<textarea name="description" maxLength={10000} defaultValue={event.description || ""} disabled={!event.editable || saving || !!responding} placeholder="Darbotvarkė…"/></label>
       {!event.allDay && <div className="formRow"><label>Pradžia<input name="start" type="datetime-local" required disabled={!event.editable || saving || !!responding} defaultValue={localInput(new Date(value.start || event.start.dateTime!))}/></label><label>Pabaiga<input name="end" type="datetime-local" required disabled={!event.editable || saving || !!responding} defaultValue={localInput(new Date(value.end || event.end.dateTime!))}/></label></div>}
       {event.allDay && <p className="formHint">{event.start.date || event.start.dateTime} – {event.end.date || event.end.dateTime}</p>}
+      <div className="formRow"><label>Laisvas / užimtas<select name="showAs" defaultValue={event.showAs} disabled={!event.editable||saving||!!responding}><option value="busy">Užimtas</option><option value="free">Laisvas</option>{event.provider==="outlook"&&<><option value="tentative">Neapsispręsta</option><option value="oof">Ne biure</option><option value="workingElsewhere">Dirba kitur</option><option value="unknown">Kita Outlook būsena</option></>}</select></label><label>Matomumas<select name="visibility" defaultValue={event.visibility} disabled={!event.editable||saving||!!responding||event.recurring}><option value="default">Numatytasis</option>{event.provider==="google"&&<option value="public">Viešas</option>}{event.provider==="outlook"&&<option value="personal">Asmeninis</option>}<option value="private">Privatus</option><option value="confidential">Konfidencialus</option></select></label></div>
+      <label>Priminimas<select name="reminder" defaultValue={eventReminderValue(event)} disabled={!event.editable||saving||!!responding}>{event.provider==="google"&&<option value="default">Kalendoriaus numatytasis</option>}<option value="none">Be priminimo</option>{[0,5,10,15,30,60,1440].map(minutes=><option key={minutes} value={`minutes:${minutes}`}>{minutes===0?"Įvykio metu":minutes===60?"1 val. prieš":minutes===1440?"1 d. prieš":`${minutes} min. prieš`}</option>)}{event.reminder.mode==="custom"&&<option value="custom">Kitas tiekėjo nustatymas (nekeisti)</option>}{event.reminder.mode==="minutes"&&![0,5,10,15,30,60,1440].includes(event.reminder.minutes||0)&&<option value={`minutes:${event.reminder.minutes}`}>{event.reminder.minutes} min. prieš (nekeisti)</option>}</select></label>
       <div className="attendeeSection">
         <span className="fieldLabel">Dalyviai</span>
         {attendees.length>0 && <ul className="attendeeList">{attendees.map(a=><li key={a.email} title={a.responseStatus} className={`rsvp-${a.responseStatus}`}><span className="rsvpIcon">{rsvpIcon(a.responseStatus)}</span><span className="attendeeName">{a.name||a.email}</span>{a.name&&<span className="attendeeEmail"> {a.email}</span>}{event.editable&&!a.self&&<button type="button" className="removeAttendee" aria-label={`Pašalinti: ${a.email}`} disabled={saving||!!responding} onClick={()=>removeAttendee(a.email)}>×</button>}</li>)}</ul>}
@@ -773,7 +785,7 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{
         {event.editable && <div className="addAttendee"><input type="email" value={newEmail} onChange={e=>setNewEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addAttendee();}}} placeholder="el.paštas@pavyzdys.lt" disabled={saving||!!responding}/><button type="button" onClick={addAttendee} disabled={saving||!!responding||!newEmail.trim()}>Pridėti</button></div>}
       </div>
       {event.editable && attendees.length>0 && <label className="confirmAttendees"><input type="checkbox" name="confirm" disabled={saving||!!responding}/>Patvirtinu pakeitimus — bus išsiųsti pranešimai dalyviams, jei laikas pasikeitė</label>}
-      <p className="formHint">Keičiami pavadinimas, vieta, aprašymas, laikas ir dalyviai. Priminimai bei susitikimo nuoroda išsaugomi.</p>
+      <p className="formHint">Keičiami pavadinimas, vieta, aprašymas, laikas, dalyviai, matomumas, laisvo / užimto laiko būsena ir priminimas. Susitikimo nuoroda išsaugoma.</p>
       <div className="modalActions">{safeLink && <a className="originalEvent" href={safeLink} target="_blank" rel="noopener noreferrer">Atverti originalą ↗</a>}{event.editable && <button className="newButton" disabled={saving||!!responding}>{saving?"Saugoma…":"Išsaugoti įvykį"}</button>}</div>
     </form>
   </Modal>;

@@ -3,8 +3,8 @@
 if(process.env.CALENDAR_TEST_FIXTURE!=="isolated")throw new Error("Test-only preload");
 const monday=new Date();monday.setDate(monday.getDate()-((monday.getDay()+6)%7));monday.setHours(0,0,0,0);
 const date=(day,hour)=>{const d=new Date(monday);d.setDate(d.getDate()+day);d.setHours(hour);return d.toISOString();};
-const google=new Map([["google-personal",{id:"google-personal",summary:"Google bandymas",etag:'"g1"',organizer:{self:true},start:{dateTime:date(0,9),timeZone:"Europe/Vilnius"},end:{dateTime:date(0,10),timeZone:"Europe/Vilnius"},attendees:[],description:"Nepakeisti aprašymo",hangoutLink:"https://meet.google.com/test",htmlLink:"https://calendar.google.com/",reminders:{useDefault:true}}]]);
-const msEvent=(id,subject,day,hour,attendees=[])=>({id,subject,"@odata.etag":'W/"m1"',isOrganizer:true,type:"singleInstance",start:{dateTime:date(day,hour).replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:date(day,hour+1).replace(/Z$/,""),timeZone:"UTC"},attendees,body:{contentType:"html",content:"<p>Išsaugoti Teams aprašymą</p>"},showAs:"busy",isReminderOn:true,webLink:"https://outlook.office.com/calendar/"});
+const google=new Map([["google-personal",{id:"google-personal",summary:"Google bandymas",etag:'"g1"',organizer:{self:true},start:{dateTime:date(0,9),timeZone:"Europe/Vilnius"},end:{dateTime:date(0,10),timeZone:"Europe/Vilnius"},attendees:[],description:"Nepakeisti aprašymo",hangoutLink:"https://meet.google.com/test",htmlLink:"https://calendar.google.com/",transparency:"opaque",visibility:"default",reminders:{useDefault:true}}]]);
+const msEvent=(id,subject,day,hour,attendees=[])=>({id,subject,"@odata.etag":'W/"m1"',isOrganizer:true,type:"singleInstance",start:{dateTime:date(day,hour).replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:date(day,hour+1).replace(/Z$/,""),timeZone:"UTC"},attendees,body:{contentType:"html",content:"<p>Išsaugoti Teams aprašymą</p>"},showAs:"busy",sensitivity:"normal",isReminderOn:true,reminderMinutesBeforeStart:15,webLink:"https://outlook.office.com/calendar/"});
 const outlook=new Map([["outlook-personal",msEvent("outlook-personal","Outlook bandymas",1,10)],["outlook-meeting",msEvent("outlook-meeting","Susitikimo bandymas",2,14,[{emailAddress:{address:"synthetic@example.test"}}])],["outlook-readonly",{...msEvent("outlook-readonly","Svetimas kvietimas",3,11),isOrganizer:false}]]);
 const dayKey=(day)=>{const d=new Date(monday);d.setDate(d.getDate()+day);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;};
 google.set("google-all-day",{...structuredClone(google.get("google-personal")),id:"google-all-day",summary:"Visos dienos bandymas",start:{date:dayKey(0)},end:{date:dayKey(2)}});
@@ -50,7 +50,8 @@ globalThis.fetch=async(input,init={})=>{
     if(isGoogle&&body.attendeesOmitted===true){
       const response=body.attendees?.[0],self=event.attendees?.find(attendee=>attendee.self);if(!response||!self||response.email!==self.email)throw new Error("Fixture caught unsafe RSVP update");self.responseStatus=response.responseStatus;
     }else{
-      if(Object.keys(body).some(k=>!["start","end","summary","subject"].includes(k)))throw new Error("Fixture caught destructive metadata update");Object.assign(event,body);
+      const supported=isGoogle?["start","end","summary","subject","transparency","visibility","reminders"]:["start","end","summary","subject","showAs","sensitivity","isReminderOn","reminderMinutesBeforeStart"];
+      if(Object.keys(body).some(k=>!supported.includes(k)))throw new Error("Fixture caught destructive metadata update");Object.assign(event,body);
     }
     version++;event[isGoogle?"etag":"@odata.etag"]=`"v${version}"`;
   } else if(method!=="GET")return Response.json({error:"Unsupported test operation"},{status:405});

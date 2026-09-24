@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {calendarEventKey,createCalendarService,normalizeEvent} from "../lib/calendar-events.ts";
 const from="2026-10-25T10:00:00+02:00",to="2026-10-25T11:00:00+02:00";
 function fixture(provider) {
-  const raw=provider==="google" ? {id:"event/a",summary:"Įvykis",etag:'"v1"',organizer:{self:true},start:{dateTime:"2026-10-24T08:00:00Z",timeZone:"Europe/Vilnius"},end:{dateTime:"2026-10-24T09:00:00Z",timeZone:"Europe/Vilnius"},attendees:[],description:"Keep description",conferenceData:{keep:true},reminders:{useDefault:true}} : {id:"event/a",subject:"Įvykis","@odata.etag":'W/"v1"',isOrganizer:true,type:"singleInstance",start:{dateTime:"2026-10-24T08:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00",timeZone:"UTC"},attendees:[],body:{content:"Keep Teams blob",contentType:"html"},isReminderOn:true,showAs:"busy"};
+  const raw=provider==="google" ? {id:"event/a",summary:"Įvykis",etag:'"v1"',organizer:{self:true},start:{dateTime:"2026-10-24T08:00:00Z",timeZone:"Europe/Vilnius"},end:{dateTime:"2026-10-24T09:00:00Z",timeZone:"Europe/Vilnius"},attendees:[],description:"Keep description",conferenceData:{keep:true},transparency:"opaque",visibility:"default",reminders:{useDefault:true}} : {id:"event/a",subject:"Įvykis","@odata.etag":'W/"v1"',isOrganizer:true,type:"singleInstance",start:{dateTime:"2026-10-24T08:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00",timeZone:"UTC"},attendees:[],body:{content:"Keep Teams blob",contentType:"html"},isReminderOn:true,reminderMinutesBeforeStart:15,showAs:"busy",sensitivity:"normal"};
   const calls=[],state={connection:"account-a",rejectWrite:false};
   const gateway={connection:()=>state.connection,async request(path,init={}) {
     calls.push({path,...init,body:init.body ? JSON.parse(init.body) : undefined});
@@ -49,10 +49,19 @@ for(const provider of ["google","outlook"]) {
     await assert.rejects(service.update({...sameTimeInput,version:newVer,attendees:[{email:"not-an-email"}]}),e=>e.status===400);
     assert.equal(calls.filter(c=>c.method==="PATCH").length,1);
   });
-  test(`${provider}: client payload cannot overwrite series, busy status or arbitrary fields; bad attendees rejected`,async()=>{
+  test(`${provider}: invalid properties and arbitrary fields are rejected before provider access`,async()=>{
     const {service,input,calls}=fixture(provider);
-    for(const extra of [{patch:{attendees:[]}},{showAs:"free"},{recurrence:[]},{start:"2026-10-25T10:00"},{end:from},{summary:" "},{attendees:"not-an-array"},{attendees:[{email:"bad"}]}])await assert.rejects(service.update({...input,...extra}),e=>e.status===400);
+    for(const extra of [{patch:{attendees:[]}},{showAs:"invalid"},{visibility:"secret"},{reminder:{mode:"minutes",minutes:-1}},{reminder:{mode:"minutes",minutes:40321}},{reminder:{mode:"custom"}},{reminder:{mode:"none",minutes:5}},{recurrence:[]},{start:"2026-10-25T10:00"},{end:from},{summary:" "},{attendees:"not-an-array"},{attendees:[{email:"bad"}]}])await assert.rejects(service.update({...input,...extra}),e=>e.status===400);
+    if(provider==="outlook")await assert.rejects(service.update({...input,reminder:{mode:"default"}}),e=>e.status===400);
     assert.equal(calls.length,0);
+  });
+  test(`${provider}: detailed properties map to provider fields and round-trip`,async()=>{
+    const {service,raw,calls}=fixture(provider),current=normalizeEvent(provider,raw,"account-a");
+    const input={id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,start:current.start.dateTime,end:current.end.dateTime,showAs:"free",visibility:"private",reminder:{mode:"minutes",minutes:30}};
+    const updated=await service.update(input),write=calls.find(call=>call.method==="PATCH");
+    assert.equal(updated.showAs,"free");assert.equal(updated.visibility,"private");assert.deepEqual(updated.reminder,{mode:"minutes",minutes:30});
+    if(provider==="google")assert.deepEqual(write.body,{start:{dateTime:new Date(current.start.dateTime).toISOString(),timeZone:"Europe/Vilnius"},end:{dateTime:new Date(current.end.dateTime).toISOString(),timeZone:"Europe/Vilnius"},transparency:"transparent",visibility:"private",reminders:{useDefault:false,overrides:[{method:"popup",minutes:30}]}});
+    else assert.deepEqual(write.body,{start:{dateTime:"2026-10-24T08:00:00.000",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00.000",timeZone:"UTC"},showAs:"free",sensitivity:"private",isReminderOn:true,reminderMinutesBeforeStart:30});
   });
   test(`${provider}: account changes, non-owner, all-day, and series master are blocked; instances are editable`,async()=>{
     const {service,input,raw,state,calls}=fixture(provider);
@@ -75,6 +84,18 @@ for(const provider of ["google","outlook"]) {
     assert.equal(results[0].status,"fulfilled");assert.equal(results[1].status,"rejected");assert.equal(results[1].reason.status,409);assert.equal(calls.filter(c=>c.method==="PATCH").length,1);
   });
 }
+test("Google custom reminders are exposed as read-only and preserved by unrelated edits",async()=>{
+  const {service,raw,calls}=fixture("google");raw.reminders={useDefault:false,overrides:[{method:"email",minutes:60},{method:"popup",minutes:10}]};
+  const current=normalizeEvent("google",raw,"account-a");assert.deepEqual(current.reminder,{mode:"custom"});
+  await service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,start:current.start.dateTime,end:current.end.dateTime,summary:"Naujas pavadinimas"});
+  assert.equal(calls.at(-1).body.reminders,undefined);assert.deepEqual(raw.reminders,{useDefault:false,overrides:[{method:"email",minutes:60},{method:"popup",minutes:10}]});
+});
+for(const provider of ["google","outlook"])test(`${provider}: recurring instance visibility changes are blocked before writing`,async()=>{
+  const {service,raw,calls}=fixture(provider);if(provider==="google")raw.recurringEventId="series";else raw.type="occurrence";
+  const current=normalizeEvent(provider,raw,"account-a");
+  await assert.rejects(service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,start:current.start.dateTime,end:current.end.dateTime,visibility:"private"}),error=>error.status===409);
+  assert.equal(calls.filter(call=>call.method).length,0);
+});
 function rsvpFixture(provider) {
   const raw=provider==="google"
     ? {id:"invite",summary:"Kvietimas",etag:'"r1"',organizer:{self:false},start:{dateTime:"2026-10-24T08:00:00Z"},end:{dateTime:"2026-10-24T09:00:00Z"},attendees:[{email:"me@example.test",self:true,responseStatus:"needsAction"},{email:"host@example.test",organizer:true,responseStatus:"accepted"}]}

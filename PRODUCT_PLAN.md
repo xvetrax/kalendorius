@@ -121,7 +121,7 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 
 - [x] Visų prieinamų kalendorių sąrašas, spalvos, rašymo teisės, skaitymo pasirinkimas ir pilnas puslapiavimas.
 - [ ] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė turi apimti kalendoriaus ID.
-- [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Dalis laukų jau kuriama, bet esamo įvykio redaktorius jų visų nevaldo.
+- [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Esamų laiko įvykių redaktorius jau valdo matomumą, laisvo / užimto laiko būseną ir paprastą priminimą; liko esamo visos dienos įvykio bei laiko zonos redagavimas.
 - [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. RSVP veiksmas patikrintas sintetiniais Google ir Microsoft tiekėjais.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
 - [ ] ETag / versijų konfliktai, išoriniai pakeitimai ir 401/403/429 apdorojami; dar reikia nedubliuojančio įvykių kūrimo po neaiškaus atsakymo ir gyvos Graph patikros.
@@ -431,3 +431,11 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - **C7 klaviatūros perkėlimas**: `EventBlock` ir `TaskBlock` pagrindiniame mygtuke pridėtas `onKeyDown` su `Shift+↑↓` (±15 min.) ir `Shift+←→` (±1 diena). Trukmės keitimas klaviatūra (`ArrowUp`/`ArrowDown` be `Shift`) ant resize mygtuko išlieka nepakitęs. Tooltip atnaujintas su klaviatūros valdymo aprašymu.
 - Patikra: `npm run typecheck` ir 139/139 `npm test` praeina. Build švarus. Laiko zona, pasikartojančių įvykių redagavimas ir gyvų paskyrų patikra lieka nebaigti.
 - Ribos: `description` iš Outlook gali būti HTML, jei įvykis sukurtas ne mūsų programėlėje — rodomas kaip paprastas tekstas, redagavimas pakeičia formatą į plaintext. Laiko zona kūrimo formoje dar neeksponuojama — visi nauji įvykiai kuriami UTC. D2 laikomas baigtu; likusios neįgyvendintos sąlygos (laiko zona, pasikartojimas) priskiriamos D4.
+
+### 2026-09-24 — esamo laiko įvykio matomumas, būsena ir priminimas
+
+- Google ir Outlook laiko įvykių redaktorius skaito ir keičia tiekėjo laisvo / užimto laiko būseną, matomumą bei vieną paprastą priminimą. Google reikšmės verčiamos į `transparency`, `visibility` ir `reminders`; Outlook — į `showAs`, `sensitivity`, `isReminderOn` bei `reminderMinutesBeforeStart`.
+- Google numatytasis, išjungtas ir vienas `popup` priminimas normalizuojami atskirai. Keli priminimai arba kitas jų tipas rodomi kaip tiekėjo nustatymas ir per nesusijusį redagavimą neperrašomi. Pasikartojančio egzemplioriaus matomumas programėlėje nekeičiamas, kad pakeitimas nepaveiktų visos Google serijos.
+- API priima tik kiekvieno tiekėjo palaikomas reikšmes, 0–40320 minučių intervalą ir pilną įvykio paskyros, kalendoriaus, ID bei versijos tapatybę. Sintetinė API patikra perskaito išsaugotą rezultatą iš naujo.
+- Patikra: `npm run typecheck`, 215/215 `npm test`, `npm run build`, 3/3 tiksliniai ir 31/31 visi `npm run test:e2e` scenarijai praėjo.
+- Ribos: tikros Google ir Microsoft paskyros šiame žingsnyje nekeistos. Esamo visos dienos įvykio ir laiko zonos redagavimas tebėra neįgyvendintas, todėl visas D2 punktas lieka neužbaigtas.

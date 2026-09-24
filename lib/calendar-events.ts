@@ -1,5 +1,7 @@
 export type CalendarProvider = "google" | "outlook";
 export type CalendarResponseStatus = "needsAction" | "accepted" | "tentative" | "declined";
+export type CalendarVisibility = "default" | "public" | "private" | "personal" | "confidential";
+export type CalendarReminder = {mode:"default"|"none"|"minutes"|"custom";minutes?:number};
 export type CalendarEvent = {
   id:string; key:string; provider:CalendarProvider; connectionId:string; version:string;
   calendarId:string; calendarName?:string; calendarColor?:string;
@@ -8,6 +10,7 @@ export type CalendarEvent = {
   htmlLink?:string; hangoutLink?:string; editable:boolean; readOnlyReason:string;
   attendeeCount:number; attendees?:{email:string;name?:string;self?:boolean;responseStatus:string}[]; recurring:boolean; allDay:boolean;
   canRespond:boolean; responseStatus?:CalendarResponseStatus;
+  showAs:"free"|"tentative"|"busy"|"oof"|"workingElsewhere"|"unknown"; visibility:CalendarVisibility; reminder:CalendarReminder;
 };
 export class CalendarError extends Error {
   status:number;
@@ -58,6 +61,14 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
   const responseStatus:CalendarResponseStatus|undefined=google ? (selfAttendee ? (["accepted","tentative","declined"].includes(selfAttendee.responseStatus) ? selfAttendee.responseStatus : "needsAction") : undefined)
     : graphResponse==="accepted" ? "accepted" : graphResponse==="tentativelyAccepted" ? "tentative" : graphResponse==="declined" ? "declined" : ["none","notResponded"].includes(graphResponse) ? "needsAction" : undefined;
   const canRespond=!cancelled&&!special&&!owner&&Boolean(version&&responseStatus);
+  const graphShowAs=String(raw.showAs||"busy");
+  const showAs=google ? (raw.transparency==="transparent"?"free":"busy") : (["free","tentative","busy","oof","workingElsewhere","unknown"].includes(graphShowAs)?graphShowAs:"unknown") as CalendarEvent["showAs"];
+  const graphVisibility=String(raw.sensitivity||"normal");
+  const visibility:CalendarVisibility=google ? (["public","private","confidential"].includes(raw.visibility)?raw.visibility:"default") : (["personal","private","confidential"].includes(graphVisibility)?graphVisibility:"default") as CalendarVisibility;
+  const googleOverrides=Array.isArray(raw.reminders?.overrides)?raw.reminders.overrides:[];
+  const reminder:CalendarReminder=google ? raw.reminders?.useDefault!==false ? {mode:"default"} : googleOverrides.length===0 ? {mode:"none"}
+    : googleOverrides.length===1&&googleOverrides[0]?.method==="popup"&&Number.isInteger(googleOverrides[0]?.minutes) ? {mode:"minutes",minutes:googleOverrides[0].minutes} : {mode:"custom"}
+    : raw.isReminderOn===false ? {mode:"none"} : raw.isReminderOn===true&&Number.isInteger(raw.reminderMinutesBeforeStart) ? {mode:"minutes",minutes:raw.reminderMinutesBeforeStart} : {mode:"custom"};
   const attendees=rawAttendees.length ? rawAttendees.map((a:any)=>google
     ? {email:String(a.email||""),name:a.displayName||undefined,self:Boolean(a.self),responseStatus:a.responseStatus||"needsAction"}
     : {email:String(a.emailAddress?.address||""),name:a.emailAddress?.name||undefined,self:false,responseStatus:a.status?.response==="accepted"?"accepted":a.status?.response==="declined"?"declined":a.status?.response==="tentativelyAccepted"?"tentative":"needsAction"}) : undefined;
@@ -68,7 +79,7 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
     htmlLink:google ? raw.htmlLink : raw.webLink,hangoutLink:google ? raw.hangoutLink : raw.onlineMeeting?.joinUrl,
     editable:!readOnlyReason,readOnlyReason,attendeeCount:rawAttendees.length,
     ...(attendees ? {attendees} : {}),
-    recurring,allDay,canRespond,...(responseStatus ? {responseStatus} : {})};
+    recurring,allDay,canRespond,...(responseStatus ? {responseStatus} : {}),showAs,visibility,reminder};
 }
 export function createCalendarService(provider:CalendarProvider,gateway:Gateway) {
   const google=provider === "google";
@@ -121,7 +132,7 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
   }
   async function update(input:Record<string,unknown>) {
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new CalendarError("Neteisingi įvykio duomenys.");
-    const allowed=new Set(["id","calendarId","connectionId","version","start","end","summary","description","location","attendees","confirmAttendees"]);
+    const allowed=new Set(["id","calendarId","connectionId","version","start","end","summary","description","location","attendees","confirmAttendees","showAs","visibility","reminder"]);
     if (Object.keys(input).some(key=>!allowed.has(key))) throw new CalendarError("Pateikti nepalaikomi įvykio laukai.");
     const eventId=identifier(input.id,"įvykio ID"),calendarId=identifier(input.calendarId,"kalendoriaus ID");
     if (typeof input.version !== "string" || !input.version || typeof input.connectionId !== "string") throw new CalendarError("Trūksta įvykio ID, paskyros arba versijos.");
@@ -131,6 +142,20 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       if (!Array.isArray(input.attendees)) throw new CalendarError("Neteisingas dalyvių sąrašas.");
       const emails=(input.attendees as any[]).map(a=>typeof a?.email==="string" ? a.email.toLowerCase().trim() : "");
       if (emails.some(e=>!e||!e.includes("@")||e.length>256)) throw new CalendarError("Neteisingas dalyvio el. paštas.");
+    }
+    const allowedShowAs=google?["free","busy"]:["free","tentative","busy","oof","workingElsewhere","unknown"];
+    if(input.showAs!==undefined&&!allowedShowAs.includes(String(input.showAs)))throw new CalendarError("Neteisinga laisvo arba užimto laiko būsena.");
+    const allowedVisibility=google?["default","public","private","confidential"]:["default","personal","private","confidential"];
+    if(input.visibility!==undefined&&!allowedVisibility.includes(String(input.visibility)))throw new CalendarError("Neteisingas įvykio matomumas.");
+    let reminder:Exclude<CalendarReminder,{mode:"custom"}>|undefined;
+    if(input.reminder!==undefined){
+      if(!input.reminder||typeof input.reminder!=="object"||Array.isArray(input.reminder)||Object.keys(input.reminder).some(key=>!["mode","minutes"].includes(key)))throw new CalendarError("Neteisingas priminimo nustatymas.");
+      const value=input.reminder as Record<string,unknown>,mode=value.mode;
+      if(mode!=="default"&&mode!=="none"&&mode!=="minutes")throw new CalendarError("Neteisingas priminimo nustatymas.");
+      if(mode==="default"&&!google)throw new CalendarError("Outlook įvykiui pasirink priminimo laiką arba jį išjunk.");
+      if(mode==="minutes"&&(!Number.isInteger(value.minutes)||Number(value.minutes)<0||Number(value.minutes)>40320))throw new CalendarError("Priminimas turi būti nuo 0 iki 40320 minučių.");
+      if(mode!=="minutes"&&value.minutes!==undefined)throw new CalendarError("Neteisingas priminimo nustatymas.");
+      reminder=mode==="minutes"?{mode,minutes:Number(value.minutes)}:{mode};
     }
     const connectionId=connected(input.connectionId),key=calendarEventKey(provider,connectionId,calendarId,eventId);
     const previous=locks.get(key) || Promise.resolve();
@@ -142,6 +167,7 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       const current=normalizeEvent(provider,raw,connectionId,calendarId);
       if (!current.editable) throw new CalendarError(current.readOnlyReason,403);
       if (current.version !== input.version) throw new CalendarError("Įvykis jau pakeistas kitur. Atnaujink kalendorių ir peržiūrėk laiką.",409);
+      if(current.recurring&&input.visibility!==undefined&&input.visibility!==current.visibility)throw new CalendarError("Pasikartojančio įvykio matomumą keisk originaliame kalendoriuje.",409);
       const curStart=current.start.dateTime ? new Date(current.start.dateTime).getTime() : NaN;
       const curEnd=current.end.dateTime ? new Date(current.end.dateTime).getTime() : NaN;
       const timeChanged=!Number.isNaN(curStart)&&(curStart!==new Date(times.start).getTime()||curEnd!==new Date(times.end).getTime());
@@ -151,7 +177,16 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       const attendeePatch=input.attendees !== undefined ? (google
         ? {attendees:(input.attendees as any[]).map(a=>({email:String(a.email).toLowerCase().trim()}))}
         : {attendees:(input.attendees as any[]).map(a=>({emailAddress:{address:String(a.email).toLowerCase().trim()},type:"required"}))}) : {};
-      const patch=google ? {start:{dateTime:times.start,timeZone:raw.start?.timeZone || "UTC"},end:{dateTime:times.end,timeZone:raw.end?.timeZone || "UTC"},...(input.summary !== undefined ? {summary:input.summary} : {}),...locPatch,...descPatch,...attendeePatch} : {start:{dateTime:times.start.replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:times.end.replace(/Z$/,""),timeZone:"UTC"},...(input.summary !== undefined ? {subject:input.summary} : {}),...locPatch,...descPatch,...attendeePatch};
+      const propertyPatch=google ? {
+        ...(input.showAs!==undefined?{transparency:input.showAs==="free"?"transparent":"opaque"}:{}),
+        ...(input.visibility!==undefined?{visibility:input.visibility}:{}),
+        ...(reminder?{reminders:reminder.mode==="default"?{useDefault:true}:reminder.mode==="none"?{useDefault:false,overrides:[]}:{useDefault:false,overrides:[{method:"popup",minutes:reminder.minutes}]}}:{}),
+      } : {
+        ...(input.showAs!==undefined?{showAs:input.showAs}:{}),
+        ...(input.visibility!==undefined?{sensitivity:input.visibility==="default"?"normal":input.visibility}:{}),
+        ...(reminder?reminder.mode==="none"?{isReminderOn:false}:{isReminderOn:true,reminderMinutesBeforeStart:reminder.minutes}:{}),
+      };
+      const patch=google ? {start:{dateTime:times.start,timeZone:raw.start?.timeZone || "UTC"},end:{dateTime:times.end,timeZone:raw.end?.timeZone || "UTC"},...(input.summary !== undefined ? {summary:input.summary} : {}),...locPatch,...descPatch,...attendeePatch,...propertyPatch} : {start:{dateTime:times.start.replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:times.end.replace(/Z$/,""),timeZone:"UTC"},...(input.summary !== undefined ? {subject:input.summary} : {}),...locPatch,...descPatch,...attendeePatch,...propertyPatch};
       const updated=await gateway.request(base+(google ? "?sendUpdates=all&conferenceDataVersion=1" : ""),{method:"PATCH",headers:{...headers,...((google || raw["@odata.etag"]) ? {"If-Match":current.version} : {})},body:JSON.stringify(patch)});
       connected(connectionId);
       if (updated?.id!==eventId) throw new CalendarError("Tiekėjas nepatvirtino pasirinkto įvykio pakeitimo. Atnaujink kalendorių.",502);
