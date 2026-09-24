@@ -14,6 +14,7 @@ import {TaskListManager} from "@/app/task-list-manager";
 import { MicrosoftTaskReminder } from "@/app/microsoft-task-reminder";
 import { MicrosoftTaskRecurrence } from "@/app/microsoft-task-recurrence";
 import { GoogleTaskOrder } from "@/app/google-task-order";
+import {FOCUS_DURATION_SECONDS,parseFocusSession,remainingFocusSeconds,serializeFocusSession} from "@/lib/focus-session";
 
 type View = "calendar" | "tasks" | "focus";
 type Mode = "day" | "workweek" | "week" | "month";
@@ -64,8 +65,9 @@ export default function Planner() {
   const [quickTitle, setQuickTitle] = useState(""); const [search, setSearch] = useState(""); const [project, setProject] = useState("Visi");
   const [eventDate, setEventDate] = useState<Date | null>(null); const [taskModal, setTaskModal] = useState(false);
   const [toast, setToast] = useState(""); const [loading, setLoading] = useState(true); const [mirrorFree, setMirrorFree] = useState(false);
-  const [focusTask, setFocusTask] = useState<Task | null>(null); const [seconds, setSeconds] = useState(25 * 60); const [running, setRunning] = useState(false);
-  const restoredFocus = useRef(false);
+  const [focusTask, setFocusTask] = useState<Task | null>(null); const [seconds, setSeconds] = useState(FOCUS_DURATION_SECONDS); const [running, setRunning] = useState(false);
+  const [focusStartedAt,setFocusStartedAt]=useState<number|null>(null),[focusEndsAt,setFocusEndsAt]=useState<number|null>(null);
+  const [focusRestored,setFocusRestored]=useState(false);
 
   const panelOpen=view==="calendar" && (isMobile ? mobilePanelOpen : !collapsed);
   function changeView(next:View) {setView(next);setMobilePanelOpen(false);}
@@ -136,10 +138,30 @@ export default function Planner() {
     if (result === "not-configured") setToast(`${provider} OAuth dar nesukonfigūruotas serveryje.`);
     if (result) window.history.replaceState({}, "", window.location.pathname);
   }, []);
-  useEffect(() => { if (!running) return; const id = window.setInterval(() => setSeconds((value) => Math.max(0, value - 1)), 1000); return () => clearInterval(id); }, [running]);
-  useEffect(() => { if (!seconds) { setRunning(false); setToast("Fokusavimo sesija baigta — metas atsikvėpti."); } }, [seconds]);
-  useEffect(() => { if (restoredFocus.current || !tasks.length || focusTask) return; restoredFocus.current=true; try { const raw=localStorage.getItem("focus-session"); if (!raw) return; const data=JSON.parse(raw); if (typeof data.seconds!=="number" || !data.taskKey) return; const task=tasks.find(t=>t.key===data.taskKey && !t.completed); if (task) { setFocusTask(task); setSeconds(data.seconds); } } catch {} }, [tasks]);
-  useEffect(() => { if (!restoredFocus.current) return; try { if (focusTask && seconds>0) localStorage.setItem("focus-session",JSON.stringify({taskKey:focusTask.key,seconds})); else localStorage.removeItem("focus-session"); } catch {} }, [focusTask,seconds]);
+  useEffect(() => {
+    if(!running||!focusEndsAt)return;
+    const sync=()=>{const remaining=remainingFocusSeconds(focusEndsAt);setSeconds(remaining);if(!remaining){setRunning(false);setFocusEndsAt(null);setToast("Fokusavimo sesija baigta — metas atsikvėpti.");}};
+    sync();const id=window.setInterval(sync,250);return()=>clearInterval(id);
+  },[running,focusEndsAt]);
+  useEffect(() => {
+    if(focusRestored||loading)return;
+    try{
+      const raw=localStorage.getItem("focus-session"),saved=parseFocusSession(raw);if(!saved){if(raw)localStorage.removeItem("focus-session");return;}
+      const task=tasks.find(item=>item.key===saved.taskKey&&!item.completed);if(!task){localStorage.removeItem("focus-session");return;}
+      setFocusTask(task);setSeconds(saved.remainingSeconds);setRunning(saved.running);setFocusStartedAt(saved.startedAt);setFocusEndsAt(saved.endsAt);
+      if(!saved.remainingSeconds)setToast("Fokusavimo sesija baigta — metas atsikvėpti.");
+    }catch{}finally{setFocusRestored(true);}
+  },[tasks,loading,focusRestored]);
+  useEffect(()=>{
+    if(!focusRestored||!focusTask)return;
+    const current=tasks.find(item=>item.key===focusTask.key&&!item.completed);
+    if(!current){setFocusTask(null);setRunning(false);setSeconds(FOCUS_DURATION_SECONDS);setFocusStartedAt(null);setFocusEndsAt(null);}
+    else if(current!==focusTask)setFocusTask(current);
+  },[tasks,focusTask,focusRestored]);
+  useEffect(() => {
+    if(!focusRestored)return;
+    try{if(focusTask&&seconds>0)localStorage.setItem("focus-session",serializeFocusSession({taskKey:focusTask.key,remainingSeconds:seconds,running,startedAt:focusStartedAt,endsAt:focusEndsAt}));else localStorage.removeItem("focus-session");}catch{}
+  },[focusTask,seconds,running,focusStartedAt,focusEndsAt,focusRestored]);
 
   function report(error: unknown) { setToast(error instanceof Error ? error.message : "Veiksmo atlikti nepavyko."); }
   async function createTask(data: Record<string, unknown>) {
@@ -216,7 +238,14 @@ export default function Planner() {
     } catch (error) { report(error); }
   }
   function move(amount: number) { const next = new Date(anchor); mode === "month" ? next.setMonth(next.getMonth() + amount) : next.setDate(next.getDate() + amount * (mode === "day" ? 1 : 7)); setAnchor(next); }
-  function startFocus(task: Task) { setFocusTask(task); setSeconds(25 * 60); setRunning(false); setView("focus"); }
+  function startFocus(task: Task) { setFocusTask(task); setSeconds(FOCUS_DURATION_SECONDS); setRunning(false); setFocusStartedAt(null);setFocusEndsAt(null);setView("focus"); }
+  function resetFocus(){setRunning(false);setSeconds(FOCUS_DURATION_SECONDS);setFocusStartedAt(null);setFocusEndsAt(null);}
+  function toggleFocus(task:Task|undefined){
+    if(!task)return;
+    if(running){setSeconds(focusEndsAt?remainingFocusSeconds(focusEndsAt):seconds);setRunning(false);setFocusEndsAt(null);return;}
+    const now=Date.now(),remaining=seconds>0?seconds:FOCUS_DURATION_SECONDS;
+    setFocusTask(task);setSeconds(remaining);setFocusStartedAt(seconds>0?focusStartedAt??now:now);setFocusEndsAt(now+remaining*1000);setRunning(true);
+  }
   async function disconnect(provider: "microsoft" | "google") {
     const name = provider === "microsoft" ? "Microsoft" : "Google";
     if (!window.confirm(`Atjungti ${name} paskyrą šiame įrenginyje?`)) return;
@@ -241,7 +270,11 @@ export default function Planner() {
       {view === "calendar" && !clock && <div className="loading" role="status" aria-label="Kraunamas kalendorius"><i/><i/><i/></div>}
       {view === "calendar" && clock && <Calendar mode={mode} setMode={setMode} anchor={anchor} setAnchor={setAnchor} days={days} monthDays={monthDays} events={calendarEvents} tasks={calendarTasks} loading={loading} move={move} onDrop={dropTask} onCreate={setEventDate}/>}
       {view === "tasks" && <TaskBoard tasks={tasks.filter((task) => `${task.title} ${task.notes || ""}`.toLowerCase().includes(search.toLowerCase()))} onDone={(task) => { void patchTask(task, { completed: !task.completed }).catch(report); }} onFocus={startFocus} onAdd={() => setTaskModal(true)}/>} 
-      {view === "focus" && <Focus task={focusTask || openTasks[0]} tasks={openTasks} seconds={seconds} running={running} onToggle={() => setRunning(!running)} onReset={() => { setRunning(false); setSeconds(25 * 60); }} onSelect={setFocusTask} onDone={async () => { if (focusTask) await patchTask(focusTask, { completed: true }); setFocusTask(null); setRunning(false); setSeconds(25 * 60); }}/>} 
+      {view === "focus" && <Focus
+        task={focusTask || openTasks[0]} tasks={openTasks} seconds={seconds} running={running} startedAt={focusStartedAt}
+        onToggle={() => toggleFocus(focusTask||openTasks[0])} onReset={resetFocus} onSelect={startFocus}
+        onDone={async () => { const task=focusTask||openTasks[0];if(task)await patchTask(task,{completed:true});setFocusTask(null);resetFocus(); }}/>
+      }
     </section>
     <aside className="taskPanel" id="task-panel" aria-label="Neplanuotos užduotys" hidden={!panelOpen}>
       <header className="panelHeader"><div><span className="eyebrow">DARBŲ DĖŽUTĖ</span><h1>{clock ? clock.toLocaleDateString("lt-LT", { weekday: "long", day: "numeric", month: "long" }) : "Šiandien"}</h1></div><button className="roundButton" aria-label="Nauja užduotis" onClick={() => setTaskModal(true)}><Icon name="plus"/></button></header>
@@ -371,7 +404,7 @@ function TaskBlock({ task, segment }: { task: Task; segment:DaySegment }) {
 function Month({ days, anchor, events, tasks, onCreate }: { days: Date[]; anchor: Date; events: CalEvent[]; tasks: Task[]; onCreate: (d: Date) => void }) { return <div className="monthGrid">{dayNames.map((name) => <div className="weekday" key={name}>{name}</div>)}{days.map((day) => { const items = [...events.filter((event) => touchesDay(new Date(event.start.dateTime || `${event.start.date}T00:00:00`),new Date(event.end.dateTime || `${event.end.date}T00:00:00`),day)).map((event) => event.summary || "Įvykis"), ...tasks.filter((task) => !task.completed && task.scheduled_at && touchesDay(new Date(task.scheduled_at),new Date(Date.parse(task.scheduled_at)+task.duration_minutes*60000),day)).map((task) => `✓ ${task.title}`)]; return <button className={`${day.getMonth() !== anchor.getMonth() ? "outside" : ""} ${sameDay(day, new Date()) ? "today" : ""}`} onDoubleClick={() => onCreate(day)} key={day.toISOString()}><strong>{day.getDate()}</strong>{items.slice(0, 3).map((item, i) => <span key={`${item}-${i}`}>{item}</span>)}{items.length > 3 && <small>+{items.length - 3} daugiau</small>}</button>; })}</div>; }
 
 function TaskBoard({ tasks, onDone, onFocus, onAdd }: { tasks: Task[]; onDone: (t: Task) => void; onFocus: (t: Task) => void; onAdd: () => void }) { const actions=useContext(TaskActions); const groups = [{ name: "Toliau", list: tasks.filter((t) => !t.completed && !t.scheduled_at) }, { name: "Suplanuota", list: tasks.filter((t) => !t.completed && t.scheduled_at) }, { name: "Atlikta", list: tasks.filter((t) => t.completed) }]; return <div className="board"><header><div><span className="eyebrow">UŽDUOTYS</span><h2>Darbų srautas</h2></div><button className="newButton" onClick={onAdd}>＋ Nauja užduotis</button></header><div className="columns">{groups.map((group) => <section key={group.name}><h3>{group.name}<b>{group.list.length}</b></h3>{group.list.map((task) => <article className={task.completed ? "done" : ""} key={task.key}><button className="check" disabled={Boolean(task.readonly_reason)} aria-label={`${task.completed ? "Atkurti" : "Užbaigti"}: ${task.title}`} onClick={() => onDone(task)}>✓</button><button className="boardTaskTitle" onClick={()=>actions.edit(task)}>{task.title}</button><small>{taskSourceLabel(task)}{task.stale ? " · pasenę duomenys" : ""}</small><p>{task.notes || "Be papildomų pastabų"}</p><footer><span>{task.project || "Asmeniniai"}</span><small>{durationLabel(task.duration_minutes || 30)}</small>{!task.completed && <button onClick={() => onFocus(task)}>▶ Fokusas</button>}</footer></article>)}{!group.list.length && <div className="columnEmpty">Nieko nėra</div>}</section>)}</div></div>; }
-function Focus({ task, tasks, seconds, running, onToggle, onReset, onSelect, onDone }: { task?: Task; tasks: Task[]; seconds: number; running: boolean; onToggle: () => void; onReset: () => void; onSelect: (t: Task) => void; onDone: () => void }) { const progress = 1 - seconds / 1500; return <div className="focus"><header><span className="eyebrow">GILUS DARBAS</span><h2>Vienas darbas. Jokių trukdžių.</h2></header><div className="focusGrid"><section className="timer"><div className="timerRing" style={{ background: `conic-gradient(#a7ff6a ${progress * 360}deg,#293447 0)` }}><div><strong>{String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</strong><span>{running ? "Fokusuojiesi" : "Pasiruošęs"}</span></div></div><h3>{task?.title || "Pasirink užduotį"}</h3><p>{task?.project || "Užduotis nepasirinkta"}</p><div><button onClick={onReset}>↺</button><button className="play" onClick={onToggle}>{running ? "Ⅱ" : "▶"}</button><button disabled={!task || Boolean(task.readonly_reason)} onClick={onDone}>✓</button></div></section><aside><h3>Fokusavimo eilė <b>{tasks.length}</b></h3>{tasks.map((item) => <button className={item.key === task?.key ? "active" : ""} onClick={() => onSelect(item)} key={item.key}><i className={item.priority || "normal"}/><span><strong>{item.title}</strong><small>{item.project || "Asmeniniai"} · {durationLabel(item.duration_minutes || 30)}</small></span></button>)}</aside></div></div>; }
+function Focus({ task, tasks, seconds, running, startedAt, onToggle, onReset, onSelect, onDone }: { task?: Task; tasks: Task[]; seconds: number; running: boolean; startedAt:number|null;onToggle: () => void; onReset: () => void; onSelect: (t: Task) => void; onDone: () => void }) { const progress = 1 - seconds / FOCUS_DURATION_SECONDS; return <div className="focus"><header><span className="eyebrow">GILUS DARBAS</span><h2>Vienas darbas. Jokių trukdžių.</h2></header><div className="focusGrid"><section className="timer"><div className="timerRing" style={{ background: `conic-gradient(#a7ff6a ${progress * 360}deg,#293447 0)` }}><div><strong>{String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</strong><span>{running ? "Fokusuojiesi" : startedAt ? "Pristabdyta" : "Pasiruošęs"}</span></div></div><h3>{task?.title || "Pasirink užduotį"}</h3><p>{task?.project || "Užduotis nepasirinkta"}</p>{startedAt&&<small className="focusStarted">Pradėta {new Date(startedAt).toLocaleTimeString("lt-LT",{hour:"2-digit",minute:"2-digit"})}</small>}<div><button aria-label="Atstatyti fokusavimo sesiją" onClick={onReset}>↺</button><button className="play" aria-label={running?"Pristabdyti fokusavimo sesiją":"Pradėti fokusavimo sesiją"} onClick={onToggle}>{running ? "Ⅱ" : "▶"}</button><button aria-label="Užbaigti fokusuojamą užduotį" disabled={!task || Boolean(task.readonly_reason)} onClick={onDone}>✓</button></div></section><aside><h3>Fokusavimo eilė <b>{tasks.length}</b></h3>{tasks.map((item) => <button className={item.key === task?.key ? "active" : ""} onClick={() => onSelect(item)} key={item.key}><i className={item.priority || "normal"}/><span><strong>{item.title}</strong><small>{item.project || "Asmeniniai"} · {durationLabel(item.duration_minutes || 30)}</small></span></button>)}</aside></div></div>; }
 
 function Modal({ eyebrow, title, onClose, children }: { eyebrow: string; title: string; onClose: () => void; children: React.ReactNode }) {
   const panel = useRef<HTMLElement>(null); const close = useRef(onClose); close.current = onClose;

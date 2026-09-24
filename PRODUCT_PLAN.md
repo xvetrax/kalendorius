@@ -143,7 +143,7 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [x] Šaltinyje ištrintų užduočių pasirenkamų Outlook blokų pasiekiamas, pakartojamas sutvarkymas nustatymuose.
 - [ ] Gyvų Google ir Microsoft paskyrų patikra pagal priėmimo scenarijus.
 - [x] Fokusavimo sesijos pradinis atkūrimas nebeištrina išsaugotos sesijos prieš įkeliant užduotis.
-- [ ] Fokusavimo sesijoje išsaugoti tikrą pradžios laiką ir veikimo / pauzės būseną; dabar išlieka užduoties ryšys ir likusios sekundės, o po perkrovimo sesija būna sustabdyta.
+- [x] Fokusavimo sesijoje išsaugomas tikras pradžios laikas, absoliutus pabaigos laikas ir veikimo / pauzės būsena; veikianti bei pristabdyta sesija teisingai atkuriama po perkrovimo.
 
 Priimta, kai Google, Microsoft ir vietinę užduotį galima sukurti, suplanuoti, perkelti, užbaigti ir atkurti; persikrovus bei pasikeitus duomenims šaltinyje rodoma teisinga būsena. Nepalaikomi laukai nepateikiami kaip tariamai sinchronizuojami.
 
@@ -169,12 +169,18 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P1 — kalendoriaus įvykio tapatybė.** Bendras raktas apima tiekėją, prisijungimą, kalendorių ir įvykį. UI atnaujina tik pasirinktą įrašą; PATCH ir DELETE privalo pateikti kalendorių, prisijungimą bei versiją ir naudoja to kalendoriaus kelią. Vienodi ID skirtinguose Google / Outlook kalendoriuose patikrinti integraciniais testais.
 - [x] **Outlook bloko rodymo susiejimas.** Serveris susieja Graph įvykį tik pagal dabartinę Microsoft paskyrą, pirminį kalendorių, įvykio ID ir kuriant išsaugotą `transactionId`; neatitinkantis to paties ID įvykis kitame kalendoriuje lieka matomas. UI bloką sutraukia į užduoties planą tik kai sutampa dabartinis laikas, trukmė, pavadinimas ir saugios bloko savybės.
 - [x] **P1 — našlaičių Outlook blokų valymas.** Ištrintų šaltinio užduočių susieti blokai patenka į pasiekiamą, pakartojamą valymo eilę.
-- [ ] **P1 — produkto paviršius.** Google `parent` / `previous` užbaigtas; dar reikia išsaugoti tikrą fokusavimo pradžios laiką ir veikimo / pauzės būseną.
+- [x] **P1 — produkto paviršius.** Užbaigti Google `parent` / `previous` ir fokusavimo sesijos pradžios, veikimo bei pauzės išsaugojimą.
 - [x] **P1 — diegimo health.** Viešas minimalus `/api/health` neapeina duomenų API ir veikia su `APP_PASSWORD`; Docker ir Playwright sveikatos patikros naudoja šį maršrutą.
 - [ ] **P1 — Docker priėmimas.** Realiai sukurti ir paleisti image; patikrinti sveikatą, versiją, neprivilegijuotą procesą ir duomenų tomo išlikimą.
 - [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo ir RSVP spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
 
 ## Darbo eiga ir ribos
+
+### 2026-09-24 fokusavimo sesijos išlikimas
+
+- Fokusavimo būsena saugo užduoties raktą, likusį laiką, tikrą pirmo paleidimo laiką, veikimo būseną ir absoliutų pabaigos laiką. Veikiantis laikmatis po perkrovimo įskaito praėjusį laiką, pristabdyta sesija lieka pristabdyta, o senas `{taskKey, seconds}` formatas saugiai perkeliamas kaip pauzė.
+- Laikmatis skaičiuojamas nuo absoliutaus pabaigos laiko, todėl naršyklės fono režimas nebekaupia intervalų dreifo. UI rodo pradžios laiką ir turi įvardytus paleidimo, pauzės, atstatymo bei užbaigimo mygtukus.
+- Patikra: `typecheck`, 202/202 vienetiniai ir integraciniai testai, produkcinis build ir 27/27 izoliuoti Playwright scenarijai.
 
 ### 2026-09-24 Google Tasks hierarchija ir eilė
 

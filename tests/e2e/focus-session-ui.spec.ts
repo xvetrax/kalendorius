@@ -1,0 +1,34 @@
+import {expect,test} from "@playwright/test";
+
+test("running and paused focus sessions keep start time and timer state across reloads",async({page})=>{
+  const now=Date.parse("2026-09-24T09:00:00.000Z"),startedAt=now-5*60_000,endsAt=now+10*60_000;
+  const task={id:1,key:"local:1",source:"local",title:"Gilus darbas",notes:"",completed:0,due_at:null,scheduled_at:null,duration_minutes:30,mirror_requested:0,mirror_event_id:null,mirror_error:null,project:"Darbas",priority:"normal",energy:"medium",tags:"",schedule_version:0,legacy_schedule:0};
+  await page.clock.setFixedTime(new Date(now));
+  await page.addInitScript(value=>{if(!localStorage.getItem("focus-session"))localStorage.setItem("focus-session",JSON.stringify(value));},{version:1,taskKey:task.key,remainingSeconds:1200,running:true,startedAt,endsAt});
+  await page.route("**/api/tasks?envelope=1",route=>route.fulfill({json:{items:[task],warnings:[],lists:[],cleanups:[]}}));
+  await page.route("**/api/microsoft/events**",route=>route.fulfill({json:{items:[]}}));
+  await page.route("**/api/google/events**",route=>route.fulfill({json:{items:[]}}));
+  await page.goto("/");
+  await page.getByRole("button",{name:"Fokusas"}).click();
+  const timer=page.locator(".timer");
+  await expect(timer.locator(".timerRing strong")).toHaveText("10:00");
+  await expect(timer.getByText("Fokusuojiesi",{exact:true})).toBeVisible();
+  await expect(timer.getByText(/Pradėta/)).toBeVisible();
+  let stored=await page.evaluate(()=>JSON.parse(localStorage.getItem("focus-session")||"null"));
+  expect(stored).toMatchObject({version:1,taskKey:task.key,remainingSeconds:600,running:true,startedAt,endsAt});
+  await page.reload();await page.getByRole("button",{name:"Fokusas"}).click();
+  await expect(timer.locator(".timerRing strong")).toHaveText("10:00");await expect(timer.getByText("Fokusuojiesi",{exact:true})).toBeVisible();
+  stored=await page.evaluate(()=>JSON.parse(localStorage.getItem("focus-session")||"null"));
+  expect(stored).toMatchObject({version:1,taskKey:task.key,remainingSeconds:600,running:true,startedAt,endsAt});
+  await timer.getByRole("button",{name:"Pristabdyti fokusavimo sesiją"}).click();
+  await expect(timer.getByText("Pristabdyta",{exact:true})).toBeVisible();
+  stored=await page.evaluate(()=>JSON.parse(localStorage.getItem("focus-session")||"null"));
+  expect(stored).toMatchObject({version:1,taskKey:task.key,remainingSeconds:600,running:false,startedAt,endsAt:null});
+  await page.reload();await page.getByRole("button",{name:"Fokusas"}).click();
+  await expect(timer.locator(".timerRing strong")).toHaveText("10:00");await expect(timer.getByText("Pristabdyta",{exact:true})).toBeVisible();
+  stored=await page.evaluate(()=>JSON.parse(localStorage.getItem("focus-session")||"null"));
+  expect(stored).toMatchObject({version:1,taskKey:task.key,remainingSeconds:600,running:false,startedAt,endsAt:null});
+  await timer.getByRole("button",{name:"Pradėti fokusavimo sesiją"}).click();
+  stored=await page.evaluate(()=>JSON.parse(localStorage.getItem("focus-session")||"null"));
+  expect(stored).toMatchObject({version:1,taskKey:task.key,remainingSeconds:600,running:true,startedAt,endsAt:now+600_000});
+});
