@@ -75,6 +75,49 @@ for(const provider of ["google","outlook"]) {
     assert.equal(results[0].status,"fulfilled");assert.equal(results[1].status,"rejected");assert.equal(results[1].reason.status,409);assert.equal(calls.filter(c=>c.method==="PATCH").length,1);
   });
 }
+function rsvpFixture(provider) {
+  const raw=provider==="google"
+    ? {id:"invite",summary:"Kvietimas",etag:'"r1"',organizer:{self:false},start:{dateTime:"2026-10-24T08:00:00Z"},end:{dateTime:"2026-10-24T09:00:00Z"},attendees:[{email:"me@example.test",self:true,responseStatus:"needsAction"},{email:"host@example.test",organizer:true,responseStatus:"accepted"}]}
+    : {id:"invite",subject:"Kvietimas","@odata.etag":'W/"r1"',isOrganizer:false,type:"singleInstance",start:{dateTime:"2026-10-24T08:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00",timeZone:"UTC"},responseStatus:{response:"notResponded"},attendees:[{emailAddress:{address:"host@example.test"},status:{response:"accepted"}}]};
+  const calls=[],state={connection:"account-a"};
+  const gateway={connection:()=>state.connection,async request(path,init={}){
+    calls.push({path,...init,body:init.body?JSON.parse(init.body):undefined});
+    if(provider==="google"&&init.method==="PATCH"){
+      if(new Headers(init.headers).get("If-Match")!==raw.etag)throw Object.assign(new Error("Conflict"),{status:412});
+      const response=JSON.parse(init.body).attendees[0];raw.attendees.find(attendee=>attendee.self).responseStatus=response.responseStatus;raw.etag='"r2"';
+    }
+    if(provider==="outlook"&&init.method==="POST"){
+      const action=path.split("/").at(-1);raw.responseStatus.response=action==="accept"?"accepted":action==="tentativelyAccept"?"tentativelyAccepted":"declined";raw["@odata.etag"]='W/"r2"';return null;
+    }
+    return structuredClone(raw);
+  }};
+  const service=createCalendarService(provider,gateway),event=normalizeEvent(provider,raw,"account-a");
+  return {service,raw,calls,state,input:{id:raw.id,calendarId:"primary",connectionId:"account-a",version:event.version},event};
+}
+for(const provider of ["google","outlook"]) {
+  test(`${provider}: attendee RSVP is versioned, provider-specific and retry-safe`,async()=>{
+    const {service,raw,calls,input,event}=rsvpFixture(provider);assert.equal(event.editable,false);assert.equal(event.canRespond,true);assert.equal(event.responseStatus,"needsAction");
+    const result=await service.respond({...input,responseStatus:"tentative"});assert.deepEqual(result,{ok:true,responseStatus:"tentative"});
+    const write=calls.find(call=>call.method);assert.ok(write);
+    if(provider==="google"){
+      assert.match(write.path,/\?sendUpdates=all$/);assert.equal(write.headers["If-Match"],input.version);
+      assert.deepEqual(write.body,{attendeesOmitted:true,attendees:[{email:"me@example.test",responseStatus:"tentative"}]});
+    }else{
+      assert.match(write.path,/\/tentativelyAccept$/);assert.deepEqual(write.body,{sendResponse:true});
+    }
+    const current=normalizeEvent(provider,raw,"account-a");assert.equal(current.responseStatus,"tentative");
+    await service.respond({...input,responseStatus:"tentative"});assert.equal(calls.filter(call=>call.method).length,1);
+  });
+  test(`${provider}: RSVP rejects stale, invalid, organizer and changed-account requests before writing`,async()=>{
+    const {service,raw,calls,input,state}=rsvpFixture(provider);
+    await assert.rejects(service.respond({...input,version:"stale",responseStatus:"accepted"}),error=>error.status===409);
+    await assert.rejects(service.respond({...input,responseStatus:"maybe"}),error=>error.status===400);
+    if(provider==="google")raw.organizer.self=true;else raw.isOrganizer=true;
+    await assert.rejects(service.respond({...input,responseStatus:"declined"}),error=>error.status===403);
+    state.connection="account-b";await assert.rejects(service.respond({...input,responseStatus:"accepted"}),error=>error.status===409);
+    assert.equal(calls.filter(call=>call.method).length,0);
+  });
+}
 test("event list follows Google tokens and validates Graph nextLink before requesting",async()=>{
   const {raw}=fixture("google");let calls=0;
   const google=createCalendarService("google",{connection:()=>"a",request:async(path)=>{calls++;if(calls===1)return {items:[raw],nextPageToken:"safe & token"};assert.ok(path.includes("pageToken=safe+%26+token"));return {items:[{...raw,id:"second"}]};}});

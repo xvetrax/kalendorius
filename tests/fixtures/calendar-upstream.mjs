@@ -13,6 +13,8 @@ google.set("google-overlap",{...structuredClone(google.get("google-personal")),i
 google.set("google-night",{...structuredClone(google.get("google-personal")),id:"google-night",summary:"Naktinis įvykis",start:{dateTime:date(1,23)},end:{dateTime:date(2,1)}});
 let version=1;
 google.set("google-short",{...structuredClone(google.get("google-personal")),id:"google-short",summary:"Trumpas",start:{dateTime:new Date(Date.parse(date(1,23))+45*60000).toISOString()},end:{dateTime:date(2,0)}});
+google.set("google-invite",{...structuredClone(google.get("google-personal")),id:"google-invite",summary:"Google kvietimas",organizer:{self:false},attendees:[{email:"me@example.test",self:true,responseStatus:"needsAction"},{email:"host@example.test",organizer:true,responseStatus:"accepted"}],start:{dateTime:date(3,15)},end:{dateTime:date(3,16)}});
+outlook.set("outlook-readonly",{...outlook.get("outlook-readonly"),responseStatus:{response:"notResponded"},attendees:[{emailAddress:{address:"host@example.test"},status:{response:"accepted"}}]});
 export const calendarUpstream={google:new Map([["primary",google],["other/calendar",new Map([["google-personal",{...structuredClone(google.get("google-personal")),summary:"Kitas Google"}]])]]),outlook:new Map([["primary",outlook],["other/calendar",new Map([["outlook-personal",{...structuredClone(outlook.get("outlook-personal")),subject:"Kitas Outlook"}]])]])};
 globalThis.fetch=async(input,init={})=>{
   const url=new URL(String(input)),method=init.method || "GET";
@@ -34,16 +36,23 @@ globalThis.fetch=async(input,init={})=>{
   if(!map)return Response.json({error:"Missing calendar"},{status:404});
   const encodedId=match?match[2]:url.pathname.startsWith("/v1.0/me/calendar/events/")?url.pathname.slice("/v1.0/me/calendar/events/".length):undefined;
   if(!encodedId && method==="GET")return Response.json({[isGoogle?"items":"value"]:[...map.values()]});
-  const id=decodeURIComponent(encodedId||""),event=map.get(id);
+  const actionMatch=!isGoogle&&encodedId?.match(/^(.+)\/(accept|tentativelyAccept|decline)$/),id=decodeURIComponent(actionMatch?.[1]||encodedId||""),event=map.get(id);
   if(!event)return Response.json({error:"Not found"},{status:404});
+  if(actionMatch&&method==="POST"){
+    const action=actionMatch[2];event.responseStatus={response:action==="accept"?"accepted":action==="tentativelyAccept"?"tentativelyAccepted":"declined"};version++;event["@odata.etag"]=`"v${version}"`;return new Response(null,{status:202});
+  }
   if(method==="DELETE") {if(new Headers(init.headers).get("If-Match")!==(isGoogle?event.etag:event["@odata.etag"]))return Response.json({error:"Version changed"},{status:412});map.delete(id);return new Response(null,{status:204});}
   if(method==="PATCH") {
     const match=new Headers(init.headers).get("If-Match"),etag=isGoogle?event.etag:event["@odata.etag"];
     if(match!==etag)return Response.json({error:"Version changed"},{status:412});
     const body=JSON.parse(init.body);
     if(body.summary==="SIMULATE_CONFLICT" || body.subject==="SIMULATE_CONFLICT")return Response.json({error:"simulated"},{status:412});
-    if(Object.keys(body).some(k=>!["start","end","summary","subject"].includes(k)))throw new Error("Fixture caught destructive metadata update");
-    Object.assign(event,body);version++;event[isGoogle?"etag":"@odata.etag"]=`"v${version}"`;
+    if(isGoogle&&body.attendeesOmitted===true){
+      const response=body.attendees?.[0],self=event.attendees?.find(attendee=>attendee.self);if(!response||!self||response.email!==self.email)throw new Error("Fixture caught unsafe RSVP update");self.responseStatus=response.responseStatus;
+    }else{
+      if(Object.keys(body).some(k=>!["start","end","summary","subject"].includes(k)))throw new Error("Fixture caught destructive metadata update");Object.assign(event,body);
+    }
+    version++;event[isGoogle?"etag":"@odata.etag"]=`"v${version}"`;
   } else if(method!=="GET")return Response.json({error:"Unsupported test operation"},{status:405});
   return Response.json(event);
 };

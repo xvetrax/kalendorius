@@ -69,3 +69,8 @@ export async function PATCH(request:Request) {
   try {assertSameOrigin(request);return Response.json(await calendar.update(await request.json()));}
   catch(error) {return failure(error);}
 }
+
+export async function PUT(request:Request) {
+  try {assertSameOrigin(request);return Response.json(await calendar.respond(await request.json()));}
+  catch(error) {return failure(error);}
+}

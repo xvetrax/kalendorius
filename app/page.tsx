@@ -3,7 +3,7 @@
 import { createContext, DragEvent, FormEvent, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {createPortal} from "react-dom";
 import type { MirrorCleanup, Task, TaskList, TaskStep } from "@/lib/task-service";
-import type { CalendarEvent as CalEvent } from "@/lib/calendar-events";
+import type { CalendarEvent as CalEvent, CalendarResponseStatus } from "@/lib/calendar-events";
 import { visibleCalendarEvents } from "@/lib/calendar-mirrors";
 import { EventActions, EventBlock } from "@/app/calendar-event";
 import { dateAtMinute, dayBounds, layoutDay, minuteOfDay, segmentStyle, touchesDay, type DaySegment } from "@/lib/calendar-layout";
@@ -203,6 +203,15 @@ export default function Planner() {
       setToast("Įvykio pakeitimai išsaugoti.");await load();
     } catch(error) {await load();throw error;}
   }
+  async function respondEvent(event:CalEvent,responseStatus:Exclude<CalendarResponseStatus,"needsAction">) {
+    ++loadVersion.current;
+    try {
+      await responseJson(await fetch(`/api/${event.provider==="outlook"?"microsoft":"google"}/events`,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({id:event.id,calendarId:event.calendarId,connectionId:event.connectionId,version:event.version,responseStatus})}));
+      setEvents(current=>current.map(item=>item.key===event.key?{...item,responseStatus}:item));
+      setToast(responseStatus==="accepted"?"Dalyvavimas patvirtintas.":responseStatus==="tentative"?"Pažymėta, kad galbūt dalyvausi.":"Dalyvavimas atmestas.");
+      await load();
+    } catch(error) {await load();throw error;}
+  }
   async function moveEvent(event:CalEvent,start:Date,end:Date) {
     if(event.attendeeCount) {setEditingEvent({event,start:start.toISOString(),end:end.toISOString()});return;}
     try {await saveEvent(event,{start:start.toISOString(),end:end.toISOString()});setToast(`„${event.summary}" perkeltas.`);} catch(error) {report(error);}
@@ -288,7 +297,7 @@ export default function Planner() {
     </aside>
     {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div><h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><Connection name="Outlook + To Do" providerLabel="Microsoft" letter="O" tone="blue" connected={outlook} ready={outlookReady} account={outlookAccount} href="/api/microsoft/connect" onDisconnect={() => disconnect("microsoft")}/><Connection name="Google Calendar + Tasks" providerLabel="Google" letter="G" tone="multi" connected={google} ready={googleReady} account={googleAccount} href="/api/google/connect" onDisconnect={() => disconnect("google")}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href="/api/google/connect">Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p>{mirrorCleanups.length>0&&<><h3>Likę Outlook blokai</h3><section className="settingsBlock" aria-label="Likusių Outlook blokų valymas">{mirrorCleanups.map(item=><div className="connection" key={item.task_key}><b className="blue">O</b><div><strong>{item.title}</strong><small>{item.source==="google"?"Google Tasks":"Microsoft To Do"} užduotis pašalinta šaltinyje</small></div><button disabled={!item.can_retry||cleanupBusy===item.task_key} onClick={()=>void cleanupMirror(item)}>{cleanupBusy===item.task_key?"Valoma…":item.can_retry?"Pašalinti bloką":"Prijunk paskyrą"}</button></div>)}</section></>}<LogoutButton/>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p><h3>Duomenys</h3><BackupPanel/></section></Modal>}
     {taskListManagerOpen && <Modal eyebrow="UŽDUOTYS" title="Tvarkyti sąrašus" onClose={()=>setTaskListManagerOpen(false)}><TaskListManager onChanged={load} onDeleted={(key)=>setTaskDestination(current=>current===key ? "local" : current)} onListCreated={setTaskDestination}/></Modal>}
-    {editingEvent && <ExistingEventEditor key={editingEvent.event.key} value={editingEvent} onClose={()=>setEditingEvent(null)} onSave={async(patch)=>{await saveEvent(editingEvent.event,patch);setEditingEvent(null);}} onRefresh={()=>{void load();setEditingEvent(null);}}/>}
+    {editingEvent && <ExistingEventEditor key={editingEvent.event.key} value={editingEvent} onClose={()=>setEditingEvent(null)} onSave={async(patch)=>{await saveEvent(editingEvent.event,patch);setEditingEvent(null);}} onRespond={async status=>{await respondEvent(editingEvent.event,status);setEditingEvent(null);}} onRefresh={()=>{void load();setEditingEvent(null);}}/>}
     {editingTask && <TaskEditor task={editingTask} outlook={outlook} taskLists={taskLists} onDelete={()=>deleteTask(editingTask)} onClose={() => setEditingTask(null)} onSave={async (patch) => { await patchTask(editingTask, patch); setEditingTask(null); }} onProviderChanged={()=>{setToast("Google Tasks hierarchija atnaujinta.");void load();}} onMoved={(moved)=>{setTasks(current=>current.map(item=>item.key===editingTask.key?moved:item));setFocusTask(current=>current?.key===editingTask.key?moved:current);setToast("Užduotis perkelta.");void load();}}/>}
     {taskModal && <TaskModal lists={taskLists} destination={taskDestination} onDestination={setTaskDestination} onClose={() => setTaskModal(false)} onSave={async (data) => { await createTask(data); setTaskModal(false); setToast("Užduotis sukurta"); }}/>} 
     {eventDate && <EventModal initial={eventDate} outlook={outlook} google={google} outlookReady={outlookReady} googleReady={googleReady} onClose={() => setEventDate(null)} onSave={async () => { setEventDate(null); setToast("Įvykis sukurtas"); await load(); }}/>} 
@@ -652,6 +661,7 @@ function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boole
   return <div className="calendarSelector">{error&&<p className="formError">{error}</p>}{renderList("google",gCals,setGCals,"Google")}{renderList("microsoft",mCals,setMCals,"Microsoft / Outlook")}</div>;
 }
 function rsvpIcon(status:string) { return status==="accepted"?"✓":status==="declined"?"✗":status==="tentative"?"?":"·"; }
+function rsvpLabel(status:CalendarResponseStatus) {return status==="accepted"?"Dalyvausi":status==="declined"?"Nedalyvausi":status==="tentative"?"Galbūt dalyvausi":"Dar neatsakyta";}
 function BackupPanel() {
   const [busy,setBusy]=useState<"export"|"backup"|"restore"|null>(null);
   const [msg,setMsg]=useState("");
@@ -710,9 +720,9 @@ function LogoutButton() {
   }
   return <button className="logoutBtn" disabled={busy} onClick={logout}>{busy?"Atsijungiama…":"Atsijungti iš programėlės →"}</button>;
 }
-function ExistingEventEditor({value,onClose,onSave,onRefresh}:{value:{event:CalEvent;start?:string;end?:string};onClose:()=>void;onSave:(patch:Record<string,unknown>)=>Promise<void>;onRefresh?:()=>void}) {
+function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{event:CalEvent;start?:string;end?:string};onClose:()=>void;onSave:(patch:Record<string,unknown>)=>Promise<void>;onRespond:(status:Exclude<CalendarResponseStatus,"needsAction">)=>Promise<void>;onRefresh?:()=>void}) {
   const {event}=value;
-  const [error,setError]=useState(""),[saving,setSaving]=useState(false),[conflict,setConflict]=useState(false);
+  const [error,setError]=useState(""),[saving,setSaving]=useState(false),[responding,setResponding]=useState<Exclude<CalendarResponseStatus,"needsAction">|null>(null),[conflict,setConflict]=useState(false);
   const [attendees,setAttendees]=useState<{email:string;name?:string;self?:boolean;responseStatus:string}[]>(event.attendees||[]);
   const [newEmail,setNewEmail]=useState("");
   function addAttendee() {
@@ -721,6 +731,10 @@ function ExistingEventEditor({value,onClose,onSave,onRefresh}:{value:{event:CalE
     setAttendees(prev=>[...prev,{email:e,responseStatus:"needsAction"}]);setNewEmail("");
   }
   function removeAttendee(email:string) {setAttendees(prev=>prev.filter(a=>a.email!==email));}
+  async function respond(status:Exclude<CalendarResponseStatus,"needsAction">) {
+    setError("");setConflict(false);setResponding(status);
+    try{await onRespond(status);}catch(err){setError(err instanceof Error?err.message:"Nepavyko pateikti dalyvavimo atsakymo.");}finally{setResponding(null);}
+  }
   async function submit(e:FormEvent<HTMLFormElement>) {
     e.preventDefault();const data=new FormData(e.currentTarget);setError("");setSaving(true);
     try {
@@ -741,25 +755,26 @@ function ExistingEventEditor({value,onClose,onSave,onRefresh}:{value:{event:CalE
     finally {setSaving(false);}
   }
   const safeLink=event.htmlLink?.startsWith("https://") ? event.htmlLink : undefined;
-  return <Modal eyebrow={event.provider==="outlook"?"OUTLOOK":"GOOGLE CALENDAR"} title="Kalendoriaus įvykis" onClose={()=>{if(!saving)onClose();}}>
+  return <Modal eyebrow={event.provider==="outlook"?"OUTLOOK":"GOOGLE CALENDAR"} title="Kalendoriaus įvykis" onClose={()=>{if(!saving&&!responding)onClose();}}>
     {!event.editable && <p className="formHint">{event.readOnlyReason}</p>}
     {event.recurring && event.editable && <p className="formHint">↻ Kartojamas įvykis. Keičiamas tik šis egzempliorius — serija lieka nepakeista.</p>}
     {error && <p className="formError" role="alert">{error}{conflict && onRefresh && <> <button type="button" className="inlineRefreshBtn" onClick={()=>{onRefresh();onClose();}}>Atnaujinti ir uždaryti →</button></>}</p>}
+    {event.canRespond&&event.responseStatus&&<div className="rsvpActions" role="group" aria-label="Dalyvavimo atsakymas"><span>{rsvpLabel(event.responseStatus)}</span><div><button type="button" aria-pressed={event.responseStatus==="accepted"} disabled={!!responding||saving} onClick={()=>void respond("accepted")}>{responding==="accepted"?"Siunčiama…":"Taip"}</button><button type="button" aria-pressed={event.responseStatus==="tentative"} disabled={!!responding||saving} onClick={()=>void respond("tentative")}>{responding==="tentative"?"Siunčiama…":"Galbūt"}</button><button type="button" aria-pressed={event.responseStatus==="declined"} disabled={!!responding||saving} onClick={()=>void respond("declined")}>{responding==="declined"?"Siunčiama…":"Ne"}</button></div></div>}
     <form className="modalForm" onSubmit={submit}>
-      <label>Pavadinimas<input name="summary" required maxLength={1024} defaultValue={event.summary} disabled={!event.editable || saving}/></label>
-      <label>Vieta<input name="location" maxLength={1000} defaultValue={event.location || ""} disabled={!event.editable || saving} placeholder="Kabinetas, miestas arba nuoroda…"/></label>
-      <label>Aprašymas<textarea name="description" maxLength={10000} defaultValue={event.description || ""} disabled={!event.editable || saving} placeholder="Darbotvarkė…"/></label>
-      {!event.allDay && <div className="formRow"><label>Pradžia<input name="start" type="datetime-local" required disabled={!event.editable || saving} defaultValue={localInput(new Date(value.start || event.start.dateTime!))}/></label><label>Pabaiga<input name="end" type="datetime-local" required disabled={!event.editable || saving} defaultValue={localInput(new Date(value.end || event.end.dateTime!))}/></label></div>}
+      <label>Pavadinimas<input name="summary" required maxLength={1024} defaultValue={event.summary} disabled={!event.editable || saving || !!responding}/></label>
+      <label>Vieta<input name="location" maxLength={1000} defaultValue={event.location || ""} disabled={!event.editable || saving || !!responding} placeholder="Kabinetas, miestas arba nuoroda…"/></label>
+      <label>Aprašymas<textarea name="description" maxLength={10000} defaultValue={event.description || ""} disabled={!event.editable || saving || !!responding} placeholder="Darbotvarkė…"/></label>
+      {!event.allDay && <div className="formRow"><label>Pradžia<input name="start" type="datetime-local" required disabled={!event.editable || saving || !!responding} defaultValue={localInput(new Date(value.start || event.start.dateTime!))}/></label><label>Pabaiga<input name="end" type="datetime-local" required disabled={!event.editable || saving || !!responding} defaultValue={localInput(new Date(value.end || event.end.dateTime!))}/></label></div>}
       {event.allDay && <p className="formHint">{event.start.date || event.start.dateTime} – {event.end.date || event.end.dateTime}</p>}
       <div className="attendeeSection">
         <span className="fieldLabel">Dalyviai</span>
-        {attendees.length>0 && <ul className="attendeeList">{attendees.map(a=><li key={a.email} title={a.responseStatus} className={`rsvp-${a.responseStatus}`}><span className="rsvpIcon">{rsvpIcon(a.responseStatus)}</span><span className="attendeeName">{a.name||a.email}</span>{a.name&&<span className="attendeeEmail"> {a.email}</span>}{event.editable&&!a.self&&<button type="button" className="removeAttendee" aria-label={`Pašalinti: ${a.email}`} disabled={saving} onClick={()=>removeAttendee(a.email)}>×</button>}</li>)}</ul>}
+        {attendees.length>0 && <ul className="attendeeList">{attendees.map(a=><li key={a.email} title={a.responseStatus} className={`rsvp-${a.responseStatus}`}><span className="rsvpIcon">{rsvpIcon(a.responseStatus)}</span><span className="attendeeName">{a.name||a.email}</span>{a.name&&<span className="attendeeEmail"> {a.email}</span>}{event.editable&&!a.self&&<button type="button" className="removeAttendee" aria-label={`Pašalinti: ${a.email}`} disabled={saving||!!responding} onClick={()=>removeAttendee(a.email)}>×</button>}</li>)}</ul>}
         {attendees.length===0 && <p className="formHint noAttendees">Be dalyvių</p>}
-        {event.editable && <div className="addAttendee"><input type="email" value={newEmail} onChange={e=>setNewEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addAttendee();}}} placeholder="el.paštas@pavyzdys.lt" disabled={saving}/><button type="button" onClick={addAttendee} disabled={saving||!newEmail.trim()}>Pridėti</button></div>}
+        {event.editable && <div className="addAttendee"><input type="email" value={newEmail} onChange={e=>setNewEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addAttendee();}}} placeholder="el.paštas@pavyzdys.lt" disabled={saving||!!responding}/><button type="button" onClick={addAttendee} disabled={saving||!!responding||!newEmail.trim()}>Pridėti</button></div>}
       </div>
-      {event.editable && attendees.length>0 && <label className="confirmAttendees"><input type="checkbox" name="confirm" disabled={saving}/>Patvirtinu pakeitimus — bus išsiųsti pranešimai dalyviams, jei laikas pasikeitė</label>}
+      {event.editable && attendees.length>0 && <label className="confirmAttendees"><input type="checkbox" name="confirm" disabled={saving||!!responding}/>Patvirtinu pakeitimus — bus išsiųsti pranešimai dalyviams, jei laikas pasikeitė</label>}
       <p className="formHint">Keičiami pavadinimas, vieta, aprašymas, laikas ir dalyviai. Priminimai bei susitikimo nuoroda išsaugomi.</p>
-      <div className="modalActions">{safeLink && <a className="originalEvent" href={safeLink} target="_blank" rel="noopener noreferrer">Atverti originalą ↗</a>}{event.editable && <button className="newButton" disabled={saving}>{saving?"Saugoma…":"Išsaugoti įvykį"}</button>}</div>
+      <div className="modalActions">{safeLink && <a className="originalEvent" href={safeLink} target="_blank" rel="noopener noreferrer">Atverti originalą ↗</a>}{event.editable && <button className="newButton" disabled={saving||!!responding}>{saving?"Saugoma…":"Išsaugoti įvykį"}</button>}</div>
     </form>
   </Modal>;
 }

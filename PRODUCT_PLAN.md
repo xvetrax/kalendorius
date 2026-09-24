@@ -122,7 +122,7 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 - [x] Visų prieinamų kalendorių sąrašas, spalvos, rašymo teisės, skaitymo pasirinkimas ir pilnas puslapiavimas.
 - [ ] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė turi apimti kalendoriaus ID.
 - [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Dalis laukų jau kuriama, bet esamo įvykio redaktorius jų visų nevaldo.
-- [ ] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. Dalyvių sąrašo redagavimo pagrindas yra, RSVP veiksmo dar nėra.
+- [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. RSVP veiksmas patikrintas sintetiniais Google ir Microsoft tiekėjais.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
 - [ ] ETag / versijų konfliktai, išoriniai pakeitimai ir 401/403/429 apdorojami; dar reikia nedubliuojančio įvykių kūrimo po neaiškaus atsakymo ir gyvos Graph patikros.
 - [x] Atskirai įvertinti Google focus time / out-of-office / working location ir Outlook papildomas galimybes pagal viešą API bei paskyros licenciją. Nepalaikomas funkcijas pažymėti galimybių lentelėje.
@@ -172,9 +172,15 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P1 — produkto paviršius.** Užbaigti Google `parent` / `previous` ir fokusavimo sesijos pradžios, veikimo bei pauzės išsaugojimą.
 - [x] **P1 — diegimo health.** Viešas minimalus `/api/health` neapeina duomenų API ir veikia su `APP_PASSWORD`; Docker ir Playwright sveikatos patikros naudoja šį maršrutą.
 - [x] **P1 — Docker priėmimas.** Realiai sukurtas ir paleistas image; patikrinta sveikata, versija, neprivilegijuotas procesas ir duomenų tomo išlikimas.
-- [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo ir RSVP spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
+- [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
 
 ## Darbo eiga ir ribos
+
+### 2026-09-24 Google Calendar ir Outlook RSVP
+
+- Kviečiamo dalyvio įvykis dabar turi atskirą atsakymo galimybę net tada, kai bendrų įvykio laukų redaguoti negalima. Redaktorius rodo dabartinę būseną ir lietuviškus „Taip“, „Galbūt“ bei „Ne“ veiksmus.
+- Bendras versijuotas API prieš veiksmą iš naujo patikrina paskyrą, kalendorių, įvykį ir kviečiamo naudotojo būseną. Google keičia tik `self` dalyvio `responseStatus` su `attendeesOmitted` ir `If-Match`; Microsoft naudoja oficialius `accept`, `tentativelyAccept` arba `decline` veiksmus ir teisingai priima jų tuščią `202 Accepted` atsakymą. Pakartotas jau pasiektos būsenos veiksmas yra idempotentiškas.
+- Patikra: `typecheck`, 208/208 vienetiniai ir integraciniai testai, produkcinis build ir 28/28 izoliuoti Playwright scenarijai. Tikros Google bei Microsoft paskyros ir tiekėjų eventualaus atnaujinimo delsa šiame žingsnyje nepatikrintos.
 
 ### 2026-09-24 Docker priėmimas
 

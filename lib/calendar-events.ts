@@ -1,4 +1,5 @@
 export type CalendarProvider = "google" | "outlook";
+export type CalendarResponseStatus = "needsAction" | "accepted" | "tentative" | "declined";
 export type CalendarEvent = {
   id:string; key:string; provider:CalendarProvider; connectionId:string; version:string;
   calendarId:string; calendarName?:string; calendarColor?:string;
@@ -6,6 +7,7 @@ export type CalendarEvent = {
   summary:string; description?:string; location?:string; start:{dateTime?:string;date?:string}; end:{dateTime?:string;date?:string};
   htmlLink?:string; hangoutLink?:string; editable:boolean; readOnlyReason:string;
   attendeeCount:number; attendees?:{email:string;name?:string;self?:boolean;responseStatus:string}[]; recurring:boolean; allDay:boolean;
+  canRespond:boolean; responseStatus?:CalendarResponseStatus;
 };
 export class CalendarError extends Error {
   status:number;
@@ -51,6 +53,11 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
   const location:string|undefined=google ? (raw.location || undefined) : (raw.location?.displayName || undefined);
   const description:string|undefined=google ? (raw.description || undefined) : (raw.body?.content || undefined);
   const rawAttendees:any[]=Array.isArray(raw.attendees) ? raw.attendees : [];
+  const selfAttendee=google ? rawAttendees.find((attendee:any)=>attendee?.self===true && attendee?.email) : undefined;
+  const graphResponse=String(raw.responseStatus?.response || "");
+  const responseStatus:CalendarResponseStatus|undefined=google ? (selfAttendee ? (["accepted","tentative","declined"].includes(selfAttendee.responseStatus) ? selfAttendee.responseStatus : "needsAction") : undefined)
+    : graphResponse==="accepted" ? "accepted" : graphResponse==="tentativelyAccepted" ? "tentative" : graphResponse==="declined" ? "declined" : ["none","notResponded"].includes(graphResponse) ? "needsAction" : undefined;
+  const canRespond=!cancelled&&!special&&!owner&&Boolean(version&&responseStatus);
   const attendees=rawAttendees.length ? rawAttendees.map((a:any)=>google
     ? {email:String(a.email||""),name:a.displayName||undefined,self:Boolean(a.self),responseStatus:a.responseStatus||"needsAction"}
     : {email:String(a.emailAddress?.address||""),name:a.emailAddress?.name||undefined,self:false,responseStatus:a.status?.response==="accepted"?"accepted":a.status?.response==="declined"?"declined":a.status?.response==="tentativelyAccepted"?"tentative":"needsAction"}) : undefined;
@@ -61,7 +68,7 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
     htmlLink:google ? raw.htmlLink : raw.webLink,hangoutLink:google ? raw.hangoutLink : raw.onlineMeeting?.joinUrl,
     editable:!readOnlyReason,readOnlyReason,attendeeCount:rawAttendees.length,
     ...(attendees ? {attendees} : {}),
-    recurring,allDay};
+    recurring,allDay,canRespond,...(responseStatus ? {responseStatus} : {})};
 }
 export function createCalendarService(provider:CalendarProvider,gateway:Gateway) {
   const google=provider === "google";
@@ -170,5 +177,39 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     locks.set(key,operation);
     try {await operation;} finally {if(locks.get(key)===operation) locks.delete(key);}
   }
-  return {list,update,remove};
+  async function respond(input:Record<string,unknown>) {
+    if (!input || typeof input!=="object" || Array.isArray(input)) throw new CalendarError("Neteisingi dalyvavimo atsakymo duomenys.");
+    const allowed=new Set(["id","calendarId","connectionId","version","responseStatus","comment"]);
+    if (Object.keys(input).some(key=>!allowed.has(key))) throw new CalendarError("Pateikti nepalaikomi dalyvavimo atsakymo laukai.");
+    const id=identifier(input.id,"įvykio ID"),calendarId=identifier(input.calendarId,"kalendoriaus ID");
+    if (typeof input.connectionId!=="string" || typeof input.version!=="string" || !input.version) throw new CalendarError("Trūksta paskyros arba įvykio versijos.");
+    if (!(["accepted","tentative","declined"] as unknown[]).includes(input.responseStatus)) throw new CalendarError("Pasirink tinkamą dalyvavimo atsakymą.");
+    if (input.comment!==undefined && (typeof input.comment!=="string" || input.comment.length>1000)) throw new CalendarError("Atsakymo komentaras per ilgas.");
+    const responseStatus=input.responseStatus as Exclude<CalendarResponseStatus,"needsAction">;
+    const connectionId=connected(input.connectionId),key=calendarEventKey(provider,connectionId,calendarId,id);
+    const operation=(locks.get(key)||Promise.resolve()).catch(()=>{}).then(async()=>{
+      connected(connectionId);
+      const base=eventPath(calendarId,id),raw=await gateway.request(base,{headers});connected(connectionId);
+      if(raw?.id!==id) throw new CalendarError("Tiekėjas grąžino kito įvykio duomenis.",502);
+      const current=normalizeEvent(provider,raw,connectionId,calendarId);
+      if(!current.canRespond) throw new CalendarError("Šiam įvykiui dalyvavimo atsakymo pateikti negalima.",403);
+      if(current.responseStatus===responseStatus) return {ok:true as const,responseStatus};
+      if(current.version!==input.version) throw new CalendarError("Įvykis jau pakeistas kitur. Atnaujink kalendorių.",409);
+      if(google) {
+        const self=(Array.isArray(raw.attendees)?raw.attendees:[]).find((attendee:any)=>attendee?.self===true&&typeof attendee?.email==="string"&&attendee.email);
+        if(!self) throw new CalendarError("Google negrąžino tavo dalyvio įrašo. Atsakyk originaliame kalendoriuje.",409);
+        const updated=await gateway.request(`${base}?sendUpdates=all`,{method:"PATCH",headers:{...headers,"If-Match":current.version},body:JSON.stringify({attendeesOmitted:true,attendees:[{email:self.email,responseStatus}]})});
+        connected(connectionId);
+        if(updated?.id!==id || normalizeEvent(provider,updated,connectionId,calendarId).responseStatus!==responseStatus) throw new CalendarError("Google nepatvirtino dalyvavimo atsakymo. Atnaujink kalendorių.",502);
+      } else {
+        const action=responseStatus==="accepted"?"accept":responseStatus==="tentative"?"tentativelyAccept":"decline";
+        await gateway.request(`${base}/${action}`,{method:"POST",headers,body:JSON.stringify({sendResponse:true,...(input.comment ? {comment:input.comment} : {})})});
+        connected(connectionId);
+      }
+      return {ok:true as const,responseStatus};
+    });
+    locks.set(key,operation);
+    try{return await operation;}finally{if(locks.get(key)===operation)locks.delete(key);}
+  }
+  return {list,update,remove,respond};
 }

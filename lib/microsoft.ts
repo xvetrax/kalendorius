@@ -113,7 +113,7 @@ export async function graphFetch(path: string, init?: RequestInit) {
   });
   if (!isMicrosoftConnected() || setting("microsoft_connection_generation") !== generation) throw new Error("Microsoft prisijungimas pasikeitė");
   if (!response.ok) throw new ProviderError("Microsoft",response.status);
-  const result = response.status === 204 ? null : await response.json();
+  const result = response.status === 202 || response.status === 204 ? null : await response.json();
   if (!isMicrosoftConnected() || setting("microsoft_connection_generation") !== generation) throw new Error("Microsoft prisijungimas pasikeitė");
   return result;
 }

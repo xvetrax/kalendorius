@@ -40,6 +40,18 @@ for(const provider of ["google","microsoft"]){
     const broken=await route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:"http://localhost:3000"},body:"{"}));assert.equal(broken.status,400);
   });
 }
+for(const provider of ["google","microsoft"])test(`${provider} actual route submits an account-bound RSVP and reloads its status`,async()=>{
+  const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
+  const event=(await (await route.GET(new Request(url))).json()).items.find(item=>item.canRespond);assert.ok(event);assert.equal(event.editable,false);assert.equal(event.responseStatus,"needsAction");
+  const body={id:event.id,calendarId:event.calendarId,connectionId:event.connectionId,version:event.version,responseStatus:"accepted"};
+  const put=(value,origin="http://localhost:3000")=>route.PUT(new Request(url,{method:"PUT",headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify(value)}));
+  assert.equal((await put(body,"https://attacker.example")).status,403);
+  assert.equal((await put({...body,version:"stale"})).status,409);
+  const response=await put(body);assert.equal(response.status,200);assert.deepEqual(await response.json(),{ok:true,responseStatus:"accepted"});
+  assert.equal((await put(body)).status,200);
+  const reloaded=(await (await route.GET(new Request(url))).json()).items.find(item=>item.key===event.key);assert.equal(reloaded.responseStatus,"accepted");assert.notEqual(reloaded.version,event.version);
+  assert.equal((await put({...body,version:reloaded.version,responseStatus:"invalid"})).status,400);
+});
 test("actual Outlook route protects non-organizer events and requires participant confirmation on time change",async()=>{
   const route=routes.microsoft,url="http://localhost:3000/api/microsoft/events";
   const items=(await (await route.GET(new Request(url))).json()).items;
