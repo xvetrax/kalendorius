@@ -138,7 +138,7 @@ Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuo
 - [x] Microsoft kartojimo paslauga, API ir naudotojo sąsaja paprastoms `noEnd` taisyklėms su versijos / paskyros patikra, konflikto bei tik skaitymo būsenomis ir imitaciniu naršyklės testu.
 - [x] Microsoft žingsnių adapterio paskyros / sąrašo / versijos / puslapiavimo apsauga, autoritetingi mutacijų rezultatai ir pasiekiamas konflikto atnaujinimas. „My Day” nėra viešos Graph sinchronizacijos API ir nėra pateikiama kaip sinchronizuojama funkcija.
 - [x] Google užduočių ir pavaldžių užduočių skaitymas bei bendras planavimas; papildomas Tasks OAuth leidimas ir pakartotinio sutikimo eiga (imitacinė patikra).
-- [ ] Google hierarchijos ir eilės tvarkos keitimas. Perkėlimas tarp sąrašų jau saugiai perkelia vietinį planą ir Outlook ryšį į naują tapatybės raktą, tačiau dar nenaudoja `parent` / `previous` hierarchijai ir eiliškumui valdyti.
+- [x] Google hierarchijos ir eilės tvarkos keitimas per `parent` / `previous`, su pilno sąrašo versijos patikra, ciklų bei Google apribojimų validacija ir autoritetingu rezultato perskaitymu.
 - [x] Vienodas vietinis planavimas visų šaltinių užduotims, užbaigimo / atkūrimo būsenos atnaujinimas ir šaltinio nuoroda.
 - [x] Šaltinyje ištrintų užduočių pasirenkamų Outlook blokų pasiekiamas, pakartojamas sutvarkymas nustatymuose.
 - [ ] Gyvų Google ir Microsoft paskyrų patikra pagal priėmimo scenarijus.
@@ -169,12 +169,18 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P1 — kalendoriaus įvykio tapatybė.** Bendras raktas apima tiekėją, prisijungimą, kalendorių ir įvykį. UI atnaujina tik pasirinktą įrašą; PATCH ir DELETE privalo pateikti kalendorių, prisijungimą bei versiją ir naudoja to kalendoriaus kelią. Vienodi ID skirtinguose Google / Outlook kalendoriuose patikrinti integraciniais testais.
 - [x] **Outlook bloko rodymo susiejimas.** Serveris susieja Graph įvykį tik pagal dabartinę Microsoft paskyrą, pirminį kalendorių, įvykio ID ir kuriant išsaugotą `transactionId`; neatitinkantis to paties ID įvykis kitame kalendoriuje lieka matomas. UI bloką sutraukia į užduoties planą tik kai sutampa dabartinis laikas, trukmė, pavadinimas ir saugios bloko savybės.
 - [x] **P1 — našlaičių Outlook blokų valymas.** Ištrintų šaltinio užduočių susieti blokai patenka į pasiekiamą, pakartojamą valymo eilę.
-- [ ] **P1 — produkto paviršius.** Užbaigti Google `parent` / `previous`; išsaugoti tikrą fokusavimo pradžios laiką ir veikimo / pauzės būseną.
+- [ ] **P1 — produkto paviršius.** Google `parent` / `previous` užbaigtas; dar reikia išsaugoti tikrą fokusavimo pradžios laiką ir veikimo / pauzės būseną.
 - [x] **P1 — diegimo health.** Viešas minimalus `/api/health` neapeina duomenų API ir veikia su `APP_PASSWORD`; Docker ir Playwright sveikatos patikros naudoja šį maršrutą.
 - [ ] **P1 — Docker priėmimas.** Realiai sukurti ir paleisti image; patikrinti sveikatą, versiją, neprivilegijuotą procesą ir duomenų tomo išlikimą.
 - [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo ir RSVP spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
 
 ## Darbo eiga ir ribos
+
+### 2026-09-24 Google Tasks hierarchija ir eilė
+
+- Užduoties redaktoriuje galima parinkti tėvinę užduotį ir ankstesnę to paties lygio užduotį. Atskiras API maršrutas prieš įrašą perskaito visą sąrašą, tikrina paskyrą, sąrašą, versiją, ciklus, paslėptas, priskirtas bei pasikartojančias užduotis ir po `tasks.move` dar kartą patvirtina faktinę Google būseną.
+- Tarp sąrašų perkėlimo ir vietinio plano tapatybės logika nepakeista. Neaiškus hierarchijos įrašo atsakymas neperrašo vietinės kopijos; veiksmą galima saugiai tęsti atnaujinus būseną.
+- Patikra: `typecheck`, 199/199 vienetiniai ir integraciniai testai, produkcinis build ir 26/26 izoliuoti Playwright scenarijai. Gyvos Google paskyros `tasks.move` elgsena dar nepatvirtinta.
 
 ### 2026-09-23 kalendoriaus tapatybės pataisa
 

@@ -27,6 +27,7 @@ const {db,saveSetting}=await import("../lib/db.ts");
 const {encrypt}=await import("../lib/secrets.ts");
 const route=await import("../app/api/tasks/route.ts");
 const moveRoute=await import("../app/api/tasks/move/route.ts");
+const orderRoute=await import("../app/api/tasks/order/route.ts");
 const cleanupRoute=await import("../app/api/tasks/mirror-cleanup/route.ts");
 
 const taskScope="https://www.googleapis.com/auth/tasks";
@@ -116,6 +117,18 @@ test("actual Google move route preserves the plan under its destination identity
   const refreshed=await (await list()).json(),listed=refreshed.items.find(entry=>entry.key===moved.key);
   assert.ok(listed);assert.equal(listed.scheduled_at,moved.scheduled_at);assert.equal(refreshed.items.some(entry=>entry.key===task.key),false);
   assert.equal((await moveRoute.POST(request("POST",{...ref(moved),destination_list_id:"google-list"},"https://attacker.example"))).status,403);
+});
+
+test("actual Google order route applies parent and previous with a versioned snapshot",async()=>{
+  upstream.google.set("parent",{id:"parent",title:"Projektas",status:"needsAction"});
+  upstream.google.set("first",{id:"first",title:"Pirma",parent:"parent",status:"needsAction"});
+  const task=item(await (await list()).json(),"google"),orderUrl=url+"/order";
+  const query=new URLSearchParams({source:"google",account_id:task.account_id,list_id:task.list_id,id:String(task.id)});
+  let response=await orderRoute.GET(new Request(`${orderUrl}?${query}`));assert.equal(response.status,200);const snapshot=await response.json();
+  response=await orderRoute.PATCH(new Request(orderUrl,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({...Object.fromEntries(query),version:snapshot.version,parent_id:"parent",previous_id:"first"})}));
+  assert.equal(response.status,200);const updated=await response.json();assert.equal(updated.parent_id,"parent");assert.equal(updated.previous_id,"first");
+  assert.ok(upstream.writes("google").some(write=>write.path.endsWith("/shared-id/move?parent=parent&previous=first")));
+  const hostile=await orderRoute.PATCH(new Request(orderUrl,{method:"PATCH",headers:{Origin:"https://attacker.example","Content-Type":"application/json"},body:"{}"}));assert.equal(hostile.status,403);
 });
 
 test("Outlook mirror cleanup route enforces same-origin and removes a local-only orphan",async()=>{

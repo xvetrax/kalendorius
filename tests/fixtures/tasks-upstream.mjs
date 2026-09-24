@@ -64,8 +64,14 @@ function taskApi(source, url, init) {
   if (source === "google" && match[2]?.endsWith("/move") && method === "POST") {
     const id=decodeURIComponent(match[2].slice(0,-"/move".length)),task=map.get(id);
     const destinationId=url.searchParams.get("destinationTasklist"),destination=destinationId ? taskMap(source,destinationId) : undefined;
-    if (!task || !destination) return Response.json({error:"Missing task or destination list"},{status:404});
-    map.delete(id);destination.set(id,task);return taskResponse(task);
+    if (!task || destinationId&&!destination) return Response.json({error:"Missing task or destination list"},{status:404});
+    if(destination){map.delete(id);destination.set(id,task);return taskResponse(task);}
+    const parent=url.searchParams.get("parent"),previous=url.searchParams.get("previous");
+    if(parent)task.parent=parent;else delete task.parent;
+    const entries=[...map.entries()].filter(([key])=>key!==id),insertAfter=previous?entries.findIndex(([key])=>key===previous):-1;
+    const target=insertAfter>=0?insertAfter+1:entries.findIndex(([,value])=>(value.parent||null)===(parent||null));
+    entries.splice(target<0?entries.length:target,0,[id,task]);map.clear();for(const entry of entries)map.set(...entry);
+    return taskResponse(task);
   }
   if (!match[2] && method === "GET") return Response.json(source === "google" ? {items: [...map.values()].map(clone)} : {value: [...map.values()].map(clone)});
   if (!match[2] && method === "POST") {

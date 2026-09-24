@@ -30,9 +30,17 @@ function setup(t) {
       }
       if(method==="POST" && url.pathname.endsWith("/move")) {
         if(state.failMove)throw Error("move failed");
-        const id=decodeURIComponent(url.pathname.split("/").at(-2)),destination=lists.get(url.searchParams.get("destinationTasklist"));
+        const id=decodeURIComponent(url.pathname.split("/").at(-2)),destinationId=url.searchParams.get("destinationTasklist"),destination=destinationId?lists.get(destinationId):list;
         const task=list.get(id);if(!task||!destination)throw Error("move unavailable");
-        const movedId=state.moveResultId||id,moved={...task,id:movedId};list.delete(id);destination.set(movedId,moved);
+        const movedId=state.moveResultId||id,moved={...task,id:movedId};
+        if(destinationId){list.delete(id);destination.set(movedId,moved);}
+        else {
+          const parent=url.searchParams.get("parent"),previous=url.searchParams.get("previous");
+          if(parent)moved.parent=parent;else delete moved.parent;
+          const entries=[...list.entries()].filter(([key])=>key!==id),insertAfter=previous?entries.findIndex(([key])=>key===previous):-1;
+          const target=insertAfter>=0?insertAfter+1:entries.findIndex(([,value])=>(value.parent||null)===(parent||null));
+          entries.splice(target<0?entries.length:target,0,[movedId,moved]);list.clear();for(const entry of entries)list.set(...entry);
+        }
         if(state.loseMoveResponse)throw Error("move response lost");
         return structuredClone(moved);
       }
@@ -127,6 +135,37 @@ test("Google source links are restricted and subtask metadata survives planning"
   let task=(await f.service.list()).items[0];assert.equal(task.source_url,"https://tasks.google.com/task/1");assert.equal(task.parent_id,"parent");
   for(const link of ["javascript:alert(1)","https://tasks.google.com.evil.example/task","https://user:pass@tasks.google.com/task"]){f.lists.get("list-a").get("1").webViewLink=link;task=(await f.service.list()).items[0];assert.equal(task.source_url,"https://tasks.google.com/");}
   task=await f.service.update({...ref(task),scheduled_at:start});assert.equal(task.parent_id,"parent");
+});
+
+test("Google hierarchy snapshot moves a task under a parent and after a sibling",async t=>{
+  const f=setup(t),list=f.lists.get("list-a");
+  list.clear();list.set("parent",{id:"parent",title:"Projektas",status:"needsAction"});list.set("first",{id:"first",title:"Pirma",parent:"parent",status:"needsAction"});list.set("1",{id:"1",title:"Perkeliama",status:"needsAction"});
+  const task=(await f.service.list()).items.find(item=>item.id==="1"),snapshot=await f.service.readGoogleOrder(ref(task));
+  assert.equal(snapshot.parent_id,null);assert.equal(snapshot.previous_id,"parent");assert.deepEqual(snapshot.items.map(item=>item.id),["parent","first","1"]);
+  f.calls.length=0;const next=await f.service.updateGoogleOrder({...ref(task),version:snapshot.version,parent_id:"parent",previous_id:"first"});
+  assert.equal(next.parent_id,"parent");assert.equal(next.previous_id,"first");
+  assert.deepEqual(f.calls.filter(call=>call.method==="POST").map(call=>call.path),["/lists/list-a/tasks/1/move?parent=parent&previous=first"]);
+  assert.equal((await f.service.list()).items.find(item=>item.id==="1").parent_id,"parent");
+});
+
+test("Google hierarchy rejects stale versions, cycles and cross-level previous tasks before writes",async t=>{
+  const f=setup(t),list=f.lists.get("list-a");
+  list.set("child",{id:"child",title:"Vaikas",parent:"1",status:"needsAction"});list.set("top",{id:"top",title:"Viršuje",status:"needsAction"});
+  const task=(await f.service.list()).items.find(item=>item.id==="1"),snapshot=await f.service.readGoogleOrder(ref(task));f.calls.length=0;
+  await assert.rejects(f.service.updateGoogleOrder({...ref(task),version:"stale",parent_id:null,previous_id:null}),error=>error.status===409);
+  await assert.rejects(f.service.updateGoogleOrder({...ref(task),version:snapshot.version,parent_id:"child",previous_id:null}),/ciklą/);
+  await assert.rejects(f.service.updateGoogleOrder({...ref(task),version:snapshot.version,parent_id:null,previous_id:"child"}),/tame pačiame hierarchijos lygyje/);
+  assert.equal(f.calls.some(call=>call.method==="POST"),false);
+});
+
+test("Google hierarchy excludes forbidden parents and enforces hidden completed restrictions",async t=>{
+  const f=setup(t),list=f.lists.get("list-a");
+  list.set("assigned",{id:"assigned",title:"Priskirta",assignmentInfo:{surfaceType:"DOCUMENT"}});list.set("recurring",{id:"recurring",title:"Kartojama",recurrence:["RRULE:FREQ=DAILY"]});
+  let task=(await f.service.list()).items.find(item=>item.id==="1"),snapshot=await f.service.readGoogleOrder(ref(task));
+  assert.equal(snapshot.items.find(item=>item.id==="assigned").can_be_parent,false);assert.equal(snapshot.items.find(item=>item.id==="recurring").can_be_parent,false);
+  await assert.rejects(f.service.updateGoogleOrder({...ref(task),version:snapshot.version,parent_id:"assigned",previous_id:null}),error=>error.status===409);
+  list.get("1").status="completed";list.get("1").hidden=true;snapshot=await f.service.readGoogleOrder(ref(task));
+  await assert.rejects(f.service.updateGoogleOrder({...ref(task),version:snapshot.version,parent_id:null,previous_id:"assigned"}),error=>error.status===409);
 });
 
 test("Google list move atomically rekeys the complete local plan after provider confirmation",async t=>{

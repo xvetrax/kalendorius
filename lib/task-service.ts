@@ -16,6 +16,14 @@ export type Task = {
   mirror_requested: number; mirror_event_id: string | null; mirror_error: string | null; stale?: boolean;
 };
 export type TaskStep = { id:string; displayName:string; isChecked:boolean };
+export type GoogleTaskOrderItem = {
+  id:string; title:string; parent_id:string|null; hidden:boolean; completed:boolean;
+  can_be_parent:boolean; parent_block_reason?:string;
+};
+export type GoogleTaskOrderSnapshot = {
+  task_id:string; parent_id:string|null; previous_id:string|null; items:GoogleTaskOrderItem[]; version:string;
+  readonly_reason?:string;
+};
 export type MirrorCleanup = {
   task_key:string; source:RemoteTaskSource; title:string; mirror_event_id:string|null;
   mirror_account_id:string|null; orphaned_at:string; can_retry:boolean;
@@ -846,6 +854,86 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     } catch (error) { db.exec("ROLLBACK"); throw error; }
     return decorate(moved);
   }
+  const googleOrderQuery="?maxResults=100&showCompleted=true&showHidden=true&showDeleted=false&showAssigned=true";
+  function googleParentBlock(raw:any):string|undefined {
+    if (raw?.assignmentInfo) return "Iš Google Docs ar Chat priskirta užduotis negali būti tėvinė.";
+    if (raw?.recurrence) return "Pasikartojanti Google užduotis negali būti tėvinė.";
+    if (raw?.hidden) return "Paslėpta Google užduotis negali būti tėvinė.";
+  }
+  function googleOrderVersion(list:TaskList,rawTasks:any[]) {
+    return fingerprint({list:list.key,tasks:rawTasks.map(raw=>({
+      id:identifier(raw.id),parent:typeof raw.parent==="string"?raw.parent:null,position:typeof raw.position==="string"?raw.position:null,
+      hidden:Boolean(raw.hidden),status:raw.status??null,assignmentInfo:raw.assignmentInfo??null,recurrence:raw.recurrence??null,
+      etag:raw.etag??null,updated:raw.updated??null,
+    })).sort((a,b)=>a.id.localeCompare(b.id))});
+  }
+  function googleOrderSnapshot(list:TaskList,rawTasks:any[],taskId:string):GoogleTaskOrderSnapshot {
+    const current=rawTasks.find(raw=>String(raw?.id)===taskId);
+    if (!current) throw new TaskError("Google užduoties šiame sąraše nebėra. Atnaujink duomenis.",404);
+    const parentId=typeof current.parent==="string"?current.parent:null;
+    const siblings=rawTasks.filter(raw=>(typeof raw.parent==="string"?raw.parent:null)===parentId);
+    const currentIndex=siblings.findIndex(raw=>String(raw.id)===taskId);
+    const previousId=currentIndex>0?identifier(siblings[currentIndex-1].id):null;
+    const items=rawTasks.map(raw=>{
+      const blocked=googleParentBlock(raw);
+      return {id:identifier(raw.id),title:typeof raw.title==="string"&&raw.title?raw.title:"Be pavadinimo",
+        parent_id:typeof raw.parent==="string"?raw.parent:null,hidden:Boolean(raw.hidden),completed:raw.status==="completed",
+        can_be_parent:!blocked,...(blocked?{parent_block_reason:blocked}:{})};
+    });
+    return {task_id:taskId,parent_id:parentId,previous_id:previousId,items,version:googleOrderVersion(list,rawTasks),
+      ...(!list.writable?{readonly_reason:"Šiame Google Tasks sąraše hierarchijos keisti negalima."}:{})};
+  }
+  async function googleOrderState(input:Input) {
+    if (input.source!=="google") throw new TaskError("Hierarchiją galima keisti tik Google Tasks užduotims.");
+    const taskId=identifier(input.id),list=await currentList(input);
+    if (list.source!=="google") throw new TaskError("Hierarchiją galima keisti tik Google Tasks užduotims.");
+    const rawTasks=(await pages("google",`/lists/${encodeURIComponent(list.list_id)}/tasks`,googleOrderQuery)).filter(raw=>!raw?.deleted);
+    requireAccount(list.account_id,"google");
+    const seen=new Set<string>();
+    for (const raw of rawTasks) {const id=identifier(raw?.id);if(seen.has(id))throw new TaskError("Google grąžino pasikartojančią užduoties tapatybę. Atnaujink duomenis.",502);seen.add(id);}
+    const snapshot=googleOrderSnapshot(list,rawTasks,taskId);
+    return {list,rawTasks,snapshot};
+  }
+  async function readGoogleOrder(input:Input) {return (await googleOrderState(input)).snapshot;}
+  async function updateGoogleOrder(input:Input) {
+    if (typeof input.version!=="string"||!input.version) throw new TaskError("Pirmiausia atnaujink Google hierarchiją.");
+    const current=await googleOrderState(input),taskId=current.snapshot.task_id;
+    if (current.snapshot.readonly_reason) throw new TaskError(current.snapshot.readonly_reason,403);
+    if (input.version!==current.snapshot.version) throw new TaskError("Google hierarchija jau pasikeitė. Atnaujink duomenis.",409);
+    const parentId=input.parent_id===null?null:identifier(input.parent_id);
+    const previousId=input.previous_id===null?null:identifier(input.previous_id);
+    const byId=new Map(current.rawTasks.map(raw=>[identifier(raw.id),raw])),task=byId.get(taskId)!;
+    if (parentId===taskId||previousId===taskId) throw new TaskError("Užduotis negali būti savo tėvinė ar ankstesnė užduotis.");
+    if (parentId) {
+      const parent=byId.get(parentId);
+      if (!parent) throw new TaskError("Pasirinktos tėvinės užduoties nebėra. Atnaujink duomenis.",409);
+      const blocked=googleParentBlock(parent);if(blocked)throw new TaskError(blocked,409);
+      if (task.assignmentInfo||task.recurrence) throw new TaskError("Priskirta arba pasikartojanti Google užduotis negali tapti pavaldžiąja.",409);
+      const visited=new Set<string>([taskId]);let cursor:any=parent;
+      while(cursor){const id=identifier(cursor.id);if(visited.has(id))throw new TaskError("Pasirinkta hierarchija sudarytų ciklą.",409);visited.add(id);cursor=typeof cursor.parent==="string"?byId.get(cursor.parent):undefined;}
+    }
+    if (previousId) {
+      const previous=byId.get(previousId);
+      if (!previous||previous.hidden) throw new TaskError("Ankstesnės užduoties nebėra arba ji paslėpta. Atnaujink duomenis.",409);
+      const previousParent=typeof previous.parent==="string"?previous.parent:null;
+      if (previousParent!==parentId) throw new TaskError("Ankstesnė užduotis turi būti tame pačiame hierarchijos lygyje.",409);
+    }
+    if (task.status==="completed"&&task.hidden&&(parentId||previousId)) throw new TaskError("Paslėptą atliktą Google užduotį galima perkelti tik į sąrašo pradžią.",409);
+    if (parentId===current.snapshot.parent_id&&previousId===current.snapshot.previous_id)return current.snapshot;
+    const params=new URLSearchParams();if(parentId)params.set("parent",parentId);if(previousId)params.set("previous",previousId);
+    const provider=gateway("google");requireAccount(current.list.account_id,"google");
+    const suffix=params.size?`?${params}`:"";
+    const moved=await provider.request(`/lists/${encodeURIComponent(current.list.list_id)}/tasks/${encodeURIComponent(taskId)}/move${suffix}`,{method:"POST"});
+    requireAccount(current.list.account_id,"google");
+    let movedId:string|null=null;try{movedId=moved&&typeof moved==="object"?identifier(moved.id):null;}catch{/* Invalid provider response. */}
+    if (movedId!==taskId||(typeof moved?.parent==="string"?moved.parent:null)!==parentId)
+      throw new TaskError("Google hierarchijos pakeitimo patvirtinti nepavyko. Atnaujink duomenis.",502);
+    const confirmed=await googleOrderState(input);
+    if (confirmed.snapshot.parent_id!==parentId||confirmed.snapshot.previous_id!==previousId)
+      throw new TaskError("Google eilės pakeitimo patvirtinti nepavyko. Atnaujink duomenis.",502);
+    cache(mapped(confirmed.rawTasks.find(raw=>String(raw.id)===taskId),confirmed.list));
+    return confirmed.snapshot;
+  }
   async function cleanupMirror(input:Input) {
     if (Object.keys(input).some(key=>!["task_key","orphaned_at","mirror_event_id"].includes(key))
       || typeof input.task_key!=="string" || !input.task_key || input.task_key.length>4096
@@ -924,5 +1012,6 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     createList:(input:Input)=>mutation(input,()=>createList(input)), renameList:(input:Input)=>mutation(input,()=>renameList(input)),
     previewListDeletion:(input:Input)=>mutation(input,()=>previewListDeletion(input)), deleteList:(input:Input)=>mutation(input,()=>deleteList(input)),
     create:(input:Input)=>mutation(input,()=>create(input)), update:(input:Input)=>mutation(input,()=>update(input)),
-    moveGoogle:(input:Input)=>mutation(input,()=>moveGoogle(input)),cleanupMirror,remove:(input:Input)=>mutation(input,()=>remove(input)) };
+    moveGoogle:(input:Input)=>mutation(input,()=>moveGoogle(input)),readGoogleOrder:(input:Input)=>mutation(input,()=>readGoogleOrder(input)),
+    updateGoogleOrder:(input:Input)=>mutation(input,()=>updateGoogleOrder(input)),cleanupMirror,remove:(input:Input)=>mutation(input,()=>remove(input)) };
 }
