@@ -16,6 +16,7 @@ export function CalendarRecurrenceFields({value,startDate,onChange,disabled=fals
   function ending(type:CalendarRecurrence["end"]["type"]){if(!value)return;change({end:type==="never"?{type:"never"}:type==="count"?{type:"count",count:10}:{type:"date",date:startDate||localDate()}});}
   const invalid=Boolean(value&&!parseCalendarRecurrence(value,context));
   return <section className="microsoftReminder microsoftRecurrence calendarRecurrence">
+    {allowDisable&&<span className="fieldLabel recurrenceLabel">Pasikartojimas</span>}
     {allowDisable&&<label className="onlineSwitch"><input type="checkbox" checked={Boolean(value)} disabled={disabled||!startDate} onChange={event=>enable(event.target.checked)}/><i/>Kartoti įvykį</label>}
     {value&&<div className="microsoftReminderFields">
       <div className="formRow"><label>Dažnis<select aria-label="Įvykio kartojimo dažnis" value={value.frequency} disabled={disabled} onChange={event=>frequency(event.target.value as CalendarRecurrence["frequency"])}><option value="daily">Kasdien</option><option value="weekly">Kas savaitę</option><option value="monthly">Kas mėnesį</option><option value="yearly">Kas metus</option></select></label><label>Kas kiek<input aria-label="Įvykio kartojimo intervalas" type="number" min="1" max="999" value={value.interval} disabled={disabled} onChange={event=>change({interval:Number(event.target.value)})}/></label></div>
