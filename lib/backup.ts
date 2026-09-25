@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { db } from "@/lib/db";
 
-const APP_TABLES = ["tasks", "settings", "task_plans", "remote_tasks", "remote_task_lists"] as const;
+const APP_TABLES = ["tasks", "settings", "task_plans", "remote_tasks", "remote_task_lists", "calendar_event_creates"] as const;
 const REQUIRED_TABLES = new Set(["tasks", "settings"]);
 const SENSITIVE_KEYS = ["google_refresh_token", "microsoft_refresh_token"];
 const REQUIRED_COLUMNS: Record<typeof APP_TABLES[number], readonly string[]> = {
@@ -13,13 +13,15 @@ const REQUIRED_COLUMNS: Record<typeof APP_TABLES[number], readonly string[]> = {
   task_plans: ["task_key", "scheduled_at", "duration_minutes", "schedule_version", "legacy_schedule", "mirror_requested", "mirror_event_id", "mirror_account_id", "mirror_transaction_id", "mirror_error", "project", "tags", "energy"],
   remote_tasks: ["task_key", "account_id", "list_id", "task_json"],
   remote_task_lists: ["list_key", "source", "account_id", "list_json"],
+  calendar_event_creates: ["provider", "account_id", "connection_id", "calendar_id", "operation_id", "fingerprint", "created_at"],
 };
-const PRIMARY_KEYS: Record<typeof APP_TABLES[number], string> = {
-  tasks: "id",
-  settings: "key",
-  task_plans: "task_key",
-  remote_tasks: "task_key",
-  remote_task_lists: "list_key",
+const PRIMARY_KEYS: Record<typeof APP_TABLES[number], readonly string[]> = {
+  tasks: ["id"],
+  settings: ["key"],
+  task_plans: ["task_key"],
+  remote_tasks: ["task_key"],
+  remote_task_lists: ["list_key"],
+  calendar_event_creates: ["provider", "account_id", "connection_id", "calendar_id", "operation_id"],
 };
 
 export class BackupError extends Error {
@@ -130,7 +132,7 @@ function validateBackup(database: DatabaseSync) {
     if (REQUIRED_COLUMNS[name].some(column => !incoming.some(candidate => candidate.name === column))) {
       throw new BackupError(`Atsarginės kopijos ${name} schemoje trūksta būtinų stulpelių.`);
     }
-    if (!incoming.some(column => column.name === PRIMARY_KEYS[name] && column.pk > 0)) {
+    if (PRIMARY_KEYS[name].some(key=>!incoming.some(column => column.name === key && column.pk > 0))) {
       throw new BackupError(`Atsarginės kopijos ${name} tapatybės schema nepalaikoma.`);
     }
   }

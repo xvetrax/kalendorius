@@ -30,6 +30,16 @@ db.exec(`
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS calendar_event_creates (
+    provider TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    connection_id TEXT NOT NULL,
+    calendar_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(provider, account_id, connection_id, calendar_id, operation_id)
+  );
 `);
 
 const taskColumns = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((column) => column.name));
@@ -65,4 +75,10 @@ export function deleteSettings(...keys: string[]) {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+export function reserveCalendarEventCreate(provider:string,accountId:string,connectionId:string,calendarId:string,operationId:string,fingerprint:string){
+  db.prepare(`INSERT OR IGNORE INTO calendar_event_creates(provider,account_id,connection_id,calendar_id,operation_id,fingerprint) VALUES (?,?,?,?,?,?)`).run(provider,accountId,connectionId,calendarId,operationId,fingerprint);
+  const stored=db.prepare(`SELECT fingerprint FROM calendar_event_creates WHERE provider=? AND account_id=? AND connection_id=? AND calendar_id=? AND operation_id=?`).get(provider,accountId,connectionId,calendarId,operationId) as {fingerprint?:string}|undefined;
+  return stored?.fingerprint===fingerprint;
 }

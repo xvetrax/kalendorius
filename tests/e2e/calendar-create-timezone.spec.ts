@@ -21,8 +21,9 @@ test("new Google and Outlook events keep wall time in the selected timezone",asy
   let dialog=page.getByRole("dialog",{name:"Naujas įvykis"});
   await dialog.getByLabel("Paskyra").selectOption("google");await dialog.getByLabel("Kalendorius").selectOption("other/calendar");await expect(dialog.getByLabel("Kalendorius").locator('option[value="readonly"]')).toHaveCount(0);await dialog.getByLabel("Pavadinimas").fill("Google zona");
   await dialog.getByLabel("Pradžia").fill("2026-10-24T10:00");await dialog.getByLabel("Laiko zona").selectOption("Europe/Vilnius");await expect(dialog.getByLabel("Pradžia")).toHaveValue("2026-10-24T10:00");
+  await dialog.getByLabel("Kartoti įvykį").check();await dialog.getByLabel("Įvykio kartojimo intervalas").fill("2");await dialog.getByLabel("Įvykio kartojimo pabaiga").selectOption("count");await dialog.getByLabel("Kartojamų įvykių skaičius").fill("5");
   await dialog.getByLabel("Trukmė").selectOption("60");await dialog.getByRole("button",{name:"Sukurti įvykį"}).click();await expect(dialog).toHaveCount(0);
-  expect(submissions[0]).toEqual({provider:"google",body:expect.objectContaining({calendarId:"other/calendar",calendarVersion:"google-v1",summary:"Google zona",start:"2026-10-24T07:00:00.000Z",end:"2026-10-24T08:00:00.000Z",timeZone:"Europe/Vilnius"})});
+  expect(submissions[0]).toEqual({provider:"google",body:expect.objectContaining({calendarId:"other/calendar",calendarVersion:"google-v1",summary:"Google zona",start:"2026-10-24T07:00:00.000Z",end:"2026-10-24T08:00:00.000Z",timeZone:"Europe/Vilnius",operationId:expect.stringMatching(/^[0-9a-f-]{36}$/),recurrence:{frequency:"daily",interval:2,end:{type:"count",count:5}}})});
 
   await page.getByRole("button",{name:"Naujas įvykis",exact:true}).click();dialog=page.getByRole("dialog",{name:"Naujas įvykis"});
   await dialog.getByLabel("Paskyra").selectOption("outlook");await dialog.getByLabel("Kalendorius").selectOption("other/calendar");await dialog.getByLabel("Pavadinimas").fill("Outlook zona");
@@ -41,4 +42,17 @@ test("new event stays disabled when the explicit calendar selection is empty",as
   const dialog=page.getByRole("dialog",{name:"Naujas įvykis"});
   await expect(dialog.getByText(/nepasirinktas rašomas kalendorius/)).toBeVisible();
   await expect(dialog.getByRole("button",{name:"Sukurti įvykį"})).toBeDisabled();
+});
+
+test("event create keeps one operation ID when fields change after an uncertain response",async({page})=>{
+  const submissions:Record<string,unknown>[]=[];
+  await page.route("**/api/google/status",route=>route.fulfill({json:{connected:true,configured:true,account:"google@example.test",tasksConnected:false,tasksStatus:"permission_required"}}));
+  await page.route("**/api/microsoft/status",route=>route.fulfill({json:{connected:false,configured:true,account:null}}));
+  await page.route("**/api/google/calendars",route=>route.fulfill({json:{items:[{id:"primary",name:"Google pagrindinis",primary:true,writable:true}],enabled:["primary"],version:"google-v1"}}));
+  await page.route("**/api/google/events**",async route=>{
+    if(route.request().method()==="POST"){submissions.push(route.request().postDataJSON() as Record<string,unknown>);return submissions.length===1?route.fulfill({status:502,json:{error:"Atsakymas neaiškus."}}):route.fulfill({status:201,json:{id:"created"}});}
+    return route.fulfill({json:{items:[]}});
+  });
+  await page.goto("/");await page.getByRole("button",{name:"Naujas įvykis",exact:true}).click();const dialog=page.getByRole("dialog",{name:"Naujas įvykis"});await dialog.getByLabel("Pavadinimas").fill("Pirmas payload");await dialog.getByRole("button",{name:"Sukurti įvykį"}).click();await expect(dialog.getByRole("alert")).toContainText("Atsakymas neaiškus");
+  await dialog.getByLabel("Pavadinimas").fill("Pakeistas payload");await dialog.getByRole("button",{name:"Sukurti įvykį"}).click();await expect(dialog).toHaveCount(0);expect(submissions).toHaveLength(2);expect(submissions[1].operationId).toBe(submissions[0].operationId);expect(submissions[1].summary).not.toBe(submissions[0].summary);
 });

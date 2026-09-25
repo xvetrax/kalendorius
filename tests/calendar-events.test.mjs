@@ -95,6 +95,17 @@ for(const provider of ["google","outlook"]) {
     if(provider==="google") {delete raw.recurringEventId;raw.recurrence=["RRULE:FREQ=DAILY"];}else {raw.type="seriesMaster";delete raw.seriesMasterId;}
     await assert.rejects(service.update({...input,version:instanceResult.version}),e=>e.status===403);
   });
+  test(`${provider}: series recurrence reads and writes only the master with its own version`,async()=>{
+    const {service,raw,calls}=fixture(provider);
+    if(provider==="google")Object.assign(raw,{recurrence:["RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=SA;COUNT=5"]});
+    else Object.assign(raw,{type:"seriesMaster",recurrence:{pattern:{type:"weekly",interval:1,month:0,dayOfMonth:0,daysOfWeek:["saturday"],firstDayOfWeek:"sunday",index:"first"},range:{type:"numbered",startDate:"2026-10-24",endDate:"0001-01-01",numberOfOccurrences:5,recurrenceTimeZone:"UTC"}}});
+    const reference={seriesId:raw.id,calendarId:"primary",connectionId:"account-a"},snapshot=await service.series(reference);
+    assert.equal(snapshot.supported,true);assert.deepEqual(snapshot.recurrence,{frequency:"weekly",interval:1,days_of_week:["saturday"],end:{type:"count",count:5}});
+    const recurrence={frequency:"monthly",interval:2,day_of_month:24,end:{type:"date",date:"2027-10-24"}};
+    const updated=await service.updateSeries({...reference,scope:"series",version:snapshot.version,recurrence});assert.deepEqual(updated.recurrence,recurrence);
+    const write=calls.find(call=>call.method==="PATCH");assert.deepEqual(Object.keys(write.body),["recurrence"]);assert.equal(write.headers["If-Match"],snapshot.version);
+    await assert.rejects(service.updateSeries({...reference,scope:"series",version:snapshot.version,recurrence}),error=>error.status===409);
+  });
   test(`${provider}: serial edits cannot apply an older version after the first accepted move`,async()=>{
     const {service,input,calls}=fixture(provider);
     const results=await Promise.allSettled([service.update(input),service.update(input)]);

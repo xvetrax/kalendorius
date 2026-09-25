@@ -82,3 +82,18 @@ test("all-day editor sends inclusive UI dates as an exclusive provider range",as
   await page.getByRole("button",{name:"Išsaugoti įvykį"}).click();await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(submitted).toMatchObject({id:"all-day-1",calendarId:"primary",connectionId:"connection-1",version:'"v1"',allDay:true,start:"2026-09-24",end:"2026-09-27"});
 });
+
+test("recurring occurrence edits the master rule with the master version",async({page})=>{
+  await page.clock.setFixedTime(new Date("2026-09-23T09:00:00Z"));
+  const event={id:"occurrence-1",seriesId:"series-1",calendarId:"primary",provider:"google",connectionId:"connection-1",key:JSON.stringify(["google","connection-1","primary","occurrence-1"]),version:'"occurrence-v1"',summary:"Kartojamas susitikimas",editable:true,readOnlyReason:"",attendeeCount:0,allDay:false,recurring:true,canRespond:false,showAs:"busy",visibility:"default",reminder:{mode:"default"},timeZone:"Europe/Vilnius",start:{dateTime:"2026-09-23T10:00:00Z"},end:{dateTime:"2026-09-23T11:00:00Z"}};
+  let submitted:Record<string,unknown>|null=null;
+  await page.route("**/api/google/events**",async route=>{
+    const request=route.request(),url=new URL(request.url());
+    if(request.method()==="GET"&&url.searchParams.has("seriesId"))return route.fulfill({json:{seriesId:"series-1",version:'"master-v1"',startDate:"2026-09-23",supported:true,recurrence:{frequency:"weekly",interval:1,days_of_week:["wednesday"],end:{type:"never"}}}});
+    if(request.method()==="PATCH"&&(request.postDataJSON() as Record<string,unknown>).scope==="series"){submitted=request.postDataJSON() as Record<string,unknown>;return route.fulfill({json:{seriesId:"series-1",version:'"master-v2"',startDate:"2026-09-23",supported:true,recurrence:submitted.recurrence}});}
+    return route.fulfill({json:{items:[event]}});
+  });
+  await page.goto("/");await page.getByRole("button",{name:"Diena",exact:true}).click();await page.getByRole("button",{name:"Redaguoti įvykį: Kartojamas susitikimas"}).click();
+  const dialog=page.getByRole("dialog",{name:"Kalendoriaus įvykis"});await expect(dialog.getByText("Visa serija",{exact:true})).toBeVisible();await dialog.getByLabel("Įvykio kartojimo dažnis").selectOption("monthly");await dialog.getByLabel("Įvykio kartojimo intervalas").fill("2");await dialog.getByRole("button",{name:"Išsaugoti visos serijos taisyklę"}).click();
+  await expect(dialog).toHaveCount(0);expect(submitted).toMatchObject({scope:"series",seriesId:"series-1",calendarId:"primary",connectionId:"connection-1",version:'"master-v1"',recurrence:{frequency:"monthly",interval:2,day_of_month:23,end:{type:"never"}}});
+});

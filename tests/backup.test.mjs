@@ -41,6 +41,7 @@ describe("backup", { concurrency: false }, () => {
 
   beforeEach(() => {
     db.exec(`
+      DELETE FROM calendar_event_creates;
       DELETE FROM remote_task_lists;
       DELETE FROM remote_tasks;
       DELETE FROM task_plans;
@@ -61,6 +62,8 @@ describe("backup", { concurrency: false }, () => {
       .run("google:acct:list:task", "acct", "list", JSON.stringify({ title: "Remote task" }), "google");
     db.prepare("INSERT INTO remote_task_lists (list_key, source, account_id, list_json) VALUES (?, ?, ?, ?)")
       .run("google:acct:list", "google", "acct", JSON.stringify({ name: "Inbox" }));
+    db.prepare("INSERT INTO calendar_event_creates(provider,account_id,connection_id,calendar_id,operation_id,fingerprint) VALUES (?,?,?,?,?,?)")
+      .run("google","acct","connection","primary","00000000-0000-4000-8000-000000000001","fingerprint");
     return Number(task.lastInsertRowid);
   }
 
@@ -74,9 +77,10 @@ describe("backup", { concurrency: false }, () => {
     db.prepare("DELETE FROM task_plans").run();
     db.prepare("DELETE FROM remote_tasks").run();
     db.prepare("DELETE FROM remote_task_lists").run();
+    db.prepare("DELETE FROM calendar_event_creates").run();
     db.prepare("INSERT INTO tasks (title) VALUES (?)").run("Created later");
 
-    assert.deepEqual(restoreBackup(backup), { tablesRestored: 5 });
+    assert.deepEqual(restoreBackup(backup), { tablesRestored: 6 });
     assert.equal(db.prepare("SELECT title FROM tasks WHERE id = ?").get(originalId)?.title, "Backup task");
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM tasks").get().count, 1);
     assert.equal(db.prepare("SELECT value FROM settings WHERE key = ?").get("google_refresh_token")?.value, "SECRET_TOKEN");
@@ -84,6 +88,7 @@ describe("backup", { concurrency: false }, () => {
     assert.equal(db.prepare("SELECT mirror_orphan_title FROM task_plans").get()?.mirror_orphan_title, "Likęs blokas");
     assert.equal(db.prepare("SELECT source FROM remote_tasks").get()?.source, "google");
     assert.equal(db.prepare("SELECT source FROM remote_task_lists").get()?.source, "google");
+    assert.equal(db.prepare("SELECT fingerprint FROM calendar_event_creates").get()?.fingerprint, "fingerprint");
     assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
 
     const inserted = db.prepare("INSERT INTO tasks (title) VALUES (?)").run("After restore");
@@ -101,6 +106,7 @@ describe("backup", { concurrency: false }, () => {
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM task_plans").get().count, 1);
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM remote_tasks").get().count, 1);
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM remote_task_lists").get().count, 1);
+      assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM calendar_event_creates").get().count, 1);
       assert.equal(exported.prepare("SELECT value FROM settings WHERE key='google_refresh_token'").get(), undefined);
       assert.equal(exported.prepare("SELECT value FROM settings WHERE key='microsoft_refresh_token'").get(), undefined);
       assert.equal(exported.prepare("SELECT value FROM settings WHERE key='color_theme'").get()?.value, "dark");

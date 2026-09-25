@@ -64,13 +64,14 @@ describe("db migration from v0 schema", () => {
     }
   });
 
-  it("creates task_plans and remote_tasks tables", async () => {
+  it("creates task planning, remote cache and calendar create ledger tables", async () => {
     const { db } = await import("../lib/db.ts");
     const tables = new Set(
       (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()).map((r) => r.name)
     );
     assert.ok(tables.has("task_plans"), "task_plans table missing");
     assert.ok(tables.has("remote_tasks"), "remote_tasks table missing");
+    assert.ok(tables.has("calendar_event_creates"), "calendar_event_creates table missing");
     const planColumns = new Set(
       (db.prepare("PRAGMA table_info(task_plans)").all()).map((row) => row.name)
     );

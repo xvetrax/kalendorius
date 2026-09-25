@@ -123,8 +123,8 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 - [x] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė apima kalendoriaus ID.
 - [x] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Naujų ir esamų laiko įvykių redaktoriai valdo IANA laiko zoną, o nepasikartojantys įvykiai konvertuojami tarp laiko bei visos dienos režimų.
 - [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. RSVP veiksmas patikrintas sintetiniais Google ir Microsoft tiekėjais.
-- [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
-- [ ] ETag / versijų konfliktai, išoriniai pakeitimai ir 401/403/429 apdorojami; dar reikia nedubliuojančio įvykių kūrimo po neaiškaus atsakymo ir gyvos Graph patikros.
+- [x] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ sąmoningai nerodoma, kol nebus atskirai patikrintas serijos skaidymas ir išimčių perkėlimas.
+- [ ] ETag / versijų konfliktai, išoriniai pakeitimai ir 401/403/429 apdorojami; nedubliuojantis Google ir Microsoft įvykių kūrimas po neaiškaus atsakymo įgyvendintas ir patikrintas imitacine API, liko gyvos Graph paskyros patikra.
 - [x] Atskirai įvertinti Google focus time / out-of-office / working location ir Outlook papildomas galimybes pagal viešą API bei paskyros licenciją. Nepalaikomas funkcijas pažymėti galimybių lentelėje.
 
 Priimta, kai kiekviena įgyvendinta operacija patikrinta su imitacine API ir tuomet abiejų tiekėjų bandomaisiais kalendoriais; perskaitytas įvykis sutampa su išsaugotu, nepasimeta dalyviai ar serijos savybės.
@@ -265,7 +265,7 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 | Working Location | `eventType: "workingLocation"` — skaityti galima; rašyti per `workingLocationProperties` | Nėra atitikmens | Rodomas kaip tik skaityti |
 | Locked | `locked: true` — tiekėjo užraktas; redagavimas draudžiamas net organizatoriui | Nėra tiesioginio lauko | Rodomas kaip tik skaityti |
 | All-day | `start.date` + `end.date` | `isAllDay: true` | Skaityti, redaguoti ir konvertuoti į / iš laiko įvykio ✓ |
-| Recurring series | `recurrence[]` (master) | `type: "seriesMaster"` | Tik skaityti — egzemplioriai `[x]` redaguojami |
+| Recurring series | `recurrence[]` (master) | `type: "seriesMaster"` | Kūrimas ir paprastos taisyklės redagavimas visai serijai; egzempliorius redaguojamas atskirai |
 | Private | `visibility: "private"` | `sensitivity: "private"` | Rodomas; kuriant galima nustatyti |
 | Birthday / Holiday | `eventType: "birthday"` arba skaitomas kitas kalendorius | Atskiri readonly kalendoriai | Tik skaityti (kiti kalendoriai per D1) |
 
@@ -482,3 +482,12 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - Katalogo metu užfiksuota OAuth ryšio karta perduodama į patį įvykių sąrašo adapterį ir tikrinama dar kartą po skaitymo. Paskyrai pasikeitus tarp katalogo ir įvykių užklausos, senas pasirinkimas negali būti pritaikytas naujam prieigos raktui.
 - Patikra: `git diff --check`, `npm run typecheck`, 254/254 `npm test`, `npm run build` ir 35/35 `npm run test:e2e` scenarijai praėjo. Imitaciniai tiekėjai patvirtina kūrimą ne pagrindiniame kalendoriuje, tuščią pasirinkimą, skaitymo teisės atmetimą, paskyros susiejimą, ankstesnių pasirinkimų migraciją, ryšio pasikeitimo atmetimą ir pašalinto įjungto kalendoriaus saugų išvalymą.
 - Ribos: tikros Google ir Microsoft paskyros šiame žingsnyje nekeistos. Gyvų paskyrų priėmimo scenarijai lieka E etapo užduotyje, o neaiškios sėkmingo POST baigties nedubliuojantis pakartojimas lieka D etapo atskiram žingsniui.
+
+### 2026-09-25 — nedubliuojantis kūrimas ir pasikartojančios serijos
+
+- Naujo įvykio forma visą savo gyvavimo laiką išlaiko stabilų operacijos ID. Serveris patvarioje DB operacijų lentelėje jį susieja su tiekėju, paskyra, OAuth ryšio karta, kalendoriumi ir kanoniniu payload; pakeistas payload tuo pačiu ID atmetamas prieš kitą provider POST. Google gauna leistiną deterministinį `event.id`, privatų operacijos žymeklį ir stabilų Meet `requestId`; po neaiškaus POST atsakymo esamas įvykis saugiai atkuriamas tiksliu GET. Microsoft gauna tai pačiai operacijai nekintamą Graph `transactionId`.
+- Bendras griežtas kartojimo modelis palaiko kasdienę, savaitinę, absoliučią mėnesinę ir absoliučią metinę taisyklę, intervalą, savaitės dienas ir pabaigą be ribos, pasirinkta diena arba įvykių skaičiumi. Jis verčiamas į Google RRULE arba Microsoft `patternedRecurrence`, įskaitant serijos laiko zoną.
+- Kalendoriaus egzempliorius ir toliau redaguojamas savo ID bei versija. Visos serijos taisyklė pirmiau perskaitoma pagal `recurringEventId` arba `seriesMasterId`, tada keičiama tik su master ETag / versija. Nepalaikomos tiekėjo taisyklės lieka tik skaitymui ir nėra supaprastinamos tyliai.
+- „Šį ir būsimus“ neįjungta: abu tiekėjai tam neturi vienos saugios operacijos, o dviejų serijų skaidymas be atskiros atkuriamos eigos gali prarasti exceptions, cancellations ir dalyvių atsakymus.
+- Patikra: `git diff --check`, `npm run typecheck`, 264/264 `npm test`, `npm run build` ir 37/37 `npm run test:e2e` scenarijai praėjo. Imitacinė API patvirtina identišką pakartojimą, prarasto atsakymo atkūrimą, pakeisto payload atmetimą, provider formos Graph recurrence atsakymą, abiejų tiekėjų recurrence payload, master versijos konfliktą ir vieno egzemplioriaus atskyrimą nuo visos serijos.
+- Riba: tikros Google ir Microsoft paskyros šiame žingsnyje nekeistos; gyva Graph priėmimo patikra lieka paskutinis D5 punktas.

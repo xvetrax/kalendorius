@@ -24,10 +24,11 @@ const microsoftCalendars=calendarCatalogs.microsoft;
 after(()=>{globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 const inputFor=e=>({id:e.id,calendarId:e.calendarId,version:e.version,connectionId:e.connectionId,start:e.start.dateTime,end:e.end.dateTime});
 const shiftDate=(value,days)=>{const date=new Date(`${value}T00:00:00Z`);date.setUTCDate(date.getUTCDate()+days);return date.toISOString().slice(0,10);};
+let createOperation=0;const operationId=()=>`00000000-0000-4000-8000-${String(++createOperation).padStart(12,"0")}`;
 for(const provider of ["google","microsoft"]){
   const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
   const patch=(body,origin="http://localhost:3000")=>route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify(body)}));
-  const post=(body,origin="http://localhost:3000")=>route.POST(new Request(url,{method:"POST",headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify(body)}));
+  const post=(body,origin="http://localhost:3000")=>route.POST(new Request(url,{method:"POST",headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify({operationId:body.operationId||operationId(),...body})}));
   test(`${provider} actual routes: normalized list, move, duration, source reload and conflict status`,async()=>{
     const listed=await route.GET(new Request(url));assert.equal(listed.status,200);assert.equal(listed.headers.get("cache-control"),"no-store");
     const event=(await listed.json()).items.find(e=>e.editable&&!e.attendeeCount);assert.ok(event);
@@ -82,6 +83,28 @@ for(const provider of ["google","microsoft"]){
     if(provider==="google"){assert.equal(write.body.start.dateTime,"2026-10-24T07:00:00.000Z");assert.equal(write.body.end.dateTime,"2026-10-24T08:00:00.000Z");}
     else {assert.equal(write.body.start.dateTime,"2026-10-24T10:00:00");assert.equal(write.body.end.dateTime,"2026-10-24T11:00:00");}
   });
+  test(`${provider} actual routes: recurring create is idempotent and a series rule uses the master version`,async()=>{
+    const catalog=await (await calendarCatalogs[provider].GET()).json(),id=operationId(),calendarId=catalog.items.find(item=>item.primary||item.isDefault)?.id||"primary",map=calendarUpstream[provider==="google"?"google":"outlook"].get(calendarId),before=map.size;
+    const recurrence={frequency:"weekly",interval:2,days_of_week:["monday","wednesday"],end:{type:"count",count:8}};
+    const body={operationId:id,calendarId,calendarVersion:catalog.version,summary:`${provider} kartojimas`,start:"2026-10-26T07:00:00Z",end:"2026-10-26T08:00:00Z",timeZone:"Europe/Vilnius",recurrence};
+    const first=await post(body);assert.equal(first.status,201);const created=await first.json();assert.equal(map.size,before+1);
+    const second=await post(body);assert.ok([200,201].includes(second.status));assert.equal((await second.json()).id,created.id);assert.equal(map.size,before+1);
+    const changedPayload=await post({...body,summary:`${body.summary} pakeistas`});assert.equal(changedPayload.status,409);assert.equal(map.size,before+1);
+    const writes=calendarUpstreamWrites.filter(write=>write.body.summary===body.summary||write.body.subject===body.summary);assert.equal(writes.length,2);
+    if(provider==="google"){assert.match(writes[0].body.id,/^dp[0-9a-v]{40}$/);assert.deepEqual(writes[0].body.recurrence,["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE;COUNT=8"]);}
+    else {assert.ok(writes[0].body.transactionId);assert.deepEqual(writes[0].body.recurrence,{pattern:{type:"weekly",interval:2,daysOfWeek:["monday","wednesday"],firstDayOfWeek:"monday"},range:{type:"numbered",startDate:"2026-10-26",numberOfOccurrences:8,recurrenceTimeZone:"Europe/Vilnius"}});}
+
+    const occurrence={seriesId:provider==="google"?"test-series":"outlook-series",calendarId:"primary",connectionId:`${provider}-fixture`};
+    const query=new URLSearchParams({seriesId:occurrence.seriesId,calendarId:occurrence.calendarId,connectionId:occurrence.connectionId}),snapshotResponse=await route.GET(new Request(`${url}?${query}`));assert.equal(snapshotResponse.status,200);const snapshot=await snapshotResponse.json();assert.equal(snapshot.supported,true);assert.ok(snapshot.version);assert.ok(snapshot.startDate);
+    const nextRule={frequency:"daily",interval:3,end:{type:"date",date:shiftDate(snapshot.startDate,30)}};
+    const changed=await patch({scope:"series",seriesId:occurrence.seriesId,calendarId:occurrence.calendarId,connectionId:occurrence.connectionId,version:snapshot.version,recurrence:nextRule});assert.equal(changed.status,200);const updated=await changed.json();assert.deepEqual(updated.recurrence,nextRule);
+    assert.equal((await patch({scope:"series",seriesId:occurrence.seriesId,calendarId:occurrence.calendarId,connectionId:occurrence.connectionId,version:snapshot.version,recurrence:nextRule})).status,409);
+  });
+  test(`${provider} actual routes: an ambiguous create can be retried without a duplicate`,async()=>{
+    const catalog=await (await calendarCatalogs[provider].GET()).json(),id=operationId(),calendarId=catalog.items.find(item=>item.primary||item.isDefault)?.id||"primary",map=calendarUpstream[provider==="google"?"google":"outlook"].get(calendarId),before=map.size;
+    const body={operationId:id,calendarId,calendarVersion:catalog.version,summary:"SIMULATE_AMBIGUOUS_CREATE",start:"2026-11-02T08:00:00Z",end:"2026-11-02T09:00:00Z",timeZone:"UTC"};
+    const first=await post(body);assert.equal(first.status,provider==="google"?200:502);const changed=await post({...body,summary:"Pakeista po neaiškaus atsakymo"});assert.equal(changed.status,409);assert.equal(map.size,before+1);const second=await post(body);assert.ok([200,201].includes(second.status));assert.equal(map.size,before+1);
+  });
   test(`${provider} actual routes: removed enabled calendars are pruned before listing`,async()=>{
     const key=`${provider}_enabled_calendars`,previous=setting(key);
     try {
@@ -128,7 +151,7 @@ test("Microsoft legacy primary selection creates in the live opaque default cale
   try {
     saveSetting(key,JSON.stringify({accountId:"fixture-account",items:[{id:"primary"}]}));
     const catalog=await (await calendarCatalogs.microsoft.GET()).json();assert.deepEqual(catalog.enabled,["opaque-default"]);assert.equal(catalog.defaultAlias,true);
-    const response=await routes.microsoft.POST(new Request(url,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({calendarId:"opaque-default",calendarVersion:catalog.version,summary:"Legacy numatytasis",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));
+    const response=await routes.microsoft.POST(new Request(url,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({operationId:operationId(),calendarId:"opaque-default",calendarVersion:catalog.version,summary:"Legacy numatytasis",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));
     assert.equal(response.status,201);assert.equal(calendarUpstreamWrites.length,before+1);assert.equal(calendarUpstreamWrites.at(-1).path,"/v1.0/me/calendars/opaque-default/events");
   } finally {if(previous===undefined)db.prepare("DELETE FROM settings WHERE key = ?").run(key);else saveSetting(key,previous);}
 });
@@ -187,12 +210,12 @@ for(const provider of ["google","microsoft"])test(`${provider}: explicit empty c
   const catalogResponse=await catalog.GET(),snapshot=await catalogResponse.json();assert.equal(catalogResponse.status,200);
   saveSetting(`${provider}_account_id`,"different-account");
   const stale=await catalog.PATCH(new Request(catalogUrl,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({enabled:[],version:snapshot.version})}));assert.equal(stale.status,409);
-  const staleCreate=await route.POST(new Request(eventsUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({calendarId:"primary",calendarVersion:snapshot.version,summary:"Nekurti kitoje paskyroje",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));assert.equal(staleCreate.status,409);
+  const staleCreate=await route.POST(new Request(eventsUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({operationId:operationId(),calendarId:"primary",calendarVersion:snapshot.version,summary:"Nekurti kitoje paskyroje",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));assert.equal(staleCreate.status,409);
   saveSetting(`${provider}_account_id`,"fixture-account");
   const response=await catalog.PATCH(new Request(catalogUrl,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({enabled:[],version:snapshot.version})}));
   assert.equal(response.status,200);assert.deepEqual(JSON.parse(setting(`${provider}_enabled_calendars`)),{accountId:"fixture-account",items:[]});
   const listed=await route.GET(new Request(eventsUrl));assert.equal(listed.status,200);assert.deepEqual((await listed.json()).items,[]);
-  const before=calendarUpstreamWrites.length,created=await route.POST(new Request(eventsUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({calendarId:"primary",calendarVersion:snapshot.version,summary:"Nekurti",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));
+  const before=calendarUpstreamWrites.length,created=await route.POST(new Request(eventsUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({operationId:operationId(),calendarId:"primary",calendarVersion:snapshot.version,summary:"Nekurti",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));
   assert.equal(created.status,409);assert.equal(calendarUpstreamWrites.length,before);
   saveSetting(`${provider}_enabled_calendars`,JSON.stringify({accountId:"fixture-account",items:[{id:"primary"}]}));
 });

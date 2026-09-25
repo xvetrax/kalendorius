@@ -16,6 +16,8 @@ import { MicrosoftTaskRecurrence } from "@/app/microsoft-task-recurrence";
 import { GoogleTaskOrder } from "@/app/google-task-order";
 import {FOCUS_DURATION_SECONDS,parseFocusSession,remainingFocusSeconds,serializeFocusSession} from "@/lib/focus-session";
 import {calendarTimeZones,isCalendarTimeZone,zonedInstant,zonedLocalInput} from "@/lib/calendar-time-zone";
+import {CalendarRecurrenceFields,CalendarSeriesRecurrence} from "@/app/calendar-event-recurrence";
+import type {CalendarRecurrence} from "@/lib/calendar-recurrence";
 
 type View = "calendar" | "tasks" | "focus";
 type Mode = "day" | "workweek" | "week" | "month";
@@ -486,6 +488,9 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
   const [error, setError] = useState("");
   const [allDay, setAllDay] = useState(false);
   const startDate = zonedLocalInput(start.toISOString(),timeZone).slice(0, 10);
+  const [allDayDates,setAllDayDates]=useState({start:startDate,end:startDate});
+  const [recurrence,setRecurrence]=useState<CalendarRecurrence|null>(null);
+  const createOperation=useRef<string|null>(null);
   function writable(list:CalList|null){return list?.items.filter(cal=>cal.writable&&(list.enabled===null||list.enabled.includes(cal.id)))||[];}
   const providerCalendars=writable(calendars[provider]);
   const calendarVersion=calendars[provider]?.version||"";
@@ -514,7 +519,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
     try {
       if(!calendarId||!calendarVersion)throw new Error("Pasirink rašomą kalendorių.");
       const f = new FormData(e.currentTarget);
-      const common = { calendarId,calendarVersion,summary: f.get("summary"), description: f.get("description"), location: f.get("location") || undefined, showAs: f.get("showAs") || undefined, visibility: f.get("visibility") || undefined };
+      const common = { calendarId,calendarVersion,summary: f.get("summary"), description: f.get("description"), location: f.get("location") || undefined, showAs: f.get("showAs") || undefined, visibility: f.get("visibility") || undefined, ...(recurrence?{recurrence}:{}) };
       let body: Record<string, unknown>;
       if (allDay) {
         const sd = String(f.get("startDate")); const ed = String(f.get("endDate")) || sd;
@@ -525,6 +530,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
         const rm = f.get("reminderMinutes"); const reminderMinutes = rm !== null && rm !== "" ? Number(rm) : undefined;
         body = { ...common, start: from, end, timeZone:selectedTimeZone, attendees: f.get("attendees"), addMeet: f.get("online") === "on", ...(reminderMinutes !== undefined ? { reminderMinutes } : {}) };
       }
+      createOperation.current??=crypto.randomUUID();body.operationId=createOperation.current;
       const response = await fetch(`/api/${provider === "outlook" ? "microsoft" : "google"}/events`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       await responseJson(response); await onSave();
     } catch(error) { setError(error instanceof Error ? error.message : "Įvykio sukurti nepavyko."); } finally { setSaving(false); }
@@ -538,7 +544,8 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
       {!calendarsLoading&&!providerCalendars.length&&<p className="formHint" role="status">Šiai paskyrai nepasirinktas rašomas kalendorius. Pasirink jį nustatymų skiltyje „Kalendoriai“.</p>}
       {!allDay && <label>Trukmė<select name="duration" defaultValue="30"><option value="15">15 min.</option><option value="30">30 min.</option><option value="60">1 val.</option><option value="90">1,5 val.</option></select></label>}
       <label className="onlineSwitch"><input type="checkbox" checked={allDay} onChange={e=>setAllDay(e.target.checked)}/><i/>Visos dienos įvykis</label>
-      {allDay ? <div className="formRow"><label>Pradžia<input name="startDate" type="date" required defaultValue={startDate}/></label><label>Pabaiga<input name="endDate" type="date" defaultValue={startDate}/></label></div> : <><label>Pradžia<input name="start" type="datetime-local" required value={timed.start} onChange={event=>setTimed(current=>({...current,start:event.target.value}))}/></label><label>Laiko zona<select name="timeZone" value={timeZone} onChange={event=>setTimed(current=>({...current,timeZone:event.target.value}))}>{modalTimeZones.map(zone=><option key={zone} value={zone}>{zone}</option>)}</select></label></>}
+      {allDay ? <div className="formRow"><label>Pradžia<input name="startDate" type="date" required value={allDayDates.start} onChange={event=>setAllDayDates(current=>({...current,start:event.target.value,end:current.end<event.target.value?event.target.value:current.end}))}/></label><label>Pabaiga<input name="endDate" type="date" min={allDayDates.start} value={allDayDates.end} onChange={event=>setAllDayDates(current=>({...current,end:event.target.value}))}/></label></div> : <><label>Pradžia<input name="start" type="datetime-local" required value={timed.start} onChange={event=>setTimed(current=>({...current,start:event.target.value}))}/></label><label>Laiko zona<select name="timeZone" value={timeZone} onChange={event=>setTimed(current=>({...current,timeZone:event.target.value}))}>{modalTimeZones.map(zone=><option key={zone} value={zone}>{zone}</option>)}</select></label></>}
+      <CalendarRecurrenceFields value={recurrence} startDate={allDay?allDayDates.start:timed.start.slice(0,10)} onChange={setRecurrence} disabled={saving}/>
       <div className="formRow"><label>Laisvas / užimtas<select name="showAs"><option value="busy">Užimtas</option><option value="free">Laisvas</option></select></label><label>Matomumas<select name="visibility"><option value="">Numatytasis</option><option value="private">Privatus</option></select></label></div>
       {!allDay && <label>Priminimas<select name="reminderMinutes"><option value="">Numatytasis</option><option value="0">Įvykio metu</option><option value="5">5 min. prieš</option><option value="10">10 min. prieš</option><option value="15">15 min. prieš</option><option value="30">30 min. prieš</option><option value="60">1 val. prieš</option><option value="1440">1 d. prieš</option></select></label>}
       <label>Vieta<input name="location" maxLength={1000} placeholder="Kabinetas, miestas arba nuoroda…"/></label>
@@ -820,7 +827,7 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{
   const safeLink=event.htmlLink?.startsWith("https://") ? event.htmlLink : undefined;
   return <Modal eyebrow={event.provider==="outlook"?"OUTLOOK":"GOOGLE CALENDAR"} title="Kalendoriaus įvykis" onClose={()=>{if(!saving&&!responding)onClose();}}>
     {!event.editable && <p className="formHint">{event.readOnlyReason}</p>}
-    {event.recurring && event.editable && <p className="formHint">↻ Kartojamas įvykis. Keičiamas tik šis egzempliorius — serija lieka nepakeista, o laiko / visos dienos režimą keisk originaliame kalendoriuje.</p>}
+    {event.recurring && event.editable && <p className="formHint">↻ Viršutiniai laukai keičia tik šį egzempliorių. Visos serijos kartojimo taisyklė valdoma atskirai žemiau.</p>}
     {error && <p className="formError" role="alert">{error}{conflict && onRefresh && <> <button type="button" className="inlineRefreshBtn" onClick={()=>{onRefresh();onClose();}}>Atnaujinti ir uždaryti →</button></>}</p>}
     {event.canRespond&&event.responseStatus&&<div className="rsvpActions" role="group" aria-label="Dalyvavimo atsakymas"><span>{rsvpLabel(event.responseStatus)}</span><div><button type="button" aria-pressed={event.responseStatus==="accepted"} disabled={!!responding||saving} onClick={()=>void respond("accepted")}>{responding==="accepted"?"Siunčiama…":"Taip"}</button><button type="button" aria-pressed={event.responseStatus==="tentative"} disabled={!!responding||saving} onClick={()=>void respond("tentative")}>{responding==="tentative"?"Siunčiama…":"Galbūt"}</button><button type="button" aria-pressed={event.responseStatus==="declined"} disabled={!!responding||saving} onClick={()=>void respond("declined")}>{responding==="declined"?"Siunčiama…":"Ne"}</button></div></div>}
     <form className="modalForm" onSubmit={submit}>
@@ -840,6 +847,7 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{
       </div>
       {event.editable && attendees.length>0 && <label className="confirmAttendees"><input type="checkbox" name="confirm" disabled={saving||!!responding}/>Patvirtinu pakeitimus — bus išsiųsti pranešimai dalyviams, jei laikas pasikeitė</label>}
       <p className="formHint">Keičiami pavadinimas, vieta, aprašymas, laikas arba visos dienos datos, laiko zona, dalyviai, matomumas, laisvo / užimto laiko būsena ir priminimas. Susitikimo nuoroda išsaugoma.</p>
+      {event.recurring&&<CalendarSeriesRecurrence event={event} onChanged={onRefresh}/>}
       <div className="modalActions">{safeLink && <a className="originalEvent" href={safeLink} target="_blank" rel="noopener noreferrer">Atverti originalą ↗</a>}{event.editable && <button className="newButton" disabled={saving||!!responding}>{saving?"Saugoma…":"Išsaugoti įvykį"}</button>}</div>
     </form>
   </Modal>;

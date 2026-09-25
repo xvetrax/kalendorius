@@ -1,6 +1,8 @@
 import { CalendarError, calendarIdentifier, createCalendarService, eventDates, eventTimes } from "@/lib/calendar-events";
+import {calendarCreateIdentity,calendarCreateOperationId} from "@/lib/calendar-create";
+import {graphCalendarRecurrence,parseCalendarRecurrence} from "@/lib/calendar-recurrence";
 import {isCalendarTimeZone,matchingCalendarTimeZone} from "@/lib/calendar-time-zone";
-import { db, saveSetting, setting } from "@/lib/db";
+import { db, reserveCalendarEventCreate,saveSetting, setting } from "@/lib/db";
 import { OUTLOOK_DEFAULT_CALENDAR_SETTING, outlookDefaultCalendarId, outlookMirrorTaskKey } from "@/lib/outlook-mirror-link";
 import { graphFetch, isMicrosoftConnected } from "@/lib/microsoft";
 import { apiError, assertSameOrigin } from "@/lib/http";
@@ -41,6 +43,8 @@ export async function GET(request:Request) {
   if (!isMicrosoftConnected()) return Response.json({items:[]});
   const input=new URL(request.url).searchParams;
   try {
+    const seriesId=input.get("seriesId");
+    if(seriesId)return Response.json(await calendar.series(Object.fromEntries(input)));
     const accountId=setting("microsoft_account_id"),connectionId=setting("microsoft_connection_generation") || "legacy",version=calendarSelectionVersion("microsoft",accountId,connectionId),catalog=await microsoftCalendarCatalog(),enabled=new Set(catalog.enabled);
     if(catalog.version!==version)throw new CalendarError("Microsoft paskyra pasikeitė. Atnaujink kalendorių.",409);
     const calendars=catalog.explicit ? catalog.items.filter(item=>enabled.has(item.id)).map(item=>({id:item.isDefault&&catalog.defaultAlias?"primary":item.id,name:item.name,color:item.color})) : undefined;
@@ -60,6 +64,7 @@ export async function POST(request: Request) {
     if (!String(body.summary || "").trim() || !body.start || !body.end) return Response.json({ error: "Trūksta pavadinimo arba laiko" }, { status: 400 });
     const connectionId=isMicrosoftConnected()?setting("microsoft_connection_generation")||"legacy":null,accountId=setting("microsoft_account_id"),calendarId=calendarIdentifier(body.calendarId);
     if(!connectionId||!accountId)throw new CalendarError("Microsoft paskyra neprijungta.",409);
+    let operationId:string;try{operationId=calendarCreateOperationId(body.operationId);}catch(error){throw new CalendarError(error instanceof Error?error.message:"Neteisingas operacijos ID.");}
     if(body.calendarVersion!==calendarSelectionVersion("microsoft",accountId,connectionId))throw new CalendarError("Microsoft paskyra arba kalendorių katalogas pasikeitė. Atnaujink kalendorius.",409);
     const enabled=enabledCalendars(accountId);
     const exactSelection=enabled?.some(calendar=>calendar.id===calendarId)??false,legacyDefault=enabled?.some(calendar=>calendar.id==="primary")??false;
@@ -80,14 +85,20 @@ export async function POST(request: Request) {
         body.timeZone=matched;
       }
     }
-    let event:ReturnType<typeof buildOutlookEvent>;
+    let event:Record<string,unknown>;
     try{event=buildOutlookEvent(body);}catch(error){throw new CalendarError(error instanceof Error?error.message:"Neteisingas įvykio laikas.");}
+    const recurrenceContext={startDate:body.allDay?String(body.start):String((event.start as {dateTime:string}).dateTime).slice(0,10),allDay:Boolean(body.allDay),...(!body.allDay?{timeZone:String(body.timeZone||"UTC"),providerTimeZone:String(body.timeZone||"UTC")}:{providerTimeZone:"UTC"})};
+    const recurrence=body.recurrence===undefined||body.recurrence===null?null:parseCalendarRecurrence(body.recurrence,recurrenceContext);
+    if(body.recurrence!==undefined&&body.recurrence!==null&&!recurrence)throw new CalendarError("Neteisinga kartojimo taisyklė.");
+    if(recurrence)event.recurrence=graphCalendarRecurrence(recurrence,recurrenceContext);
+    const identity=calendarCreateIdentity("outlook",accountId,connectionId,calendarId,operationId,event);event.transactionId=identity.transactionId;
     const selected=await graphFetch(`/me/calendars/${encodeURIComponent(calendarId)}?$select=id,canEdit,isDefaultCalendar`);
     if(!isMicrosoftConnected()||setting("microsoft_account_id")!==accountId||(setting("microsoft_connection_generation")||"legacy")!==connectionId)throw new CalendarError("Microsoft paskyra pasikeitė. Atnaujink kalendorių.",409);
     if(selected?.id!==calendarId)throw new CalendarError("Microsoft grąžino kitą kalendorių. Atnaujink kalendorių sąrašą.",502);
     if(enabled&&!exactSelection&&!(legacyDefault&&selected.isDefaultCalendar===true))throw new CalendarError("Pasirinktas Microsoft kalendorius neįjungtas nustatymuose.",409);
     if(enabled===undefined&&selected.isDefaultCalendar!==true)throw new CalendarError("Pasirinktas Microsoft kalendorius neįjungtas nustatymuose.",409);
     if(selected.canEdit!==true)throw new CalendarError("Pasirinktame Microsoft kalendoriuje nėra rašymo teisės.",403);
+    if(!reserveCalendarEventCreate("outlook",accountId,connectionId,calendarId,operationId,identity.fingerprint))throw new CalendarError("Ši kūrimo operacija jau pradėta su kitais įvykio duomenimis. Atverk naują įvykio langą.",409);
     const data = await graphFetch(`/me/calendars/${encodeURIComponent(calendarId)}/events`, { method: "POST", body: JSON.stringify(event) });
     if(!isMicrosoftConnected()||setting("microsoft_account_id")!==accountId||(setting("microsoft_connection_generation")||"legacy")!==connectionId)throw new CalendarError("Microsoft paskyra pasikeitė. Atnaujink kalendorių.",409);
     return Response.json(data, { status: 201 });
@@ -103,7 +114,7 @@ export async function DELETE(request: Request) {
 }
 
 export async function PATCH(request:Request) {
-  try {assertSameOrigin(request);return Response.json(await calendar.update(await request.json()));}
+  try {assertSameOrigin(request);const body=await request.json();return Response.json(body?.scope==="series"?await calendar.updateSeries(body):await calendar.update(body));}
   catch(error) {return failure(error);}
 }
 
