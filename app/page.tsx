@@ -391,17 +391,18 @@ function TaskBlock({ task, segment }: { task: Task; segment:DaySegment }) {
   const gesture = useRef<{y:number;duration:number;next:number} | null>(null);
   const moveGesture = useRef<{x:number;y:number;grab:number} | null>(null); const moved = useRef(false);
   const [offset,setOffset] = useState<{x:number;y:number} | null>(null);
+  const [crossedDay,setCrossedDay] = useState(false);
   async function commit(minutes:number) {setSaving(true);try {await actions.resize(task,minutes);} finally {setSaving(false);setPreview(null);}}
-  return <div className="eventBlock taskTime" data-short={segment.height<45 || undefined} data-tiny={segment.height<24 || undefined} style={{...segmentStyle(segment,preview),transform:offset ? `translate(${offset.x}px,${offset.y}px)` : undefined,zIndex:offset ? 10 : undefined,pointerEvents:offset ? "none" : undefined}}>
+  return <div className="eventBlock taskTime" data-short={segment.height<45 || undefined} data-tiny={segment.height<24 || undefined} style={{...segmentStyle(segment,preview),...(crossedDay ? {opacity:0,pointerEvents:"none"} : offset ? {transform:`translate(${offset.x}px,${offset.y}px)`,zIndex:10,pointerEvents:"none"} : {})}}>
     <button className="taskBlockEdit" disabled={saving} aria-label={`Redaguoti planą: ${task.title}`} title={segment.gestureSafe ? "Tempk į kitą dieną arba paspausk redaguoti. Shift+←→ — diena, Shift+↑↓ — laikas." : "Kelių dienų ar laiko keitimo dienos planą keisk paspaudęs redaguoti"}
       onClick={(e) => {if (e.detail===0 || !moved.current) actions.edit(task);}}
       onKeyDown={(e) => {if(!segment.gestureSafe||!e.shiftKey)return;const steps:Record<string,number>={ArrowDown:15,ArrowUp:-15,ArrowRight:1440,ArrowLeft:-1440};const step=steps[e.key];if(!step)return;e.preventDefault();const ns=new Date(start.getTime()+step*60000);setSaving(true);void actions.move(task,ns).finally(()=>setSaving(false));}}
       onPointerDown={(e) => {moved.current=false;if (!segment.gestureSafe || e.button !== 0) return;moveGesture.current={x:e.clientX,y:e.clientY,grab:e.clientY-e.currentTarget.closest(".eventBlock")!.getBoundingClientRect().top};moved.current=false;e.currentTarget.setPointerCapture(e.pointerId);}}
-      onPointerMove={(e) => {const g=moveGesture.current;if (!g) return;const dx=e.clientX-g.x,dy=e.clientY-g.y;if (moved.current || Math.hypot(dx,dy)>5) {moved.current=true;setOffset({x:dx,y:dy});const hintLane=document.elementsFromPoint(e.clientX,e.clientY).find(el=>el instanceof HTMLElement && el.classList.contains("dayLane")) as HTMLElement|undefined;if(hintLane?.dataset.day){const laneTop=hintLane.getBoundingClientRect().top;actions.setDragHint({day:hintLane.dataset.day,minute:e.clientY-laneTop-g.grab,height:task.duration_minutes});}else{actions.setDragHint(null);}}}}
-      onPointerCancel={() => {moveGesture.current=null;setOffset(null);actions.setDragHint(null);}}
+      onPointerMove={(e) => {const g=moveGesture.current;if (!g) return;const dx=e.clientX-g.x,dy=e.clientY-g.y;if (moved.current || Math.hypot(dx,dy)>5) {moved.current=true;setOffset({x:dx,y:dy});const hintLane=document.elementsFromPoint(e.clientX,e.clientY).find(el=>el instanceof HTMLElement && el.classList.contains("dayLane")) as HTMLElement|undefined;const sourceLane=e.currentTarget.closest(".dayLane") as HTMLElement|undefined;if(hintLane?.dataset.day){const laneTop=hintLane.getBoundingClientRect().top;actions.setDragHint({day:hintLane.dataset.day,minute:e.clientY-laneTop-g.grab,height:task.duration_minutes});setCrossedDay(hintLane.dataset.day!==sourceLane?.dataset.day);}else{actions.setDragHint(null);setCrossedDay(false);}}}}
+      onPointerCancel={() => {moveGesture.current=null;setOffset(null);setCrossedDay(false);actions.setDragHint(null);}}
       onPointerUp={(e) => {
         if (!moveGesture.current) return;const grab=moveGesture.current.grab;moveGesture.current=null;e.currentTarget.releasePointerCapture(e.pointerId);
-        actions.setDragHint(null);
+        setCrossedDay(false);actions.setDragHint(null);
         if (!moved.current) return;
         const beneath=document.elementsFromPoint(e.clientX,e.clientY);
         const lane=beneath.find((element) => element instanceof HTMLElement && element.classList.contains("dayLane")) as HTMLElement | undefined;
