@@ -51,3 +51,4 @@
 [data-theme="dark"] .columns article{background:var(--surface);border-color:var(--line)}
 [data-theme="dark"] .loginBox{background:var(--surface);color:var(--ink)}
 [data-theme="dark"] .currentTime span{background:var(--surface);color:var(--error-text)}
+.dropHint{position:absolute;left:4px;right:4px;background:rgba(114,87,226,0.15);border:2px dashed #765de2;border-radius:6px;pointer-events:none;min-height:30px;}

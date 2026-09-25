@@ -27,7 +27,7 @@ const hours = Array.from({ length: 24 }, (_, i) => i);
 const dayNames = ["Pr", "An", "Tr", "Kt", "Pn", "Št", "Sk"];
 const projects = ["Asmeniniai", "Darbas", "Mokymasis"];
 const timeZones=calendarTimeZones();
-const TaskActions = createContext<{ report:(error:unknown)=>void; edit: (task: Task) => void; complete: (task: Task) => void; resize: (task: Task, minutes: number) => Promise<void>; move: (task:Task, date:Date | null) => Promise<void> }>({ report:()=>{}, edit: () => {}, complete: () => {}, resize: async () => {}, move:async () => {} });
+const TaskActions = createContext<{ report:(error:unknown)=>void; edit: (task: Task) => void; complete: (task: Task) => void; resize: (task: Task, minutes: number) => Promise<void>; move: (task:Task, date:Date | null) => Promise<void>; setDragHint: (hint: {day: string; minute: number; height: number} | null) => void }>({ report:()=>{}, edit: () => {}, complete: () => {}, resize: async () => {}, move:async () => {}, setDragHint:()=>{} });
 
 function monday(date: Date) { const d = new Date(date); const weekday = d.getDay() || 7; d.setDate(d.getDate() - weekday + 1); d.setHours(0, 0, 0, 0); return d; }
 function sameDay(a: Date, b: Date) { return a.toDateString() === b.toDateString(); }
@@ -74,6 +74,7 @@ export default function Planner() {
   const [focusTask, setFocusTask] = useState<Task | null>(null); const [seconds, setSeconds] = useState(FOCUS_DURATION_SECONDS); const [running, setRunning] = useState(false);
   const [focusStartedAt,setFocusStartedAt]=useState<number|null>(null),[focusEndsAt,setFocusEndsAt]=useState<number|null>(null);
   const [focusRestored,setFocusRestored]=useState(false);
+  const [dragHint,setDragHint]=useState<{day:string;minute:number;height:number}|null>(null);
 
   const panelOpen=view==="calendar" && (isMobile ? mobilePanelOpen : !collapsed);
   function changeView(next:View) {setView(next);setMobilePanelOpen(false);}
@@ -268,7 +269,7 @@ export default function Planner() {
     catch (error) { setToast(error instanceof Error ? error.message : "Paskyros atjungti nepavyko."); }
   }
 
-  return <EventActions.Provider value={{report,edit:(event)=>setEditingEvent({event}),move:moveEvent}}><TaskActions.Provider value={{report,edit:setEditingTask,move:async (task,date) => {if (date) await planTask(task,date);else {try {const updated=await patchTask(task,{scheduled_at:null,mirror_requested:false});setToast(updated.mirror_error || "Užduotis grąžinta į neplanuotas.");} catch(error) {report(error);}}},complete:(task) => { void patchTask(task, {completed:!task.completed}).catch(report); },resize:async (task,minutes) => { try {const updated=await patchTask(task,{duration_minutes:minutes});setToast(updated.mirror_error || `Trukmė pakeista: ${durationLabel(minutes)}`);} catch(error) {report(error);} }}}><main className={`appShell ${panelOpen ? "withPanel" : "withoutPanel"}`} data-mobile-panel={mobilePanelOpen || undefined}>
+  return <EventActions.Provider value={{report,edit:(event)=>setEditingEvent({event}),move:moveEvent}}><TaskActions.Provider value={{report,edit:setEditingTask,move:async (task,date) => {if (date) await planTask(task,date);else {try {const updated=await patchTask(task,{scheduled_at:null,mirror_requested:false});setToast(updated.mirror_error || "Užduotis grąžinta į neplanuotas.");} catch(error) {report(error);}}},complete:(task) => { void patchTask(task, {completed:!task.completed}).catch(report); },resize:async (task,minutes) => { try {const updated=await patchTask(task,{duration_minutes:minutes});setToast(updated.mirror_error || `Trukmė pakeista: ${durationLabel(minutes)}`);} catch(error) {report(error);} },setDragHint}}><main className={`appShell ${panelOpen ? "withPanel" : "withoutPanel"}`} data-mobile-panel={mobilePanelOpen || undefined}>
     <aside className="rail" aria-label="Pagrindinė navigacija">
       <button className="brand" aria-label="Dienos planas – šiandien" onClick={()=>{changeView("calendar");setAnchor(new Date());}}><span className="brandMark"><Icon name="calendar"/></span><span>Dienos planas<small>Tavo laikas. Tavo ritmu.</small></span></button>
       <div className="navCaption">DARBO ERDVĖ</div>
@@ -283,7 +284,7 @@ export default function Planner() {
       </header>
       {toast && <button role="status" className="toast" onClick={() => setToast("")}>{toast}<span>×</span></button>}
       {view === "calendar" && !clock && <div className="loading" role="status" aria-label="Kraunamas kalendorius"><i/><i/><i/></div>}
-      {view === "calendar" && clock && <Calendar mode={mode} setMode={setMode} anchor={anchor} setAnchor={setAnchor} days={days} monthDays={monthDays} events={calendarEvents} tasks={calendarTasks} loading={loading} move={move} onDrop={dropTask} onCreate={setEventDate}/>}
+      {view === "calendar" && clock && <Calendar mode={mode} setMode={setMode} anchor={anchor} setAnchor={setAnchor} days={days} monthDays={monthDays} events={calendarEvents} tasks={calendarTasks} loading={loading} move={move} onDrop={dropTask} onCreate={setEventDate} dragHint={dragHint}/>}
       {view === "tasks" && <TaskBoard tasks={tasks.filter((task) => `${task.title} ${task.notes || ""}`.toLowerCase().includes(search.toLowerCase()))} onDone={(task) => { void patchTask(task, { completed: !task.completed }).catch(report); }} onFocus={startFocus} onAdd={() => setTaskModal(true)}/>} 
       {view === "focus" && <Focus
         task={focusTask || openTasks[0]} tasks={openTasks} seconds={seconds} running={running} startedAt={focusStartedAt}
@@ -328,7 +329,7 @@ function TaskCard({task,onDone,onFocus}:{task:Task;onDone:()=>void;onFocus:()=>v
     onPointerLeave={()=>{if(!moved.current)pointer.current=null;}}
     onPointerCancel={()=>{pointer.current=null;setGhost(null);}}
     onPointerUp={event=>{
-      if(!pointer.current)return;pointer.current=null;if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);setGhost(null);if(!moved.current)return;
+      if(!pointer.current)return;pointer.current=null;if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);setGhost(null);actions.setDragHint(null);if(!moved.current)return;
       const lane=document.elementsFromPoint(event.clientX,event.clientY).find(el=>el instanceof HTMLElement && el.classList.contains("dayLane")) as HTMLElement|undefined;
       if(!lane?.dataset.day)return;
       try {const date=dateAtMinute(new Date(lane.dataset.day+"T00:00:00"),event.clientY-lane.getBoundingClientRect().top);setSaving(true);void actions.move(task,date).finally(()=>setSaving(false));} catch(error) {actions.report(error);}
@@ -340,11 +341,11 @@ function TaskCard({task,onDone,onFocus}:{task:Task;onDone:()=>void;onFocus:()=>v
   </article>;
 }
 
-function Calendar({ mode, setMode, anchor, setAnchor, days, monthDays, events, tasks, loading, move, onDrop, onCreate }: { mode: Mode; setMode: (m: Mode) => void; anchor: Date; setAnchor: (d: Date) => void; days: Date[]; monthDays: Date[]; events: CalEvent[]; tasks: Task[]; loading: boolean; move: (n: number) => void; onDrop: (e: DragEvent<HTMLDivElement>, d: Date) => void; onCreate: (d: Date) => void }) {
+function Calendar({ mode, setMode, anchor, setAnchor, days, monthDays, events, tasks, loading, move, onDrop, onCreate, dragHint }: { mode: Mode; setMode: (m: Mode) => void; anchor: Date; setAnchor: (d: Date) => void; days: Date[]; monthDays: Date[]; events: CalEvent[]; tasks: Task[]; loading: boolean; move: (n: number) => void; onDrop: (e: DragEvent<HTMLDivElement>, d: Date) => void; onCreate: (d: Date) => void; dragHint: {day: string; minute: number; height: number} | null }) {
   const title = mode === "day" ? anchor.toLocaleDateString("lt-LT",{month:"long",day:"numeric"}) : mode === "month" ? anchor.toLocaleDateString("lt-LT", { month: "long", year: "numeric" }) : `${days[0].toLocaleDateString("lt-LT", { month: "short", day: "numeric" })} – ${days.at(-1)!.toLocaleDateString("lt-LT", { month: "short", day: "numeric", year: "numeric" })}`;
-  return <div className="calendarView"><div className="calendarToolbar"><div><button onClick={() => setAnchor(new Date())}>Šiandien</button><button aria-label="Ankstesnis laikotarpis" onClick={() => move(-1)}>‹</button><button aria-label="Kitas laikotarpis" onClick={() => move(1)}>›</button><h2>{title}</h2></div><div className="modeTabs">{(["day", "workweek", "week", "month"] as Mode[]).map((item) => <button className={mode === item ? "active" : ""} aria-pressed={mode===item} onClick={() => setMode(item)} key={item}>{({ day: "Diena", workweek: "Darbo savaitė", week: "Savaitė", month: "Mėnuo" })[item]}</button>)}</div></div>{loading ? <div className="loading"><i/><i/><i/></div> : mode === "month" ? <Month days={monthDays} anchor={anchor} events={events} tasks={tasks} onCreate={onCreate}/> : <TimeGrid days={days} events={events} tasks={tasks} onDrop={onDrop} onCreate={onCreate}/>}</div>;
+  return <div className="calendarView"><div className="calendarToolbar"><div><button onClick={() => setAnchor(new Date())}>Šiandien</button><button aria-label="Ankstesnis laikotarpis" onClick={() => move(-1)}>‹</button><button aria-label="Kitas laikotarpis" onClick={() => move(1)}>›</button><h2>{title}</h2></div><div className="modeTabs">{(["day", "workweek", "week", "month"] as Mode[]).map((item) => <button className={mode === item ? "active" : ""} aria-pressed={mode===item} onClick={() => setMode(item)} key={item}>{({ day: "Diena", workweek: "Darbo savaitė", week: "Savaitė", month: "Mėnuo" })[item]}</button>)}</div></div>{loading ? <div className="loading"><i/><i/><i/></div> : mode === "month" ? <Month days={monthDays} anchor={anchor} events={events} tasks={tasks} onCreate={onCreate}/> : <TimeGrid days={days} events={events} tasks={tasks} onDrop={onDrop} onCreate={onCreate} dragHint={dragHint}/>}</div>;
 }
-function TimeGrid({ days, events, tasks, onDrop, onCreate }: { days: Date[]; events: CalEvent[]; tasks: Task[]; onDrop: (e: DragEvent<HTMLDivElement>, d: Date) => void; onCreate: (d: Date) => void }) {
+function TimeGrid({ days, events, tasks, onDrop, onCreate, dragHint }: { days: Date[]; events: CalEvent[]; tasks: Task[]; onDrop: (e: DragEvent<HTMLDivElement>, d: Date) => void; onCreate: (d: Date) => void; dragHint: {day: string; minute: number; height: number} | null }) {
   const grid = useRef<HTMLDivElement>(null);
   const [now,setNow] = useState<Date | null>(null);
   const actions = useContext(EventActions);
@@ -380,6 +381,7 @@ function TimeGrid({ days, events, tasks, onDrop, onCreate }: { days: Date[]; eve
         return item.event ? <EventBlock event={item.event} segment={segment} key={segment.key}/> : <TaskBlock task={item.task!} segment={segment} key={segment.key}/>;
       })}
       {now && sameDay(day,now) && <div className="currentTime" style={{top:minuteOfDay(now)}} aria-label={`Dabar ${now.toLocaleTimeString("lt-LT",{hour:"2-digit",minute:"2-digit"})}`}><i/><span>{now.toLocaleTimeString("lt-LT",{hour:"2-digit",minute:"2-digit"})}</span></div>}
+      {dragHint && dragHint.day === localInput(day).slice(0,10) && <div className="dropHint" style={{top:dragHint.minute,height:Math.max(dragHint.height,30)}} aria-hidden="true"/>}
     </div>)}
   </div>;
 }
@@ -395,10 +397,11 @@ function TaskBlock({ task, segment }: { task: Task; segment:DaySegment }) {
       onClick={(e) => {if (e.detail===0 || !moved.current) actions.edit(task);}}
       onKeyDown={(e) => {if(!segment.gestureSafe||!e.shiftKey)return;const steps:Record<string,number>={ArrowDown:15,ArrowUp:-15,ArrowRight:1440,ArrowLeft:-1440};const step=steps[e.key];if(!step)return;e.preventDefault();const ns=new Date(start.getTime()+step*60000);setSaving(true);void actions.move(task,ns).finally(()=>setSaving(false));}}
       onPointerDown={(e) => {moved.current=false;if (!segment.gestureSafe || e.button !== 0) return;moveGesture.current={x:e.clientX,y:e.clientY,grab:e.clientY-e.currentTarget.closest(".eventBlock")!.getBoundingClientRect().top};moved.current=false;e.currentTarget.setPointerCapture(e.pointerId);}}
-      onPointerMove={(e) => {const g=moveGesture.current;if (!g) return;const dx=e.clientX-g.x,dy=e.clientY-g.y;if (moved.current || Math.hypot(dx,dy)>5) {moved.current=true;setOffset({x:dx,y:dy});}}}
-      onPointerCancel={() => {moveGesture.current=null;setOffset(null);}}
+      onPointerMove={(e) => {const g=moveGesture.current;if (!g) return;const dx=e.clientX-g.x,dy=e.clientY-g.y;if (moved.current || Math.hypot(dx,dy)>5) {moved.current=true;setOffset({x:dx,y:dy});const hintLane=document.elementsFromPoint(e.clientX,e.clientY).find(el=>el instanceof HTMLElement && el.classList.contains("dayLane")) as HTMLElement|undefined;if(hintLane?.dataset.day){const laneTop=hintLane.getBoundingClientRect().top;actions.setDragHint({day:hintLane.dataset.day,minute:e.clientY-laneTop-g.grab,height:task.duration_minutes});}else{actions.setDragHint(null);}}}}
+      onPointerCancel={() => {moveGesture.current=null;setOffset(null);actions.setDragHint(null);}}
       onPointerUp={(e) => {
         if (!moveGesture.current) return;const grab=moveGesture.current.grab;moveGesture.current=null;e.currentTarget.releasePointerCapture(e.pointerId);
+        actions.setDragHint(null);
         if (!moved.current) return;
         const beneath=document.elementsFromPoint(e.clientX,e.clientY);
         const lane=beneath.find((element) => element instanceof HTMLElement && element.classList.contains("dayLane")) as HTMLElement | undefined;
