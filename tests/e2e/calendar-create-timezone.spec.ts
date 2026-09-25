@@ -44,6 +44,20 @@ test("new event stays disabled when the explicit calendar selection is empty",as
   await expect(dialog.getByRole("button",{name:"Sukurti įvykį"})).toBeDisabled();
 });
 
+test("expired calendar session is shown in settings instead of crashing the page",async({page})=>{
+  const pageErrors:string[]=[];page.on("pageerror",error=>pageErrors.push(error.message));
+  await page.route("**/api/google/status",route=>route.fulfill({json:{connected:true,configured:true,account:"google@example.test",tasksConnected:false,tasksStatus:"permission_required"}}));
+  await page.route("**/api/microsoft/status",route=>route.fulfill({json:{connected:false,configured:true,account:null}}));
+  await page.route("**/api/google/calendars",route=>route.fulfill({status:401,json:{error:"Google sesija baigėsi. Atjunk ir vėl prijunk paskyrą."}}));
+  await page.route("**/api/google/events**",route=>route.fulfill({status:401,json:{error:"Google sesija baigėsi."}}));
+  await page.route("**/api/microsoft/events**",route=>route.fulfill({json:{items:[]}}));
+  await page.goto("/");await page.getByRole("button",{name:"Nustatymai",exact:true}).click();
+  const settings=page.getByRole("dialog",{name:"Nustatymai"});
+  await expect(settings.getByRole("alert")).toContainText("Google sesija baigėsi. Atjunk ir vėl prijunk paskyrą.");
+  await expect(settings).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
 test("event create keeps one operation ID when fields change after an uncertain response",async({page})=>{
   const submissions:Record<string,unknown>[]=[];
   await page.route("**/api/google/status",route=>route.fulfill({json:{connected:true,configured:true,account:"google@example.test",tasksConnected:false,tasksStatus:"permission_required"}}));

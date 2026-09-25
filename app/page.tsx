@@ -678,11 +678,30 @@ function TaskEditor({ task, outlook, taskLists, onClose, onSave, onDelete, onMov
 
 type CalInfo={id:string;name:string;color?:string;primary?:boolean;isDefault?:boolean;writable:boolean};
 type CalList={items:CalInfo[];enabled:string[]|null;version:string};
+function isCalList(value:unknown):value is CalList {
+  if(!value||typeof value!=="object"||Array.isArray(value))return false;
+  const list=value as Partial<CalList>;
+  return Array.isArray(list.items)&&(list.enabled===null||Array.isArray(list.enabled))&&typeof list.version==="string";
+}
 function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boolean;onSaved:()=>void}) {
   const [gCals,setGCals]=useState<CalList|null>(null),[mCals,setMCals]=useState<CalList|null>(null),[saving,setSaving]=useState(false),[error,setError]=useState("");
   useEffect(()=>{
-    if(google)fetch("/api/google/calendars").then(r=>r.json()).then(setGCals).catch(()=>{});
-    if(outlook)fetch("/api/microsoft/calendars").then(r=>r.json()).then(setMCals).catch(()=>{});
+    let active=true;setError("");
+    async function read(provider:"google"|"microsoft",label:string,setList:(value:CalList)=>void){
+      try{
+        const value=await responseJson<unknown>(await fetch(`/api/${provider}/calendars`));
+        if(!isCalList(value))throw new Error("Serveris grąžino neteisingą kalendorių sąrašą.");
+        if(active)setList(value);
+      }catch(cause){
+        if(!active)return;
+        setList({items:[],enabled:[],version:""});
+        const message=cause instanceof Error?cause.message:"Kalendorių įkelti nepavyko.";
+        setError(current=>current||`${label}: ${message}`);
+      }
+    }
+    if(google)void read("google","Google",setGCals);
+    if(outlook)void read("microsoft","Microsoft",setMCals);
+    return()=>{active=false;};
   },[google,outlook]);
   function isEnabled(list:CalList,id:string){return list.enabled===null ? true : list.enabled.includes(id);}
   async function toggle(provider:"google"|"microsoft",list:CalList,setList:(v:CalList)=>void,cal:CalInfo,checked:boolean){
@@ -702,7 +721,7 @@ function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boole
     if(!list.items.length) return null;
     return <><p className="calProviderLabel">{label}</p><ul className="calendarList">{list.items.map(cal=><li key={cal.id}><label><input type="checkbox" checked={isEnabled(list,cal.id)} disabled={saving} onChange={e=>void toggle(provider,list,setList,cal,e.target.checked)}/>{cal.color&&<span className="calDot" style={{background:cal.color}}/>}<span className="calName">{cal.name}</span>{(cal.primary||cal.isDefault)&&<span className="calBadge">pagrindinis</span>}</label></li>)}</ul></>;
   }
-  return <div className="calendarSelector">{error&&<p className="formError">{error}</p>}{renderList("google",gCals,setGCals,"Google")}{renderList("microsoft",mCals,setMCals,"Microsoft / Outlook")}</div>;
+  return <div className="calendarSelector">{error&&<p className="formError" role="alert">{error}</p>}{google&&renderList("google",gCals,setGCals,"Google")}{outlook&&renderList("microsoft",mCals,setMCals,"Microsoft / Outlook")}</div>;
 }
 function rsvpIcon(status:string) { return status==="accepted"?"✓":status==="declined"?"✗":status==="tentative"?"?":"·"; }
 function rsvpLabel(status:CalendarResponseStatus) {return status==="accepted"?"Dalyvausi":status==="declined"?"Nedalyvausi":status==="tentative"?"Galbūt dalyvausi":"Dar neatsakyta";}

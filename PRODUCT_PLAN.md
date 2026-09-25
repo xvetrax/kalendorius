@@ -491,3 +491,9 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - „Šį ir būsimus“ neįjungta: abu tiekėjai tam neturi vienos saugios operacijos, o dviejų serijų skaidymas be atskiros atkuriamos eigos gali prarasti exceptions, cancellations ir dalyvių atsakymus.
 - Patikra: `git diff --check`, `npm run typecheck`, 264/264 `npm test`, `npm run build` ir 37/37 `npm run test:e2e` scenarijai praėjo. Imitacinė API patvirtina identišką pakartojimą, prarasto atsakymo atkūrimą, pakeisto payload atmetimą, provider formos Graph recurrence atsakymą, abiejų tiekėjų recurrence payload, master versijos konfliktą ir vieno egzemplioriaus atskyrimą nuo visos serijos.
 - Riba: tikros Google ir Microsoft paskyros šiame žingsnyje nekeistos; gyva Graph priėmimo patikra lieka paskutinis D5 punktas.
+
+### 2026-09-25 — pasibaigusios kalendoriaus sesijos rodymas
+
+- Gyvas Google kalendorių katalogas grąžino `401`, tačiau nustatymų kalendorių pasirinkimo komponentas klaidos objektą priėmė kaip sėkmingą sąrašą ir nulūžo skaitydamas neegzistuojantį `items`. Komponentas dabar tikrina HTTP būseną bei atsakymo formą ir vietoje runtime klaidos rodo tiekėjo sesijos pranešimą; neprijungto tiekėjo krovimo būsena neberodoma.
+- Regresinis naršyklės scenarijus atidaro nustatymus su Google `401`, patvirtina matomą pakartotinio prisijungimo pranešimą ir tikrina, kad nebūtų `pageerror`.
+- Patikra: `git diff --check`, `npm run typecheck`, 264/264 `npm test`, `npm run build` ir 38/38 `npm run test:e2e` scenarijai praėjo.
