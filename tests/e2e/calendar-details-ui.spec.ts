@@ -39,14 +39,15 @@ test("custom Google reminder survives an unrelated edit",async({page})=>{
 
 test("Outlook details use provider controls without rewriting unchanged Teams metadata",async({page})=>{
   await page.clock.setFixedTime(new Date("2026-09-23T09:00:00Z"));
-  const event={id:"outlook-1",calendarId:"primary",provider:"outlook",connectionId:"connection-1",key:JSON.stringify(["outlook","connection-1","primary","outlook-1"]),version:'W/"v1"',summary:"Teams susitikimas",description:"<p>Teams susitikimo metaduomenys</p>",location:"Teams",hangoutLink:"https://teams.example.test/join",editable:true,readOnlyReason:"",attendeeCount:0,allDay:false,recurring:false,canRespond:false,showAs:"busy",visibility:"default",reminder:{mode:"minutes",minutes:15},start:{dateTime:"2026-09-23T10:00:00Z"},end:{dateTime:"2026-09-23T11:00:00Z"}};
+  const event={id:"outlook-1",calendarId:"primary",provider:"outlook",connectionId:"connection-1",key:JSON.stringify(["outlook","connection-1","primary","outlook-1"]),version:'W/"v1"',summary:"Teams susitikimas",description:"<p>Teams susitikimo metaduomenys</p>",location:"Teams",hangoutLink:"https://teams.example.test/join",editable:true,readOnlyReason:"",attendeeCount:0,allDay:false,recurring:false,canRespond:false,showAs:"busy",visibility:"default",reminder:{mode:"minutes",minutes:15},timeZone:"UTC",start:{dateTime:"2026-09-23T10:00:00Z"},end:{dateTime:"2026-09-23T11:00:00Z"}};
   const submissions:Record<string,unknown>[]=[];
   await page.route("**/api/google/events**",route=>route.fulfill({json:{items:[]}}));
   await page.route("**/api/microsoft/events**",async route=>{
     if(route.request().method()==="PATCH"){
       const submitted=route.request().postDataJSON() as Record<string,unknown>;submissions.push(submitted);
       if("showAs" in submitted)event.showAs=String(submitted.showAs);if("visibility" in submitted)event.visibility=String(submitted.visibility);if("reminder" in submitted)event.reminder=submitted.reminder as typeof event.reminder;
-      if("description" in submitted)event.description=String(submitted.description);if("location" in submitted)event.location=String(submitted.location);event.version=`W/"v${submissions.length+1}"`;
+      if("description" in submitted)event.description=String(submitted.description);if("location" in submitted)event.location=String(submitted.location);if("timeZone" in submitted)event.timeZone=String(submitted.timeZone);
+      event.start={dateTime:String(submitted.start)};event.end={dateTime:String(submitted.end)};event.version=`W/"v${submissions.length+1}"`;
       await route.fulfill({json:event});
     }else await route.fulfill({json:{items:[event]}});
   });
@@ -55,14 +56,15 @@ test("Outlook details use provider controls without rewriting unchanged Teams me
   await page.getByLabel("Laisvas / užimtas").selectOption("oof");
   await page.getByLabel("Matomumas").selectOption("personal");
   await page.getByLabel("Priminimas").selectOption("minutes:60");
+  await page.getByLabel("Laiko zona").selectOption("Europe/Vilnius");
   await page.getByRole("button",{name:"Išsaugoti įvykį"}).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  expect(submissions[0]).toMatchObject({id:"outlook-1",calendarId:"primary",connectionId:"connection-1",version:'W/"v1"',showAs:"oof",visibility:"personal",reminder:{mode:"minutes",minutes:60}});
+  expect(submissions[0]).toMatchObject({id:"outlook-1",calendarId:"primary",connectionId:"connection-1",version:'W/"v1"',start:"2026-09-23T07:00:00.000Z",end:"2026-09-23T08:00:00.000Z",timeZone:"Europe/Vilnius",showAs:"oof",visibility:"personal",reminder:{mode:"minutes",minutes:60}});
   expect(submissions[0]).not.toHaveProperty("summary");expect(submissions[0]).not.toHaveProperty("description");expect(submissions[0]).not.toHaveProperty("location");
   await page.getByRole("button",{name:"Redaguoti įvykį: Teams susitikimas"}).click();
   await page.getByLabel("Aprašymas").fill("");await page.getByLabel("Vieta").fill("");
   await page.getByRole("button",{name:"Išsaugoti įvykį"}).click();await expect(page.getByRole("dialog")).toHaveCount(0);
-  expect(submissions[1]).toMatchObject({version:'W/"v2"',description:"",location:""});expect(submissions[1]).not.toHaveProperty("summary");
+  expect(submissions[1]).toMatchObject({version:'W/"v2"',start:"2026-09-23T07:00:00.000Z",end:"2026-09-23T08:00:00.000Z",description:"",location:""});expect(submissions[1]).not.toHaveProperty("summary");expect(submissions[1]).not.toHaveProperty("timeZone");
 });
 
 test("all-day editor sends inclusive UI dates as an exclusive provider range",async({page})=>{

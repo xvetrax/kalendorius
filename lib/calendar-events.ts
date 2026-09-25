@@ -1,3 +1,5 @@
+import {canonicalCalendarTimeZone,isCalendarTimeZone,zonedProviderDateTime} from "./calendar-time-zone.ts";
+
 export type CalendarProvider = "google" | "outlook";
 export type CalendarResponseStatus = "needsAction" | "accepted" | "tentative" | "declined";
 export type CalendarVisibility = "default" | "public" | "private" | "personal" | "confidential";
@@ -10,7 +12,7 @@ export type CalendarEvent = {
   htmlLink?:string; hangoutLink?:string; editable:boolean; readOnlyReason:string;
   attendeeCount:number; attendees?:{email:string;name?:string;self?:boolean;responseStatus:string}[]; recurring:boolean; allDay:boolean;
   canRespond:boolean; responseStatus?:CalendarResponseStatus;
-  showAs:"free"|"tentative"|"busy"|"oof"|"workingElsewhere"|"unknown"; visibility:CalendarVisibility; reminder:CalendarReminder;
+  showAs:"free"|"tentative"|"busy"|"oof"|"workingElsewhere"|"unknown"; visibility:CalendarVisibility; reminder:CalendarReminder; timeZone?:string;
 };
 export class CalendarError extends Error {
   status:number;
@@ -59,6 +61,8 @@ export function calendarEventKey(provider:CalendarProvider,connectionId:string,c
 export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:string,calendarId="primary",calendarName?:string,calendarColor?:string):CalendarEvent {
   const google=provider === "google";
   const allDay=google ? Boolean(raw.start?.date) : Boolean(raw.isAllDay);
+  const sourceTimeZone=google?raw.start?.timeZone:raw.originalStartTimeZone;
+  const timeZone=!allDay?(isCalendarTimeZone(sourceTimeZone)?sourceTimeZone:isCalendarTimeZone(raw.start?.timeZone)?raw.start.timeZone:"UTC"):undefined;
   const recurringMaster=google ? Boolean(raw.recurrence && !raw.recurringEventId) : raw.type === "seriesMaster";
   const recurringInstance=google ? Boolean(raw.recurringEventId) : Boolean(raw.seriesMasterId || (raw.type === "occurrence" || raw.type === "exception"));
   const recurring=recurringMaster || recurringInstance;
@@ -93,7 +97,7 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
     htmlLink:google ? raw.htmlLink : raw.webLink,hangoutLink:google ? raw.hangoutLink : raw.onlineMeeting?.joinUrl,
     editable:!readOnlyReason,readOnlyReason,attendeeCount:rawAttendees.length,
     ...(attendees ? {attendees} : {}),
-    recurring,allDay,canRespond,...(responseStatus ? {responseStatus} : {}),showAs,visibility,reminder};
+    recurring,allDay,canRespond,...(responseStatus ? {responseStatus} : {}),showAs,visibility,reminder,...(timeZone?{timeZone}:{})};
 }
 export function createCalendarService(provider:CalendarProvider,gateway:Gateway) {
   const google=provider === "google";
@@ -146,12 +150,18 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
   }
   async function update(input:Record<string,unknown>) {
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new CalendarError("Neteisingi įvykio duomenys.");
-    const allowed=new Set(["id","calendarId","connectionId","version","start","end","allDay","summary","description","location","attendees","confirmAttendees","showAs","visibility","reminder"]);
+    const allowed=new Set(["id","calendarId","connectionId","version","start","end","allDay","timeZone","summary","description","location","attendees","confirmAttendees","showAs","visibility","reminder"]);
     if (Object.keys(input).some(key=>!allowed.has(key))) throw new CalendarError("Pateikti nepalaikomi įvykio laukai.");
     const eventId=identifier(input.id,"įvykio ID"),calendarId=identifier(input.calendarId,"kalendoriaus ID");
     if (typeof input.version !== "string" || !input.version || typeof input.connectionId !== "string") throw new CalendarError("Trūksta įvykio ID, paskyros arba versijos.");
     if(input.allDay!==undefined&&typeof input.allDay!=="boolean")throw new CalendarError("Neteisingas visos dienos įvykio požymis.");
     const allDayInput=input.allDay===true,dates=allDayInput?eventDates(input.start,input.end):undefined,times=allDayInput?undefined:eventTimes(input.start,input.end);
+    if(allDayInput&&input.timeZone!==undefined)throw new CalendarError("Visos dienos įvykiui laiko zona nekeičiama.");
+    let requestedTimeZone:string|undefined;
+    if(input.timeZone!==undefined){
+      if(!isCalendarTimeZone(input.timeZone))throw new CalendarError("Pasirink galiojančią IANA laiko zoną.");
+      requestedTimeZone=input.timeZone;
+    }
     if (input.summary !== undefined && (typeof input.summary !== "string" || !input.summary.trim() || input.summary.length>1024)) throw new CalendarError("Įvesk pavadinimą iki 1024 simbolių.");
     if (input.attendees !== undefined) {
       if (!Array.isArray(input.attendees)) throw new CalendarError("Neteisingas dalyvių sąrašas.");
@@ -183,6 +193,17 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       if (!current.editable) throw new CalendarError(current.readOnlyReason,403);
       if (current.version !== input.version) throw new CalendarError("Įvykis jau pakeistas kitur. Atnaujink kalendorių ir peržiūrėk laiką.",409);
       if(current.allDay!==allDayInput)throw new CalendarError("Laiko ir visos dienos įvykio konvertavimas dar nepalaikomas.",409);
+      let timeZone=current.allDay?undefined:requestedTimeZone||current.timeZone||"UTC";
+      const rawEndTimeZone=google?raw.end?.timeZone:raw.originalEndTimeZone;
+      if(!google&&requestedTimeZone&&requestedTimeZone!==current.timeZone&&requestedTimeZone!=="UTC"){
+        const supported=await gateway.request("/me/outlook/supportedTimeZones(TimeZoneStandard=microsoft.graph.timeZoneStandard'Iana')");connected(connectionId);
+        if(!Array.isArray(supported?.value))throw new CalendarError("Microsoft negrąžino palaikomų laiko zonų.",502);
+        const requestedCanonical=canonicalCalendarTimeZone(requestedTimeZone);
+        const matched=supported.value.find((item:any)=>typeof item?.alias==="string"&&canonicalCalendarTimeZone(item.alias)===requestedCanonical);
+        if(!matched)throw new CalendarError("Microsoft pašto dėžutė nepalaiko pasirinktos laiko zonos.");
+        timeZone=matched.alias;
+      }
+      const endTimeZone=current.allDay?undefined:requestedTimeZone?timeZone:(isCalendarTimeZone(rawEndTimeZone)?rawEndTimeZone:timeZone);
       if(current.recurring&&input.visibility!==undefined&&input.visibility!==current.visibility)throw new CalendarError("Pasikartojančio įvykio matomumą keisk originaliame kalendoriuje.",409);
       const curStart=current.start.dateTime ? new Date(current.start.dateTime).getTime() : NaN;
       const curEnd=current.end.dateTime ? new Date(current.end.dateTime).getTime() : NaN;
@@ -203,7 +224,7 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
         ...(reminder?reminder.mode==="none"?{isReminderOn:false}:{isReminderOn:true,reminderMinutesBeforeStart:reminder.minutes}:{}),
       };
       const timePatch=current.allDay ? (google ? {start:{date:dates!.start},end:{date:dates!.end}} : {isAllDay:true,start:{dateTime:`${dates!.start}T00:00:00`,timeZone:"UTC"},end:{dateTime:`${dates!.end}T00:00:00`,timeZone:"UTC"}})
-        : (google ? {start:{dateTime:times!.start,timeZone:raw.start?.timeZone || "UTC"},end:{dateTime:times!.end,timeZone:raw.end?.timeZone || "UTC"}} : {start:{dateTime:times!.start.replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:times!.end.replace(/Z$/,""),timeZone:"UTC"}});
+        : (google ? {start:{dateTime:times!.start,timeZone:timeZone!},end:{dateTime:times!.end,timeZone:endTimeZone!}} : {start:{dateTime:zonedProviderDateTime(times!.start,timeZone!),timeZone:timeZone!},end:{dateTime:zonedProviderDateTime(times!.end,endTimeZone!),timeZone:endTimeZone!}});
       const patch=google ? {...timePatch,...(input.summary !== undefined ? {summary:input.summary} : {}),...locPatch,...descPatch,...attendeePatch,...propertyPatch} : {...timePatch,...(input.summary !== undefined ? {subject:input.summary} : {}),...locPatch,...descPatch,...attendeePatch,...propertyPatch};
       const updated=await gateway.request(base+(google ? "?sendUpdates=all&conferenceDataVersion=1" : ""),{method:"PATCH",headers:{...headers,...((google || raw["@odata.etag"]) ? {"If-Match":current.version} : {})},body:JSON.stringify(patch)});
       connected(connectionId);

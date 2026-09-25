@@ -5,6 +5,7 @@ import {mkdtempSync,rmSync} from "node:fs";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import {pathToFileURL} from "node:url";
+import {zonedInstant,zonedLocalInput} from "../lib/calendar-time-zone.ts";
 
 // Exercise actual route handlers, provider adapters, encrypted settings and
 // SQLite without listening on a port or making any real network request.
@@ -53,6 +54,12 @@ for(const provider of ["google","microsoft"]){
     const body={id:event.id,calendarId:event.calendarId,version:event.version,connectionId:event.connectionId,allDay:true,start:shiftDate(event.start.date,1),end:shiftDate(event.end.date,1)};
     const response=await patch(body);assert.equal(response.status,200);const updated=await response.json();assert.equal(updated.start.date,body.start);assert.equal(updated.end.date,body.end);assert.equal(updated.allDay,true);
     const reloaded=(await (await route.GET(new Request(url))).json()).items.find(item=>item.key===event.key);assert.equal(reloaded.version,updated.version);assert.equal(reloaded.start.date,body.start);assert.equal(reloaded.end.date,body.end);
+  });
+  test(`${provider} actual routes: a timezone change preserves wall time and reloads`,async()=>{
+    const event=(await (await route.GET(new Request(url))).json()).items.find(item=>item.editable&&!item.allDay&&!item.attendeeCount);assert.ok(event);assert.ok(event.timeZone);
+    const target=event.timeZone==="Europe/London"?"Europe/Vilnius":"Europe/London",start=zonedInstant(zonedLocalInput(event.start.dateTime,event.timeZone),target),end=zonedInstant(zonedLocalInput(event.end.dateTime,event.timeZone),target);
+    const response=await patch({...inputFor(event),start,end,timeZone:target});assert.equal(response.status,200);const updated=await response.json();assert.equal(updated.timeZone,target);assert.equal(updated.start.dateTime,start);assert.equal(updated.end.dateTime,end);
+    const reloaded=(await (await route.GET(new Request(url))).json()).items.find(item=>item.key===event.key);assert.equal(reloaded.timeZone,target);assert.equal(reloaded.start.dateTime,start);assert.equal(reloaded.end.dateTime,end);
   });
 }
 for(const provider of ["google","microsoft"])test(`${provider} actual route submits an account-bound RSVP and reloads its status`,async()=>{

@@ -1,10 +1,11 @@
 // Explicit Node preload, used only by tests/calendar-smoke.mjs. There is no
 // production route or application flag that can enable this fixture.
+import {zonedInstant} from "../../lib/calendar-time-zone.ts";
 if(process.env.CALENDAR_TEST_FIXTURE!=="isolated")throw new Error("Test-only preload");
 const monday=new Date();monday.setDate(monday.getDate()-((monday.getDay()+6)%7));monday.setHours(0,0,0,0);
 const date=(day,hour)=>{const d=new Date(monday);d.setDate(d.getDate()+day);d.setHours(hour);return d.toISOString();};
 const google=new Map([["google-personal",{id:"google-personal",summary:"Google bandymas",etag:'"g1"',organizer:{self:true},start:{dateTime:date(0,9),timeZone:"Europe/Vilnius"},end:{dateTime:date(0,10),timeZone:"Europe/Vilnius"},attendees:[],description:"Nepakeisti aprašymo",hangoutLink:"https://meet.google.com/test",htmlLink:"https://calendar.google.com/",transparency:"opaque",visibility:"default",reminders:{useDefault:true}}]]);
-const msEvent=(id,subject,day,hour,attendees=[])=>({id,subject,"@odata.etag":'W/"m1"',isOrganizer:true,type:"singleInstance",start:{dateTime:date(day,hour).replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:date(day,hour+1).replace(/Z$/,""),timeZone:"UTC"},attendees,body:{contentType:"html",content:"<p>Išsaugoti Teams aprašymą</p>"},showAs:"busy",sensitivity:"normal",isReminderOn:true,reminderMinutesBeforeStart:15,webLink:"https://outlook.office.com/calendar/"});
+const msEvent=(id,subject,day,hour,attendees=[])=>({id,subject,"@odata.etag":'W/"m1"',isOrganizer:true,type:"singleInstance",start:{dateTime:date(day,hour).replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:date(day,hour+1).replace(/Z$/,""),timeZone:"UTC"},originalStartTimeZone:"Europe/Vilnius",originalEndTimeZone:"Europe/Vilnius",attendees,body:{contentType:"html",content:"<p>Išsaugoti Teams aprašymą</p>"},showAs:"busy",sensitivity:"normal",isReminderOn:true,reminderMinutesBeforeStart:15,webLink:"https://outlook.office.com/calendar/"});
 const outlook=new Map([["outlook-personal",msEvent("outlook-personal","Outlook bandymas",1,10)],["outlook-meeting",msEvent("outlook-meeting","Susitikimo bandymas",2,14,[{emailAddress:{address:"synthetic@example.test"}}])],["outlook-readonly",{...msEvent("outlook-readonly","Svetimas kvietimas",3,11),isOrganizer:false}]]);
 const dayKey=(day)=>{const d=new Date(monday);d.setDate(d.getDate()+day);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;};
 google.set("google-all-day",{...structuredClone(google.get("google-personal")),id:"google-all-day",summary:"Visos dienos bandymas",start:{date:dayKey(0)},end:{date:dayKey(2)}});
@@ -27,6 +28,7 @@ globalThis.fetch=async(input,init={})=>{
     {id:"opaque-default",name:"Pagrindinis",color:"auto",isDefaultCalendar:true,canEdit:true},
     {id:"other/calendar",name:"Kitas",color:"lightBlue",isDefaultCalendar:false,canEdit:true},
   ]});
+  if(url.pathname.startsWith("/v1.0/me/outlook/supportedTimeZones"))return Response.json({value:[{alias:"Europe/Vilnius",displayName:"Europe/Vilnius"},{alias:"Europe/London",displayName:"Europe/London"}]});
   if(url.pathname==="/v1.0/me/calendar")return Response.json({id:"opaque-default"});
   const isGoogle=url.hostname==="www.googleapis.com";
   const match=isGoogle ? url.pathname.match(/^\/calendar\/v3\/calendars\/([^/]+)\/events(?:\/(.+))?$/)
@@ -52,7 +54,9 @@ globalThis.fetch=async(input,init={})=>{
       const response=body.attendees?.[0],self=event.attendees?.find(attendee=>attendee.self);if(!response||!self||response.email!==self.email)throw new Error("Fixture caught unsafe RSVP update");self.responseStatus=response.responseStatus;
     }else{
       const supported=isGoogle?["start","end","summary","subject","transparency","visibility","reminders"]:["start","end","summary","subject","showAs","sensitivity","isReminderOn","reminderMinutesBeforeStart","isAllDay"];
-      if(Object.keys(body).some(k=>!supported.includes(k)))throw new Error("Fixture caught destructive metadata update");Object.assign(event,body);
+      if(Object.keys(body).some(k=>!supported.includes(k)))throw new Error("Fixture caught destructive metadata update");
+      if(!isGoogle&&!event.isAllDay&&body.start?.timeZone)Object.assign(event,body,{start:{dateTime:zonedInstant(body.start.dateTime.slice(0,16),body.start.timeZone).replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:zonedInstant(body.end.dateTime.slice(0,16),body.end.timeZone).replace(/Z$/,""),timeZone:"UTC"},originalStartTimeZone:body.start.timeZone,originalEndTimeZone:body.end.timeZone});
+      else Object.assign(event,body);
     }
     version++;event[isGoogle?"etag":"@odata.etag"]=`"v${version}"`;
   } else if(method!=="GET")return Response.json({error:"Unsupported test operation"},{status:405});

@@ -1,13 +1,19 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {calendarEventKey,createCalendarService,eventDates,normalizeEvent} from "../lib/calendar-events.ts";
+import {zonedInstant} from "../lib/calendar-time-zone.ts";
 const from="2026-10-25T10:00:00+02:00",to="2026-10-25T11:00:00+02:00";
 function fixture(provider) {
-  const raw=provider==="google" ? {id:"event/a",summary:"Įvykis",etag:'"v1"',organizer:{self:true},start:{dateTime:"2026-10-24T08:00:00Z",timeZone:"Europe/Vilnius"},end:{dateTime:"2026-10-24T09:00:00Z",timeZone:"Europe/Vilnius"},attendees:[],description:"Keep description",conferenceData:{keep:true},transparency:"opaque",visibility:"default",reminders:{useDefault:true}} : {id:"event/a",subject:"Įvykis","@odata.etag":'W/"v1"',isOrganizer:true,type:"singleInstance",start:{dateTime:"2026-10-24T08:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00",timeZone:"UTC"},attendees:[],body:{content:"Keep Teams blob",contentType:"html"},isReminderOn:true,reminderMinutesBeforeStart:15,showAs:"busy",sensitivity:"normal"};
-  const calls=[],state={connection:"account-a",rejectWrite:false};
+  const raw=provider==="google" ? {id:"event/a",summary:"Įvykis",etag:'"v1"',organizer:{self:true},start:{dateTime:"2026-10-24T08:00:00Z",timeZone:"Europe/Vilnius"},end:{dateTime:"2026-10-24T09:00:00Z",timeZone:"Europe/Vilnius"},attendees:[],description:"Keep description",conferenceData:{keep:true},transparency:"opaque",visibility:"default",reminders:{useDefault:true}} : {id:"event/a",subject:"Įvykis","@odata.etag":'W/"v1"',isOrganizer:true,type:"singleInstance",start:{dateTime:"2026-10-24T08:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00",timeZone:"UTC"},originalStartTimeZone:"UTC",originalEndTimeZone:"UTC",attendees:[],body:{content:"Keep Teams blob",contentType:"html"},isReminderOn:true,reminderMinutesBeforeStart:15,showAs:"busy",sensitivity:"normal"};
+  const calls=[],state={connection:"account-a",rejectWrite:false,supportedTimeZones:["Europe/Vilnius","Europe/London"]};
   const gateway={connection:()=>state.connection,async request(path,init={}) {
     calls.push({path,...init,body:init.body ? JSON.parse(init.body) : undefined});
-    if(init.method==="PATCH") {if(state.rejectWrite)throw Object.assign(new Error("Conflict"),{status:412});Object.assign(raw,JSON.parse(init.body));if(provider==="google")raw.etag='"v2"';else raw["@odata.etag"]='W/"v2"';}
+    if(path.startsWith("/me/outlook/supportedTimeZones"))return {value:state.supportedTimeZones.map(alias=>({alias}))};
+    if(init.method==="PATCH") {if(state.rejectWrite)throw Object.assign(new Error("Conflict"),{status:412});const body=JSON.parse(init.body);
+      if(provider==="outlook"&&!raw.isAllDay&&body.start?.timeZone){
+        Object.assign(raw,body,{start:{dateTime:zonedInstant(body.start.dateTime.slice(0,16),body.start.timeZone).replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:zonedInstant(body.end.dateTime.slice(0,16),body.end.timeZone).replace(/Z$/,""),timeZone:"UTC"},originalStartTimeZone:body.start.timeZone,originalEndTimeZone:body.end.timeZone});
+      }else Object.assign(raw,body);
+      if(provider==="google")raw.etag='"v2"';else raw["@odata.etag"]='W/"v2"';}
     return structuredClone(raw);
   }};
   const service=createCalendarService(provider,gateway);
@@ -51,7 +57,7 @@ for(const provider of ["google","outlook"]) {
   });
   test(`${provider}: invalid properties and arbitrary fields are rejected before provider access`,async()=>{
     const {service,input,calls}=fixture(provider);
-    for(const extra of [{patch:{attendees:[]}},{showAs:"invalid"},{visibility:"secret"},{reminder:{mode:"minutes",minutes:-1}},{reminder:{mode:"minutes",minutes:40321}},{reminder:{mode:"custom"}},{reminder:{mode:"none",minutes:5}},{recurrence:[]},{start:"2026-10-25T10:00"},{end:from},{summary:" "},{attendees:"not-an-array"},{attendees:[{email:"bad"}]}])await assert.rejects(service.update({...input,...extra}),e=>e.status===400);
+    for(const extra of [{patch:{attendees:[]}},{showAs:"invalid"},{visibility:"secret"},{timeZone:"Not/AZone"},{timeZone:"+01:00"},{reminder:{mode:"minutes",minutes:-1}},{reminder:{mode:"minutes",minutes:40321}},{reminder:{mode:"custom"}},{reminder:{mode:"none",minutes:5}},{recurrence:[]},{start:"2026-10-25T10:00"},{end:from},{summary:" "},{attendees:"not-an-array"},{attendees:[{email:"bad"}]}])await assert.rejects(service.update({...input,...extra}),e=>e.status===400);
     if(provider==="outlook")await assert.rejects(service.update({...input,reminder:{mode:"default"}}),e=>e.status===400);
     assert.equal(calls.length,0);
   });
@@ -61,7 +67,14 @@ for(const provider of ["google","outlook"]) {
     const updated=await service.update(input),write=calls.find(call=>call.method==="PATCH");
     assert.equal(updated.showAs,"free");assert.equal(updated.visibility,"private");assert.deepEqual(updated.reminder,{mode:"minutes",minutes:30});
     if(provider==="google")assert.deepEqual(write.body,{start:{dateTime:new Date(current.start.dateTime).toISOString(),timeZone:"Europe/Vilnius"},end:{dateTime:new Date(current.end.dateTime).toISOString(),timeZone:"Europe/Vilnius"},transparency:"transparent",visibility:"private",reminders:{useDefault:false,overrides:[{method:"popup",minutes:30}]}});
-    else assert.deepEqual(write.body,{start:{dateTime:"2026-10-24T08:00:00.000",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00.000",timeZone:"UTC"},showAs:"free",sensitivity:"private",isReminderOn:true,reminderMinutesBeforeStart:30});
+    else assert.deepEqual(write.body,{start:{dateTime:"2026-10-24T08:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-24T09:00:00",timeZone:"UTC"},showAs:"free",sensitivity:"private",isReminderOn:true,reminderMinutesBeforeStart:30});
+  });
+  test(`${provider}: an unrelated edit preserves a distinct provider end timezone`,async()=>{
+    const {service,raw,calls}=fixture(provider);
+    if(provider==="google")raw.end.timeZone="Europe/London";else raw.originalEndTimeZone="Europe/London";
+    const current=normalizeEvent(provider,raw,"account-a");
+    await service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,start:current.start.dateTime,end:current.end.dateTime,summary:"Atnaujinta"});
+    const write=calls.find(call=>call.method==="PATCH");assert.equal(write.body.start.timeZone,current.timeZone);assert.equal(write.body.end.timeZone,"Europe/London");
   });
   test(`${provider}: account changes, non-owner, and series master are blocked; instances are editable`,async()=>{
     const {service,input,raw,state,calls}=fixture(provider);
@@ -92,11 +105,31 @@ for(const provider of ["google","outlook"])test(`${provider}: all-day dates use 
   else assert.deepEqual(write.body,{isAllDay:true,start:{dateTime:"2026-10-25T00:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-28T00:00:00",timeZone:"UTC"}});
   assert.equal(raw.description,provider==="google"?"Keep description":undefined);assert.deepEqual(raw.body,provider==="outlook"?{content:"Keep Teams blob",contentType:"html"}:undefined);
 });
+for(const provider of ["google","outlook"])test(`${provider}: a supported IANA zone preserves wall time and round-trips`,async()=>{
+  const {service,raw,calls}=fixture(provider);
+  if(provider==="outlook"){raw.originalStartTimeZone="Europe/Vilnius";raw.originalEndTimeZone="Europe/Vilnius";}
+  const current=normalizeEvent(provider,raw,"account-a");assert.equal(current.timeZone,"Europe/Vilnius");
+  const updated=await service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,start:"2026-10-24T10:00:00Z",end:"2026-10-24T11:00:00Z",timeZone:"Europe/London"});
+  assert.equal(updated.timeZone,"Europe/London");assert.equal(updated.start.dateTime,"2026-10-24T10:00:00.000Z");assert.equal(updated.end.dateTime,"2026-10-24T11:00:00.000Z");
+  const write=calls.find(call=>call.method==="PATCH");
+  if(provider==="google")assert.deepEqual(write.body.start,{dateTime:"2026-10-24T10:00:00.000Z",timeZone:"Europe/London"});
+  else {assert.deepEqual(write.body.start,{dateTime:"2026-10-24T11:00:00",timeZone:"Europe/London"});assert.ok(calls.some(call=>call.path.startsWith("/me/outlook/supportedTimeZones")));}
+});
+test("Outlook rejects unsupported mailbox zones without writing",async()=>{
+  const {service,raw,calls}=fixture("outlook"),current=normalizeEvent("outlook",raw,"account-a"),base={id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,start:current.start.dateTime,end:current.end.dateTime};
+  await assert.rejects(service.update({...base,timeZone:"Pacific/Auckland"}),error=>error.status===400&&/nepalaiko/.test(error.message));assert.equal(calls.filter(call=>call.method==="PATCH").length,0);
+});
+test("Outlook matches equivalent IANA aliases and sends the mailbox-supported name",async()=>{
+  const {service,raw,calls,state}=fixture("outlook");state.supportedTimeZones=["Europe/Kiev"];
+  const current=normalizeEvent("outlook",raw,"account-a"),updated=await service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,start:"2026-10-24T08:00:00Z",end:"2026-10-24T09:00:00Z",timeZone:"Europe/Kyiv"});
+  const write=calls.find(call=>call.method==="PATCH");assert.equal(write.body.start.timeZone,"Europe/Kiev");assert.equal(write.body.end.timeZone,"Europe/Kiev");assert.equal(updated.timeZone,"Europe/Kiev");
+});
 for(const provider of ["google","outlook"])test(`${provider}: all-day date changes require attendee confirmation and reject mode conversion`,async()=>{
   const {service,raw,calls}=fixture(provider);
   if(provider==="google"){raw.start={date:"2026-10-24"};raw.end={date:"2026-10-25"};raw.attendees=[{email:"guest@example.test"}];}
   else {raw.isAllDay=true;raw.start={dateTime:"2026-10-24T00:00:00",timeZone:"UTC"};raw.end={dateTime:"2026-10-25T00:00:00",timeZone:"UTC"};raw.attendees=[{emailAddress:{address:"guest@example.test"}}];}
   const current=normalizeEvent(provider,raw,"account-a"),input={id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,allDay:true,start:"2026-10-25",end:"2026-10-26"};
+  await assert.rejects(service.update({...input,timeZone:"Europe/Vilnius"}),error=>error.status===400);assert.equal(calls.length,0);
   await assert.rejects(service.update(input),error=>error.status===409);assert.equal(calls.filter(call=>call.method).length,0);
   await service.update({...input,confirmAttendees:true});assert.equal(calls.filter(call=>call.method).length,1);
   const next=normalizeEvent(provider,raw,"account-a");

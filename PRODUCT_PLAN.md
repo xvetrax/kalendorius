@@ -1,6 +1,6 @@
 # „Dienos planas“ — kelias iki kasdien naudojamo produkto
 
-Atnaujinta: 2026-09-21. Būsena: **tikslas aktyvus; auditas atliktas, produktas dar nebaigtas**.
+Atnaujinta: 2026-09-25. Būsena: **tikslas aktyvus; auditas atliktas, produktas dar nebaigtas**.
 
 ## Tikslas ir darbo principas
 
@@ -121,7 +121,7 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 
 - [x] Visų prieinamų kalendorių sąrašas, spalvos, rašymo teisės, skaitymo pasirinkimas ir pilnas puslapiavimas.
 - [ ] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė turi apimti kalendoriaus ID.
-- [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Esamų laiko įvykių redaktorius valdo matomumą, laisvo / užimto laiko būseną ir priminimą, o visos dienos redaktorius — pirmą bei paskutinę dieną; liko laiko zonos pasirinkimas ir konvertavimas tarp režimų.
+- [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Esamų laiko įvykių redaktorius valdo IANA laiko zoną, matomumą, laisvo / užimto laiko būseną ir priminimą, o visos dienos redaktorius — pirmą bei paskutinę dieną; liko naujo įvykio laiko zonos pasirinkimas ir konvertavimas tarp laiko bei visos dienos režimų.
 - [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. RSVP veiksmas patikrintas sintetiniais Google ir Microsoft tiekėjais.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
 - [ ] ETag / versijų konfliktai, išoriniai pakeitimai ir 401/403/429 apdorojami; dar reikia nedubliuojančio įvykių kūrimo po neaiškaus atsakymo ir gyvos Graph patikros.
@@ -447,3 +447,11 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - Normalizuotas Outlook visos dienos įvykis grąžina datos ribas, todėl sąsaja nepriklauso nuo naršyklės laiko zonos. Nesusiję aprašymo, Teams / Meet, priminimų ir kiti metaduomenys į tiekėjo PATCH nepatenka.
 - Patikra: `npm run typecheck`, 222/222 `npm test`, `npm run build`, 4/4 tiksliniai ir 32/32 visi `npm run test:e2e` scenarijai praėjo.
 - Ribos: tikros Google ir Microsoft paskyros nekeistos. Konvertavimas tarp laiko bei visos dienos režimų ir laiko zonos pasirinkimas palikti atskiriems žingsniams; D2 punktas dar neužbaigtas.
+
+### 2026-09-25 — esamo laiko įvykio laiko zona
+
+- Google ir Outlook laiko įvykio redaktorius rodo įvykio IANA laiko zoną ir leidžia ją pakeisti. Keičiant zoną išlaikomas įvestuose laukuose matomas sieninis laikas, todėl perskaičiuojamas tikras UTC momentas; nekeičiant laukų išsaugomas pradinis momentas ir jo sekundės.
+- Bendras laiko zonų modulis nepriklauso nuo serverio ar naršyklės vietinės zonos, tikrina realias IANA reikšmes, atmeta fiksuoto poslinkio identifikatorius ir neegzistuojančią arba dėl vasaros / žiemos laiko pasikartojančią valandą, įskaitant pusvalandžio perėjimus.
+- Outlook prieš pakeitimą perskaito pašto dėžutės palaikomas IANA zonas, kanoniškai sulygina lygiaverčius aliasus ir siunčia Graph vietinį `dateTime` su konkrečiu pašto dėžutės grąžintu zonos vardu. Google gauna absoliutų RFC 3339 laiką ir zoną. Nesusijęs redagavimas išsaugo atskiras tiekėjo pradžios bei pabaigos zonas; visos dienos įvykiui zona nesiunčiama.
+- Patikra: `git diff --check`, `npm run typecheck`, 233/233 `npm test`, `npm run build` ir 32/32 `npm run test:e2e` scenarijai praėjo.
+- Ribos: tikros Google ir Microsoft paskyros nekeistos. Outlook įvykio sena Windows zonos reikšmė, kurios JavaScript neatpažįsta kaip IANA, redaktoriuje saugiai rodoma kaip UTC. Naujo įvykio laiko zonos pasirinkimas ir režimų konvertavimas lieka kitiems žingsniams; D2 punktas dar neužbaigtas.
