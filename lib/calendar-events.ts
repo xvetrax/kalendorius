@@ -62,6 +62,20 @@ export function calendarIdentifier(value:unknown){return identifier(value,"kalen
 export function calendarEventKey(provider:CalendarProvider,connectionId:string,calendarId:string,id:string) {
   return JSON.stringify([provider,connectionId,calendarId,id]);
 }
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\r\n|\r/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:string,calendarId="primary",calendarName?:string,calendarColor?:string):CalendarEvent {
   const google=provider === "google";
   const allDay=google ? Boolean(raw.start?.date) : Boolean(raw.isAllDay);
@@ -78,7 +92,8 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
   const cancelled=google ? raw.status === "cancelled" : raw.isCancelled;
   const readOnlyReason=cancelled ? "Įvykis atšauktas." : !owner ? "Šiame etape redaguojami tik tavo organizuojami įvykiai." : special ? "Šio tipo įvykį redaguok originaliame kalendoriuje." : recurringMaster ? "Pasikartojančių įvykių serija redaguojama originaliame kalendoriuje." : !version ? "Nėra įvykio versijos. Atnaujink kalendorių." : "";
   const location:string|undefined=google ? (raw.location || undefined) : (raw.location?.displayName || undefined);
-  const description:string|undefined=google ? (raw.description || undefined) : (raw.body?.content || undefined);
+  const rawDescription=google ? (raw.description || undefined) : (raw.body?.content || undefined);
+  const description:string|undefined=rawDescription ? (google ? rawDescription : stripHtml(rawDescription)) : undefined;
   const rawAttendees:any[]=Array.isArray(raw.attendees) ? raw.attendees : [];
   const selfAttendee=google ? rawAttendees.find((attendee:any)=>attendee?.self===true && attendee?.email) : undefined;
   const graphResponse=String(raw.responseStatus?.response || "");
