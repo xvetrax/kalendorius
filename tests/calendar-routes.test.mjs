@@ -19,7 +19,8 @@ const fixture=await import("./fixtures/calendar-upstream.mjs"),{calendarUpstream
 const {db,saveSetting,setting}=await import("../lib/db.ts");const {encrypt}=await import("../lib/secrets.ts");
 for(const provider of ["google","microsoft"]){saveSetting(`${provider}_refresh_token`,encrypt("synthetic-refresh"));saveSetting(`${provider}_account_id`,"fixture-account");saveSetting(`${provider}_connection_generation`,`${provider}-fixture`);}
 const routes={google:await import("../app/api/google/events/route.ts"),microsoft:await import("../app/api/microsoft/events/route.ts")};
-const microsoftCalendars=await import("../app/api/microsoft/calendars/route.ts");
+const calendarCatalogs={google:await import("../app/api/google/calendars/route.ts"),microsoft:await import("../app/api/microsoft/calendars/route.ts")};
+const microsoftCalendars=calendarCatalogs.microsoft;
 after(()=>{globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 const inputFor=e=>({id:e.id,calendarId:e.calendarId,version:e.version,connectionId:e.connectionId,start:e.start.dateTime,end:e.end.dateTime});
 const shiftDate=(value,days)=>{const date=new Date(`${value}T00:00:00Z`);date.setUTCDate(date.getUTCDate()+days);return date.toISOString().slice(0,10);};
@@ -71,23 +72,66 @@ for(const provider of ["google","microsoft"]){
   });
   test(`${provider} actual routes: timed creation writes the selected timezone`,async()=>{
     const requested=provider==="google"?"Europe/Vilnius":"Europe/Kyiv",providerZone=provider==="google"?requested:"Europe/Kiev",before=calendarUpstreamWrites.length;
-    const body={summary:`${provider} zonos kūrimas`,start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:requested,showAs:"busy"};
+    const catalogResponse=await calendarCatalogs[provider].GET(),catalog=await catalogResponse.json();assert.equal(catalogResponse.status,200);assert.ok(catalog.version);assert.deepEqual(catalog.enabled,[provider==="google"?"primary":"opaque-default"]);
+    const body={calendarId:"other/calendar",calendarVersion:catalog.version,summary:`${provider} zonos kūrimas`,start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:requested,showAs:"busy"};
+    assert.equal((await post(body)).status,409);assert.equal(calendarUpstreamWrites.length,before);
+    const selection=await calendarCatalogs[provider].PATCH(new Request(`http://localhost:3000/api/${provider}/calendars`,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({enabled:catalog.items.map(item=>({id:item.id})),version:catalog.version})}));assert.equal(selection.status,200);
     const response=await post(body);assert.equal(response.status,201);assert.equal(calendarUpstreamWrites.length,before+1);
     const write=calendarUpstreamWrites.at(-1);assert.equal(write.provider,provider==="google"?"google":"outlook");assert.equal(write.body.start.timeZone,providerZone);assert.equal(write.body.end.timeZone,providerZone);
+    assert.match(write.path,/\/calendars\/other%2Fcalendar\/events$/);
     if(provider==="google"){assert.equal(write.body.start.dateTime,"2026-10-24T07:00:00.000Z");assert.equal(write.body.end.dateTime,"2026-10-24T08:00:00.000Z");}
     else {assert.equal(write.body.start.dateTime,"2026-10-24T10:00:00");assert.equal(write.body.end.dateTime,"2026-10-24T11:00:00");}
   });
+  test(`${provider} actual routes: removed enabled calendars are pruned before listing`,async()=>{
+    const key=`${provider}_enabled_calendars`,previous=setting(key);
+    try {
+      saveSetting(key,JSON.stringify({accountId:"fixture-account",items:[{id:"removed-calendar"}]}));
+      const listed=await route.GET(new Request(url));assert.equal(listed.status,200);assert.deepEqual((await listed.json()).items,[]);
+      const catalogResponse=await calendarCatalogs[provider].GET(),catalog=await catalogResponse.json();assert.equal(catalogResponse.status,200);assert.deepEqual(catalog.enabled,[]);
+      const saved=await calendarCatalogs[provider].PATCH(new Request(`http://localhost:3000/api/${provider}/calendars`,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({enabled:[],version:catalog.version})}));
+      assert.equal(saved.status,200);assert.deepEqual(JSON.parse(setting(key)).items,[]);
+    } finally {if(previous===undefined)db.prepare("DELETE FROM settings WHERE key = ?").run(key);else saveSetting(key,previous);}
+  });
   test(`${provider} actual routes: invalid and all-day timezones never create`,async()=>{
-    const before=calendarUpstreamWrites.length,base={summary:"Nekurti",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z"};
+    const catalogResponse=await calendarCatalogs[provider].GET(),catalog=await catalogResponse.json();assert.equal(catalogResponse.status,200);
+    const before=calendarUpstreamWrites.length,base={calendarId:"other/calendar",calendarVersion:catalog.version,summary:"Nekurti",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z"};
+    assert.equal((await post({...base,calendarId:undefined,timeZone:"UTC"})).status,400);
+    assert.equal((await post({...base,calendarVersion:"stale",timeZone:"UTC"})).status,409);
     assert.equal((await post({...base,timeZone:"+03:00"})).status,400);
-    assert.equal((await post({summary:"Nekurti",allDay:true,start:"2026-10-24",end:"2026-10-25",timeZone:"Europe/Vilnius"})).status,400);
+    assert.equal((await post({...base,allDay:true,start:"2026-10-24",end:"2026-10-25",timeZone:"Europe/Vilnius"})).status,400);
     if(provider==="microsoft"){
       assert.equal((await post({...base,timeZone:"Pacific/Auckland"})).status,400);
       const fold=await post({...base,start:"2026-10-24T23:30:00Z",end:"2026-10-25T00:30:00Z",timeZone:"Europe/Vilnius"});assert.equal(fold.status,400);assert.match((await fold.json()).error,/kartojasi/);
     }
+    assert.equal((await post({...base,calendarId:"readonly",timeZone:"UTC"})).status,403);
     assert.equal((await post({...base,timeZone:"UTC"},"https://attacker.example")).status,403);assert.equal(calendarUpstreamWrites.length,before);
+    saveSetting(`${provider}_enabled_calendars`,JSON.stringify({accountId:"fixture-account",items:[{id:"primary"}]}));
   });
 }
+
+test("Google legacy calendar selections migrate without losing explicit empty or secondary calendars",async()=>{
+  const key="google_enabled_calendars",previous=setting(key),url="http://localhost:3000/api/google/events";
+  try {
+    saveSetting(key,JSON.stringify([]));
+    let catalog=await (await calendarCatalogs.google.GET()).json();assert.deepEqual(catalog.enabled,[]);assert.equal(catalog.explicit,true);
+    assert.deepEqual(JSON.parse(setting(key)),{accountId:"fixture-account",items:[]});
+    assert.deepEqual((await (await routes.google.GET(new Request(url))).json()).items,[]);
+    saveSetting(key,JSON.stringify([{id:"other/calendar",name:"Senas antrinis"}]));
+    catalog=await (await calendarCatalogs.google.GET()).json();assert.deepEqual(catalog.enabled,["other/calendar"]);assert.equal(catalog.explicit,true);
+    assert.deepEqual(JSON.parse(setting(key)),{accountId:"fixture-account",items:[{id:"other/calendar",name:"Senas antrinis"}]});
+    const items=(await (await routes.google.GET(new Request(url))).json()).items;assert.ok(items.length);assert.ok(items.every(item=>item.calendarId==="other/calendar"));
+  } finally {if(previous===undefined)db.prepare("DELETE FROM settings WHERE key = ?").run(key);else saveSetting(key,previous);}
+});
+
+test("Microsoft legacy primary selection creates in the live opaque default calendar",async()=>{
+  const key="microsoft_enabled_calendars",previous=setting(key),url="http://localhost:3000/api/microsoft/events",before=calendarUpstreamWrites.length;
+  try {
+    saveSetting(key,JSON.stringify({accountId:"fixture-account",items:[{id:"primary"}]}));
+    const catalog=await (await calendarCatalogs.microsoft.GET()).json();assert.deepEqual(catalog.enabled,["opaque-default"]);assert.equal(catalog.defaultAlias,true);
+    const response=await routes.microsoft.POST(new Request(url,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({calendarId:"opaque-default",calendarVersion:catalog.version,summary:"Legacy numatytasis",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));
+    assert.equal(response.status,201);assert.equal(calendarUpstreamWrites.length,before+1);assert.equal(calendarUpstreamWrites.at(-1).path,"/v1.0/me/calendars/opaque-default/events");
+  } finally {if(previous===undefined)db.prepare("DELETE FROM settings WHERE key = ?").run(key);else saveSetting(key,previous);}
+});
 for(const provider of ["google","microsoft"])test(`${provider} actual route submits an account-bound RSVP and reloads its status`,async()=>{
   const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
   const event=(await (await route.GET(new Request(url))).json()).items.find(item=>item.canRespond);assert.ok(event);assert.equal(event.editable,false);assert.equal(event.responseStatus,"needsAction");
@@ -116,7 +160,7 @@ test("actual Outlook route protects non-organizer events and requires participan
 for(const provider of ["google","microsoft"]) test(`${provider}: same-ID events in different calendars update and delete independently`,async()=>{
   const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
   const selected=[{id:"primary"},{id:"other/calendar",name:"Kitas",color:"#123456"}];
-  saveSetting(`${provider}_enabled_calendars`,JSON.stringify(provider==="microsoft"?{accountId:"fixture-account",items:selected}:selected));
+  saveSetting(`${provider}_enabled_calendars`,JSON.stringify({accountId:"fixture-account",items:selected}));
   const items=(await (await route.GET(new Request(url))).json()).items;
   const target=items.find(e=>e.calendarId==="other/calendar"),original=items.find(e=>e.calendarId==="primary"&&e.id===target.id);
   assert.ok(original);assert.notEqual(target.key,original.key);
@@ -135,7 +179,22 @@ for(const provider of ["google","microsoft"]) test(`${provider}: same-ID events 
   assert.equal((await route.DELETE(new Request(url+"?"+query,{method:"DELETE",headers}))).status,200);
   const remaining=(await (await route.GET(new Request(url))).json()).items;
   assert.ok(remaining.some(e=>e.key===original.key));assert.ok(!remaining.some(e=>e.key===target.key));
-  const primary=[{id:"primary"}];saveSetting(`${provider}_enabled_calendars`,JSON.stringify(provider==="microsoft"?{accountId:"fixture-account",items:primary}:primary));
+  const primary=[{id:"primary"}];saveSetting(`${provider}_enabled_calendars`,JSON.stringify({accountId:"fixture-account",items:primary}));
+});
+
+for(const provider of ["google","microsoft"])test(`${provider}: explicit empty calendar selection lists no events and remains account-bound`,async()=>{
+  const route=routes[provider],catalog=calendarCatalogs[provider],eventsUrl=`http://localhost:3000/api/${provider}/events`,catalogUrl=`http://localhost:3000/api/${provider}/calendars`;
+  const catalogResponse=await catalog.GET(),snapshot=await catalogResponse.json();assert.equal(catalogResponse.status,200);
+  saveSetting(`${provider}_account_id`,"different-account");
+  const stale=await catalog.PATCH(new Request(catalogUrl,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({enabled:[],version:snapshot.version})}));assert.equal(stale.status,409);
+  const staleCreate=await route.POST(new Request(eventsUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({calendarId:"primary",calendarVersion:snapshot.version,summary:"Nekurti kitoje paskyroje",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));assert.equal(staleCreate.status,409);
+  saveSetting(`${provider}_account_id`,"fixture-account");
+  const response=await catalog.PATCH(new Request(catalogUrl,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({enabled:[],version:snapshot.version})}));
+  assert.equal(response.status,200);assert.deepEqual(JSON.parse(setting(`${provider}_enabled_calendars`)),{accountId:"fixture-account",items:[]});
+  const listed=await route.GET(new Request(eventsUrl));assert.equal(listed.status,200);assert.deepEqual((await listed.json()).items,[]);
+  const before=calendarUpstreamWrites.length,created=await route.POST(new Request(eventsUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({calendarId:"primary",calendarVersion:snapshot.version,summary:"Nekurti",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));
+  assert.equal(created.status,409);assert.equal(calendarUpstreamWrites.length,before);
+  saveSetting(`${provider}_enabled_calendars`,JSON.stringify({accountId:"fixture-account",items:[{id:"primary"}]}));
 });
 
 test("Outlook route confirms mirror identity by account and transaction, never by event ID alone",async()=>{
@@ -145,10 +204,10 @@ test("Outlook route confirms mirror identity by account and transaction, never b
     isReminderOn:false,isOnlineMeeting:false,onlineMeeting:null,location:{displayName:""},sensitivity:"normal",importance:"normal",hasAttachments:false,categories:[],recurrence:null};
   const defaultCalendar=new Map([[mirror.id,mirror]]),other=calendarUpstream.outlook.get("other/calendar");
   calendarUpstream.outlook.set("opaque-default",defaultCalendar);other.set(mirror.id,structuredClone(mirror));
-  const catalogResponse=await microsoftCalendars.GET();assert.equal(catalogResponse.status,200);
-  assert.ok((await catalogResponse.json()).items.some(calendar=>calendar.id==="opaque-default"&&calendar.isDefault));
+  const catalogResponse=await microsoftCalendars.GET();assert.equal(catalogResponse.status,200);const catalog=await catalogResponse.json();
+  assert.ok(catalog.items.some(calendar=>calendar.id==="opaque-default"&&calendar.isDefault));
   assert.deepEqual(JSON.parse(setting("microsoft_default_calendar_identity")),["fixture-account","microsoft-fixture","opaque-default"]);
-  const selection=await microsoftCalendars.PATCH(new Request("http://localhost:3000/api/microsoft/calendars",{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({enabled:[{id:"opaque-default"},{id:"other/calendar"}]})}));
+  const selection=await microsoftCalendars.PATCH(new Request("http://localhost:3000/api/microsoft/calendars",{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({enabled:[{id:"opaque-default"},{id:"other/calendar"}],version:catalog.version})}));
   assert.equal(selection.status,200);assert.equal(JSON.parse(setting("microsoft_enabled_calendars")).accountId,"fixture-account");
   db.prepare("DELETE FROM settings WHERE key='microsoft_default_calendar_identity'").run();
   const insert=db.prepare(`INSERT INTO task_plans(task_key,scheduled_at,mirror_requested,mirror_account_id,mirror_event_id,mirror_transaction_id) VALUES (?,?,1,?,?,?)`);

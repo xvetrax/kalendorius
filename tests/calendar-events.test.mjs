@@ -20,6 +20,13 @@ function fixture(provider) {
   const input={id:raw.id,calendarId:"primary",connectionId:"account-a",version:normalizeEvent(provider,raw,"account-a").version,start:from,end:to};
   return {service,input,calls,raw,state,gateway};
 }
+for(const provider of ["google","outlook"])test(`${provider}: an explicit empty calendar selection performs no provider request`,async()=>{
+  const {service,calls}=fixture(provider);assert.deepEqual(await service.list(from,to,[]),[]);assert.equal(calls.length,0);
+});
+for(const provider of ["google","outlook"])test(`${provider}: listing rejects a connection changed after calendar discovery`,async()=>{
+  const {service,calls,state}=fixture(provider);state.connection="account-b";
+  await assert.rejects(service.list(from,to,[{id:"primary"}],"account-a"),error=>error.status===409);assert.equal(calls.length,0);
+});
 for(const provider of ["google","outlook"]) {
   test(`${provider}: moving preserves metadata and uses only time fields with a version precondition`,async()=>{
     const {service,input,calls,raw}=fixture(provider);const before=structuredClone(raw);

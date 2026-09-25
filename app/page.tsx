@@ -474,19 +474,47 @@ function TaskModal({onClose,onSave,lists,destination,onDestination}:{onClose:()=
 }
 function EventModal({ initial, outlook, google, outlookReady, googleReady, onClose, onSave }: { initial: Date; outlook: boolean; google: boolean; outlookReady: boolean; googleReady: boolean; onClose: () => void; onSave: () => void }) {
   const start = new Date(initial);
+  const initialProvider:"outlook"|"google"=outlook?"outlook":"google";
   const [timed,setTimed]=useState(()=>{const value=Intl.DateTimeFormat().resolvedOptions().timeZone,timeZone=isCalendarTimeZone(value)?value:"UTC";return {timeZone,start:zonedLocalInput(start.toISOString(),timeZone)};});
   const timeZone=timed.timeZone;
   const modalTimeZones=timeZones.includes(timeZone)?timeZones:[timeZone,...timeZones];
+  const [provider,setProvider]=useState<"outlook"|"google">(initialProvider);
+  const [calendars,setCalendars]=useState<{outlook:CalList|null;google:CalList|null}>({outlook:null,google:null});
+  const [calendarId,setCalendarId]=useState("");
+  const [calendarsLoading,setCalendarsLoading]=useState(outlook||google);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [allDay, setAllDay] = useState(false);
   const startDate = zonedLocalInput(start.toISOString(),timeZone).slice(0, 10);
+  function writable(list:CalList|null){return list?.items.filter(cal=>cal.writable&&(list.enabled===null||list.enabled.includes(cal.id)))||[];}
+  const providerCalendars=writable(calendars[provider]);
+  const calendarVersion=calendars[provider]?.version||"";
+  useEffect(()=>{
+    let active=true;
+    if(!outlook&&!google){setCalendars({outlook:null,google:null});setCalendarsLoading(false);return()=>{active=false;};}
+    setCalendarsLoading(true);
+    Promise.allSettled([
+      outlook?fetch("/api/microsoft/calendars").then(response=>responseJson<CalList>(response)):Promise.resolve(null),
+      google?fetch("/api/google/calendars").then(response=>responseJson<CalList>(response)):Promise.resolve(null),
+    ]).then(results=>{
+      if(!active)return;
+      const outlookList=results[0].status==="fulfilled"?results[0].value:null,googleList=results[1].status==="fulfilled"?results[1].value:null;
+      const next={outlook:outlookList,google:googleList};setCalendars(next);
+      if(results.some(result=>result.status==="rejected"))setError("Dalies kalendorių įkelti nepavyko. Gali naudoti pasiekiamą paskyrą.");
+      setProvider(current=>{
+        const alternate=current==="outlook"?"google":"outlook";
+        return writable(next[current]).length||!writable(next[alternate]).length?current:alternate;
+      });
+    }).finally(()=>{if(active)setCalendarsLoading(false);});
+    return()=>{active=false;};
+  },[outlook,google]);
+  useEffect(()=>{setCalendarId(current=>providerCalendars.some(cal=>cal.id===current)?current:providerCalendars[0]?.id||"");},[provider,calendars]);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); setSaving(true); setError("");
     try {
+      if(!calendarId||!calendarVersion)throw new Error("Pasirink rašomą kalendorių.");
       const f = new FormData(e.currentTarget);
-      const provider = String(f.get("provider"));
-      const common = { summary: f.get("summary"), description: f.get("description"), location: f.get("location") || undefined, showAs: f.get("showAs") || undefined, visibility: f.get("visibility") || undefined };
+      const common = { calendarId,calendarVersion,summary: f.get("summary"), description: f.get("description"), location: f.get("location") || undefined, showAs: f.get("showAs") || undefined, visibility: f.get("visibility") || undefined };
       let body: Record<string, unknown>;
       if (allDay) {
         const sd = String(f.get("startDate")); const ed = String(f.get("endDate")) || sd;
@@ -506,7 +534,9 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
     {!outlook && !google ? <div className="connectPrompt"><p>{outlookReady || googleReady ? "Prijunk kalendorių ir kurk tikrus susitikimus." : "Įrašyk OAuth nustatymus į .env failą pagal README."}</p>{outlookReady && <a href="/api/microsoft/connect">Prijungti Outlook</a>}{googleReady && <a href="/api/google/connect">Prijungti Google</a>}</div> :
     <form className="modalForm" onSubmit={submit}>
       <label>Pavadinimas<input name="summary" required autoFocus placeholder="Susitikimo pavadinimas"/></label>
-      <div className="formRow"><label>Kalendorius<select name="provider" defaultValue={outlook ? "outlook" : "google"}>{outlook && <option value="outlook">Outlook Calendar</option>}{google && <option value="google">Google Calendar</option>}</select></label>{!allDay && <label>Trukmė<select name="duration" defaultValue="30"><option value="15">15 min.</option><option value="30">30 min.</option><option value="60">1 val.</option><option value="90">1,5 val.</option></select></label>}</div>
+      <div className="formRow"><label>Paskyra<select name="provider" value={provider} onChange={event=>setProvider(event.target.value as "outlook"|"google")}>{outlook && <option value="outlook">Outlook Calendar</option>}{google && <option value="google">Google Calendar</option>}</select></label><label>Kalendorius<select name="calendarId" value={calendarId} disabled={calendarsLoading||!providerCalendars.length} onChange={event=>setCalendarId(event.target.value)}>{providerCalendars.map(cal=><option key={cal.id} value={cal.id}>{cal.name}{cal.primary||cal.isDefault?" · pagrindinis":""}</option>)}</select></label></div>
+      {!calendarsLoading&&!providerCalendars.length&&<p className="formHint" role="status">Šiai paskyrai nepasirinktas rašomas kalendorius. Pasirink jį nustatymų skiltyje „Kalendoriai“.</p>}
+      {!allDay && <label>Trukmė<select name="duration" defaultValue="30"><option value="15">15 min.</option><option value="30">30 min.</option><option value="60">1 val.</option><option value="90">1,5 val.</option></select></label>}
       <label className="onlineSwitch"><input type="checkbox" checked={allDay} onChange={e=>setAllDay(e.target.checked)}/><i/>Visos dienos įvykis</label>
       {allDay ? <div className="formRow"><label>Pradžia<input name="startDate" type="date" required defaultValue={startDate}/></label><label>Pabaiga<input name="endDate" type="date" defaultValue={startDate}/></label></div> : <><label>Pradžia<input name="start" type="datetime-local" required value={timed.start} onChange={event=>setTimed(current=>({...current,start:event.target.value}))}/></label><label>Laiko zona<select name="timeZone" value={timeZone} onChange={event=>setTimed(current=>({...current,timeZone:event.target.value}))}>{modalTimeZones.map(zone=><option key={zone} value={zone}>{zone}</option>)}</select></label></>}
       <div className="formRow"><label>Laisvas / užimtas<select name="showAs"><option value="busy">Užimtas</option><option value="free">Laisvas</option></select></label><label>Matomumas<select name="visibility"><option value="">Numatytasis</option><option value="private">Privatus</option></select></label></div>
@@ -515,7 +545,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
       {!allDay && <label>Dalyviai<input name="attendees" placeholder="el. paštai, atskirti kableliais"/></label>}
       <label>Aprašymas<textarea name="description" placeholder="Darbotvarkė…"/></label>
       {!allDay && <label className="onlineSwitch"><input name="online" type="checkbox" defaultChecked/><i/>Sukurti Teams / Google Meet nuorodą</label>}
-      <div className="modalActions"><button type="button" onClick={onClose}>Atšaukti</button><button className="newButton" disabled={saving}>{saving ? "Kuriama…" : "Sukurti įvykį"}</button></div>
+      <div className="modalActions"><button type="button" onClick={onClose}>Atšaukti</button><button className="newButton" disabled={saving||calendarsLoading||!calendarId||!calendarVersion}>{saving ? "Kuriama…" : calendarsLoading?"Kraunami kalendoriai…":"Sukurti įvykį"}</button></div>
     </form>}
   </Modal>;
 }
@@ -640,7 +670,7 @@ function TaskEditor({ task, outlook, taskLists, onClose, onSave, onDelete, onMov
 }
 
 type CalInfo={id:string;name:string;color?:string;primary?:boolean;isDefault?:boolean;writable:boolean};
-type CalList={items:CalInfo[];enabled:string[]|null};
+type CalList={items:CalInfo[];enabled:string[]|null;version:string};
 function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boolean;onSaved:()=>void}) {
   const [gCals,setGCals]=useState<CalList|null>(null),[mCals,setMCals]=useState<CalList|null>(null),[saving,setSaving]=useState(false),[error,setError]=useState("");
   useEffect(()=>{
@@ -654,7 +684,7 @@ function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boole
     const newList:CalList={...list,enabled:next};setList(newList);setSaving(true);setError("");
     try {
       const enabled=next.map(id=>{const c=list.items.find(x=>x.id===id);return c?{id:c.id,...(c.name?{name:c.name}:{}),...(c.color?{color:c.color}:{})}:{id};});
-      const res=await fetch(`/api/${provider==="google"?"google":"microsoft"}/calendars`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({enabled})});
+      const res=await fetch(`/api/${provider==="google"?"google":"microsoft"}/calendars`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({enabled,version:list.version})});
       if(!res.ok)throw new Error("Nepavyko išsaugoti");
       onSaved();
     } catch(e){setError(e instanceof Error?e.message:"Klaida");setList(list);}

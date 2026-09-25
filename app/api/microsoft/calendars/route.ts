@@ -2,6 +2,7 @@ import { deleteSettings, saveSetting, setting } from "@/lib/db";
 import { graphFetch, isMicrosoftConnected } from "@/lib/microsoft";
 import { apiError, assertSameOrigin } from "@/lib/http";
 import { OUTLOOK_DEFAULT_CALENDAR_SETTING } from "@/lib/outlook-mirror-link";
+import {calendarSelectionVersion} from "@/lib/calendar-selection";
 
 export const runtime = "nodejs";
 
@@ -12,9 +13,7 @@ const outlookColors: Record<string, string> = {
   lightMagenta: "#b04db6", auto: "#0078d4",
 };
 
-export async function GET() {
-  if (!isMicrosoftConnected()) return Response.json({ items: [] });
-  try {
+export async function microsoftCalendarCatalog() {
     const accountId=setting("microsoft_account_id"),connectionId=setting("microsoft_connection_generation") || "legacy";
     const items: {id:string;name:string;color?:string;isDefault?:boolean;writable:boolean}[] = [];
     let next: string | null = "/me/calendars?$top=50&$select=id,name,color,isDefaultCalendar,canEdit";
@@ -34,14 +33,20 @@ export async function GET() {
       } else next = null;
     }
     if (!isMicrosoftConnected() || setting("microsoft_account_id")!==accountId || (setting("microsoft_connection_generation") || "legacy")!==connectionId)
-      return Response.json({error:"Microsoft paskyra pasikeitė. Atnaujink kalendorius."},{status:409});
+      throw Object.assign(new Error("Microsoft paskyra pasikeitė. Atnaujink kalendorius."),{status:409});
     const primary=items.find(item=>item.isDefault);
     if (primary && accountId) saveSetting(OUTLOOK_DEFAULT_CALENDAR_SETTING,JSON.stringify([accountId,connectionId,primary.id]));
     else deleteSettings(OUTLOOK_DEFAULT_CALENDAR_SETTING);
     const stored = setting("microsoft_enabled_calendars");
-    let enabled:string[]|null=null;
-    try {const parsed=stored ? JSON.parse(stored) : null;if(parsed?.accountId===accountId&&Array.isArray(parsed.items))enabled=parsed.items.map((item:any)=>String(item.id||"")).filter(Boolean);} catch {}
-    return Response.json({ items, enabled }, { headers: { "Cache-Control": "no-store" } });
+    let enabled=items.filter(item=>item.isDefault).map(item=>item.id),explicit=false,defaultAlias=false;
+    try {const parsed=stored ? JSON.parse(stored) : null,live=new Set(items.map(item=>item.id)),defaultId=items.find(item=>item.isDefault)?.id;if(parsed?.accountId===accountId&&Array.isArray(parsed.items)){explicit=true;defaultAlias=parsed.items.some((item:any)=>String(item.id||"")==="primary");enabled=parsed.items.map((item:any)=>String(item.id||"")==="primary"&&defaultId?defaultId:String(item.id||"")).filter((id:string)=>live.has(id));}} catch {}
+    return {items,enabled,explicit,defaultAlias,version:calendarSelectionVersion("microsoft",accountId,connectionId)};
+}
+
+export async function GET() {
+  if (!isMicrosoftConnected()) return Response.json({ items: [],enabled:[],version:"" });
+  try {
+    return Response.json(await microsoftCalendarCatalog(), { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return apiError(error); }
 }
 
@@ -49,12 +54,14 @@ export async function PATCH(request: Request) {
   try {
     assertSameOrigin(request);
     const body = await request.json();
-    const accountId=setting("microsoft_account_id");
+    const accountId=setting("microsoft_account_id"),connectionId=setting("microsoft_connection_generation")||"legacy";
     if (!isMicrosoftConnected() || !accountId) return Response.json({error:"Microsoft paskyra neprijungta."},{status:401});
+    const version=calendarSelectionVersion("microsoft",accountId,connectionId);
+    if(body.version!==version)return Response.json({error:"Microsoft paskyra arba kalendorių katalogas pasikeitė. Atnaujink kalendorius."},{status:409});
     if (!Array.isArray(body.enabled) || body.enabled.some((c: unknown) => typeof (c as any)?.id !== "string" || !(c as any).id || (c as any).id.length > 1024))
       return Response.json({ error: "Neteisingas kalendorių sąrašas." }, { status: 400 });
     const safe = (body.enabled as any[]).map((c: any) => ({id:String(c.id),...(c.name?{name:String(c.name).slice(0,200)}:{}),...(c.color?{color:String(c.color).slice(0,30)}:{})}));
     saveSetting("microsoft_enabled_calendars", JSON.stringify({accountId,items:safe}));
-    return Response.json({ ok: true });
+    return Response.json({ ok: true,version });
   } catch (error) { return apiError(error); }
 }

@@ -17,7 +17,7 @@ let version=1;
 google.set("google-short",{...structuredClone(google.get("google-personal")),id:"google-short",summary:"Trumpas",start:{dateTime:new Date(Date.parse(date(1,23))+45*60000).toISOString()},end:{dateTime:date(2,0)}});
 google.set("google-invite",{...structuredClone(google.get("google-personal")),id:"google-invite",summary:"Google kvietimas",organizer:{self:false},attendees:[{email:"me@example.test",self:true,responseStatus:"needsAction"},{email:"host@example.test",organizer:true,responseStatus:"accepted"}],start:{dateTime:date(3,15)},end:{dateTime:date(3,16)}});
 outlook.set("outlook-readonly",{...outlook.get("outlook-readonly"),responseStatus:{response:"notResponded"},attendees:[{emailAddress:{address:"host@example.test"},status:{response:"accepted"}}]});
-export const calendarUpstream={google:new Map([["primary",google],["other/calendar",new Map([["google-personal",{...structuredClone(google.get("google-personal")),summary:"Kitas Google"}]])]]),outlook:new Map([["primary",outlook],["other/calendar",new Map([["outlook-personal",{...structuredClone(outlook.get("outlook-personal")),subject:"Kitas Outlook"}]])]])};
+export const calendarUpstream={google:new Map([["primary",google],["other/calendar",new Map([["google-personal",{...structuredClone(google.get("google-personal")),summary:"Kitas Google"}]])]]),outlook:new Map([["primary",outlook],["opaque-default",outlook],["other/calendar",new Map([["outlook-personal",{...structuredClone(outlook.get("outlook-personal")),subject:"Kitas Outlook"}]])]])};
 export const calendarUpstreamWrites=[];
 globalThis.fetch=async(input,init={})=>{
   const url=new URL(String(input)),method=init.method || "GET";
@@ -28,7 +28,17 @@ globalThis.fetch=async(input,init={})=>{
   if(url.pathname==="/v1.0/me/calendars")return Response.json({value:[
     {id:"opaque-default",name:"Pagrindinis",color:"auto",isDefaultCalendar:true,canEdit:true},
     {id:"other/calendar",name:"Kitas",color:"lightBlue",isDefaultCalendar:false,canEdit:true},
+    {id:"readonly",name:"Tik skaityti",color:"lightGray",isDefaultCalendar:false,canEdit:false},
   ]});
+  if(url.pathname==="/calendar/v3/users/me/calendarList")return Response.json({items:[
+    {id:"primary",summary:"Pagrindinis",backgroundColor:"#4285f4",primary:true,accessRole:"owner"},
+    {id:"other/calendar",summary:"Kitas",backgroundColor:"#34a853",accessRole:"writer"},
+    {id:"readonly",summary:"Tik skaityti",backgroundColor:"#9aa0a6",accessRole:"reader"},
+  ]});
+  const googleCalendar=url.pathname.match(/^\/calendar\/v3\/users\/me\/calendarList\/(.+)$/);
+  if(googleCalendar){const id=decodeURIComponent(googleCalendar[1]);return ["primary","other/calendar","readonly"].includes(id)?Response.json({id,primary:id==="primary",accessRole:id==="readonly"?"reader":id==="primary"?"owner":"writer"}):Response.json({error:"Missing calendar"},{status:404});}
+  const outlookCalendar=url.pathname.match(/^\/v1\.0\/me\/calendars\/([^/]+)$/);
+  if(outlookCalendar){const id=decodeURIComponent(outlookCalendar[1]);return ["primary","opaque-default","other/calendar","readonly"].includes(id)?Response.json({id,canEdit:id!=="readonly",isDefaultCalendar:id==="primary"||id==="opaque-default"}):Response.json({error:"Missing calendar"},{status:404});}
   if(url.pathname.startsWith("/v1.0/me/outlook/supportedTimeZones"))return Response.json({value:[{alias:"Europe/Vilnius",displayName:"Europe/Vilnius"},{alias:"Europe/London",displayName:"Europe/London"},{alias:"Europe/Kiev",displayName:"Europe/Kiev"}]});
   if(url.pathname==="/v1.0/me/calendar")return Response.json({id:"opaque-default"});
   const isGoogle=url.hostname==="www.googleapis.com";

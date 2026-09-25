@@ -120,7 +120,7 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 ### D. Google Calendar ir Outlook įvykių valdymas
 
 - [x] Visų prieinamų kalendorių sąrašas, spalvos, rašymo teisės, skaitymo pasirinkimas ir pilnas puslapiavimas.
-- [ ] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė turi apimti kalendoriaus ID.
+- [x] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė apima kalendoriaus ID.
 - [x] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Naujų ir esamų laiko įvykių redaktoriai valdo IANA laiko zoną, o nepasikartojantys įvykiai konvertuojami tarp laiko bei visos dienos režimų.
 - [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. RSVP veiksmas patikrintas sintetiniais Google ir Microsoft tiekėjais.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
@@ -471,3 +471,14 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - Konvertavimas išsaugo aprašymą, vietą, susitikimo nuorodą, priminimus ir kitus nesiunčiamus tiekėjo metaduomenis. Laiko pasikeitimui su dalyviais reikia patvirtinimo, paskyra ir versija tikrinamos kaip anksčiau, o pasikartojančio egzemplioriaus režimas paliktas D4 serijos taisyklėms.
 - Patikra: `git diff --check`, `npm run typecheck`, 244/244 `npm test`, `npm run build` ir 34/34 `npm run test:e2e` scenarijai praėjo.
 - Ribos: tikros Google ir Microsoft paskyros nekeistos. Visos dienos → laiko konvertavimas sąmoningai nespėja ankstesnės valandos ar zonos, nes tiekėjas jų visos dienos įvykyje neturi.
+
+### 2026-09-25 — kūrimas pasirinktame kalendoriuje
+
+- Naujo įvykio forma atskirai pasirenka Google arba Outlook paskyrą ir vieną nustatymuose įjungtą rašomą kalendorių. Tik skaitymo kalendoriai nesiūlomi, o aiškiai tuščias pasirinkimas nebegrįžta į pagrindinį kalendorių ir išjungia kūrimą su paaiškinimu.
+- Google ir Microsoft POST dabar reikalauja `calendarId`. Prieš rašymą serveris iš tiekėjo iš naujo perskaito pasirinktą kalendorių, patvirtina tikslų ID, rašymo teisę, paskyros ID ir OAuth ryšio kartą, tada kuria įvykį konkretaus kalendoriaus endpoint. Redagavimas bei šalinimas ir toliau naudoja tą pačią pilną įvykio tapatybę.
+- Google kalendorių pasirinkimas, kaip ir Microsoft, saugomas kartu su paskyros ID. Neįrašyta atranka reiškia tik tiekėjo numatytąjį kalendorių, o aiškiai įjungti papildomi kalendoriai vienodai naudojami skaitymui ir kūrimui. Katalogo nepermatoma paskyros bei OAuth ryšio versija privaloma atrankos PATCH ir įvykio POST, todėl sena forma negali įrašyti į naujai prijungtą paskyrą. Vėlyvas paskyros būsenos atsakymas naujo įvykio lange iš naujo įkelia katalogą ir nepalieka klaidingai išjungto pasirinkimo.
+- Prieš įvykių skaitymą išsaugota atranka sankirtinama su gyvu tiekėjo katalogu. Pašalintas arba nebeprieinamas kalendorius nebegali numušti viso tiekėjo įvykių sąrašo, o nustatymų sąsaja jo nebeišsaugo paslėptame pasirinkime. Senasis Outlook `primary` aliasas išlieka suderinamas su dabartiniu nepermatomu numatytojo kalendoriaus ID.
+- Ankstesnis Google pasirinkimo masyvo formatas pirmo sėkmingo katalogo skaitymo metu perkeliamas į paskyros ID turintį formatą. Išsaugomas ir senas aiškiai tuščias pasirinkimas, todėl atnaujinimas savaime neįjungia pagrindinio kalendoriaus. Microsoft `primary` aliasas leidžia kurti į dabartinį gyvai patikrintą nepermatomą numatytąjį ID.
+- Katalogo metu užfiksuota OAuth ryšio karta perduodama į patį įvykių sąrašo adapterį ir tikrinama dar kartą po skaitymo. Paskyrai pasikeitus tarp katalogo ir įvykių užklausos, senas pasirinkimas negali būti pritaikytas naujam prieigos raktui.
+- Patikra: `git diff --check`, `npm run typecheck`, 254/254 `npm test`, `npm run build` ir 35/35 `npm run test:e2e` scenarijai praėjo. Imitaciniai tiekėjai patvirtina kūrimą ne pagrindiniame kalendoriuje, tuščią pasirinkimą, skaitymo teisės atmetimą, paskyros susiejimą, ankstesnių pasirinkimų migraciją, ryšio pasikeitimo atmetimą ir pašalinto įjungto kalendoriaus saugų išvalymą.
+- Ribos: tikros Google ir Microsoft paskyros šiame žingsnyje nekeistos. Gyvų paskyrų priėmimo scenarijai lieka E etapo užduotyje, o neaiškios sėkmingo POST baigties nedubliuojantis pakartojimas lieka D etapo atskiram žingsniui.

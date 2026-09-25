@@ -55,6 +55,7 @@ function identifier(value:unknown,label:string) {
   if (typeof value!=="string" || !value || value==="." || value===".." || value.length>2048 || /[\u0000-\u001f]/.test(value)) throw new CalendarError(`Trūksta arba neteisingas ${label}.`);
   return value;
 }
+export function calendarIdentifier(value:unknown){return identifier(value,"kalendoriaus ID");}
 export function calendarEventKey(provider:CalendarProvider,connectionId:string,calendarId:string,id:string) {
   return JSON.stringify([provider,connectionId,calendarId,id]);
 }
@@ -146,9 +147,10 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     }
     return raw.filter(r=>google ? r.status !== "cancelled" : !r.isCancelled).map(r=>normalize(r,connectionId,calId||"primary",calName,calColor));
   }
-  async function list(start:string,end:string,calendars?:{id:string;name?:string;color?:string}[]) {
-    const times=eventTimes(start,end); const connectionId=connected();
-    if (!calendars?.length) return listOne(times.start,times.end,google ? "primary" : null,undefined,undefined,connectionId);
+  async function list(start:string,end:string,calendars?:{id:string;name?:string;color?:string}[],expectedConnectionId?:string) {
+    const times=eventTimes(start,end); const connectionId=connected(expectedConnectionId);
+    if (calendars===undefined) return listOne(times.start,times.end,google ? "primary" : null,undefined,undefined,connectionId);
+    if (!calendars.length) return [];
     const pages=await Promise.all(calendars.map(c=>listOne(times.start,times.end,c.id,c.name,c.color,connectionId)));
     return pages.flat();
   }
@@ -156,7 +158,7 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new CalendarError("Neteisingi įvykio duomenys.");
     const allowed=new Set(["id","calendarId","connectionId","version","start","end","allDay","timeZone","summary","description","location","attendees","confirmAttendees","showAs","visibility","reminder"]);
     if (Object.keys(input).some(key=>!allowed.has(key))) throw new CalendarError("Pateikti nepalaikomi įvykio laukai.");
-    const eventId=identifier(input.id,"įvykio ID"),calendarId=identifier(input.calendarId,"kalendoriaus ID");
+    const eventId=identifier(input.id,"įvykio ID"),calendarId=calendarIdentifier(input.calendarId);
     if (typeof input.version !== "string" || !input.version || typeof input.connectionId !== "string") throw new CalendarError("Trūksta įvykio ID, paskyros arba versijos.");
     if(input.allDay!==undefined&&typeof input.allDay!=="boolean")throw new CalendarError("Neteisingas visos dienos įvykio požymis.");
     const allDayInput=input.allDay===true,dates=allDayInput?eventDates(input.start,input.end):undefined,times=allDayInput?undefined:eventTimes(input.start,input.end);
@@ -239,7 +241,7 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     try {return await operation;} finally {if (locks.get(key)===operation) locks.delete(key);}
   }
   async function remove(input:Record<string,unknown>) {
-    const id=identifier(input.id,"įvykio ID"),calendarId=identifier(input.calendarId,"kalendoriaus ID");
+    const id=identifier(input.id,"įvykio ID"),calendarId=calendarIdentifier(input.calendarId);
     if (typeof input.connectionId!=="string" || typeof input.version!=="string" || !input.version) throw new CalendarError("Trūksta paskyros arba įvykio versijos.");
     const connectionId=connected(input.connectionId),key=calendarEventKey(provider,connectionId,calendarId,id);
     const operation=(locks.get(key)||Promise.resolve()).catch(()=>{}).then(async()=>{
@@ -259,7 +261,7 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     if (!input || typeof input!=="object" || Array.isArray(input)) throw new CalendarError("Neteisingi dalyvavimo atsakymo duomenys.");
     const allowed=new Set(["id","calendarId","connectionId","version","responseStatus","comment"]);
     if (Object.keys(input).some(key=>!allowed.has(key))) throw new CalendarError("Pateikti nepalaikomi dalyvavimo atsakymo laukai.");
-    const id=identifier(input.id,"įvykio ID"),calendarId=identifier(input.calendarId,"kalendoriaus ID");
+    const id=identifier(input.id,"įvykio ID"),calendarId=calendarIdentifier(input.calendarId);
     if (typeof input.connectionId!=="string" || typeof input.version!=="string" || !input.version) throw new CalendarError("Trūksta paskyros arba įvykio versijos.");
     if (!(["accepted","tentative","declined"] as unknown[]).includes(input.responseStatus)) throw new CalendarError("Pasirink tinkamą dalyvavimo atsakymą.");
     if (input.comment!==undefined && (typeof input.comment!=="string" || input.comment.length>1000)) throw new CalendarError("Atsakymo komentaras per ilgas.");
