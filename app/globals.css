@@ -52,3 +52,7 @@
 [data-theme="dark"] .loginBox{background:var(--surface);color:var(--ink)}
 [data-theme="dark"] .currentTime span{background:var(--surface);color:var(--error-text)}
 .dropHint{position:absolute;left:4px;right:4px;background:rgba(114,87,226,0.15);border:2px dashed #765de2;border-radius:6px;pointer-events:none;min-height:30px;}
+.allDayDueTask{display:block;width:100%;padding:3px 5px;background:#f0edff;color:#5642b8;border:0;border-radius:4px;font-size:.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;cursor:pointer;margin-bottom:2px;}
+.allDayDueTask:hover{background:#e5e0ff;}
+[data-theme="dark"] .allDayDueTask{background:#2d2550;color:#b4a4f5;}
+[data-theme="dark"] .allDayDueTask:hover{background:#3d3060;}
