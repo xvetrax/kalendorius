@@ -56,6 +56,13 @@ for(const provider of ["google","microsoft"]){
     const response=await patch(body);assert.equal(response.status,200);const updated=await response.json();assert.equal(updated.start.date,body.start);assert.equal(updated.end.date,body.end);assert.equal(updated.allDay,true);
     const reloaded=(await (await route.GET(new Request(url))).json()).items.find(item=>item.key===event.key);assert.equal(reloaded.version,updated.version);assert.equal(reloaded.start.date,body.start);assert.equal(reloaded.end.date,body.end);
   });
+  test(`${provider} actual routes: timed and all-day modes convert in both directions`,async()=>{
+    const event=(await (await route.GET(new Request(url))).json()).items.find(item=>item.editable&&!item.allDay&&!item.attendeeCount&&!item.recurring);assert.ok(event);
+    const identity={id:event.id,calendarId:event.calendarId,connectionId:event.connectionId,version:event.version};
+    const allDayResponse=await patch({...identity,allDay:true,start:"2026-10-27",end:"2026-10-29"});assert.equal(allDayResponse.status,200);const allDay=await allDayResponse.json();assert.equal(allDay.allDay,true);assert.deepEqual(allDay.start,{date:"2026-10-27"});assert.deepEqual(allDay.end,{date:"2026-10-29"});
+    const timedResponse=await patch({...identity,version:allDay.version,allDay:false,start:"2026-10-27T07:00:00Z",end:"2026-10-27T08:00:00Z",timeZone:"Europe/Vilnius"});assert.equal(timedResponse.status,200);const timed=await timedResponse.json();assert.equal(timed.allDay,false);assert.equal(timed.start.dateTime,"2026-10-27T07:00:00.000Z");assert.equal(timed.end.dateTime,"2026-10-27T08:00:00.000Z");assert.equal(timed.timeZone,"Europe/Vilnius");
+    const reloaded=(await (await route.GET(new Request(url))).json()).items.find(item=>item.key===event.key);assert.equal(reloaded.version,timed.version);assert.equal(reloaded.allDay,false);assert.equal(reloaded.start.dateTime,timed.start.dateTime);
+  });
   test(`${provider} actual routes: a timezone change preserves wall time and reloads`,async()=>{
     const event=(await (await route.GET(new Request(url))).json()).items.find(item=>item.editable&&!item.allDay&&!item.attendeeCount);assert.ok(event);assert.ok(event.timeZone);
     const target=event.timeZone==="Europe/London"?"Europe/Vilnius":"Europe/London",start=zonedInstant(zonedLocalInput(event.start.dateTime,event.timeZone),target),end=zonedInstant(zonedLocalInput(event.end.dateTime,event.timeZone),target);

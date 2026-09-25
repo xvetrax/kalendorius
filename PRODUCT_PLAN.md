@@ -121,7 +121,7 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 
 - [x] Visų prieinamų kalendorių sąrašas, spalvos, rašymo teisės, skaitymo pasirinkimas ir pilnas puslapiavimas.
 - [ ] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė turi apimti kalendoriaus ID.
-- [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Naujų ir esamų laiko įvykių redaktoriai valdo IANA laiko zoną, o esamo visos dienos įvykio redaktorius — pirmą bei paskutinę dieną; liko konvertavimas tarp laiko ir visos dienos režimų.
+- [x] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Naujų ir esamų laiko įvykių redaktoriai valdo IANA laiko zoną, o nepasikartojantys įvykiai konvertuojami tarp laiko bei visos dienos režimų.
 - [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. RSVP veiksmas patikrintas sintetiniais Google ir Microsoft tiekėjais.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
 - [ ] ETag / versijų konfliktai, išoriniai pakeitimai ir 401/403/429 apdorojami; dar reikia nedubliuojančio įvykių kūrimo po neaiškaus atsakymo ir gyvos Graph patikros.
@@ -264,7 +264,7 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 | Out of Office | `eventType: "outOfOffice"` — API leidžia skaityti; atsakymo nustatymai per atskiras API | `showAs: oof` — skaitymas OK; rašymui reikia specialių teisių tam tikruose tenant'uose | Rodomas kaip tik skaityti |
 | Working Location | `eventType: "workingLocation"` — skaityti galima; rašyti per `workingLocationProperties` | Nėra atitikmens | Rodomas kaip tik skaityti |
 | Locked | `locked: true` — tiekėjo užraktas; redagavimas draudžiamas net organizatoriui | Nėra tiesioginio lauko | Rodomas kaip tik skaityti |
-| All-day | `start.date` + `end.date` | `isAllDay: true` | Skaityti ✓, redagavimas dar nepalaikomas |
+| All-day | `start.date` + `end.date` | `isAllDay: true` | Skaityti, redaguoti ir konvertuoti į / iš laiko įvykio ✓ |
 | Recurring series | `recurrence[]` (master) | `type: "seriesMaster"` | Tik skaityti — egzemplioriai `[x]` redaguojami |
 | Private | `visibility: "private"` | `sensitivity: "private"` | Rodomas; kuriant galima nustatyti |
 | Birthday / Holiday | `eventType: "birthday"` arba skaitomas kitas kalendorius | Atskiri readonly kalendoriai | Tik skaityti (kiti kalendoriai per D1) |
@@ -463,3 +463,11 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - Serveris atmeta fiksuoto poslinkio, nepalaikomą ar visos dienos įvykiui pateiktą zoną. Senesni klientai be zonos lieka suderinami ir kuria UTC įvykį; Microsoft To Do Outlook blokų UTC sutartis nepakeista.
 - Patikra: `git diff --check`, `npm run typecheck`, 238/238 `npm test`, `npm run build` ir 33/33 `npm run test:e2e` scenarijai praėjo.
 - Ribos: tikros Google ir Microsoft paskyros nekeistos. Kūrimas vis dar vyksta pirminiame kalendoriuje, o neaiškios sėkmingo POST baigties nedubliuojantis pakartojimas ir konvertavimas tarp laiko bei visos dienos režimų lieka kitiems žingsniams.
+
+### 2026-09-25 — laiko ir visos dienos įvykio konvertavimas
+
+- Nepasikartojančio Google arba Outlook įvykio redaktorius leidžia pakeisti režimą abiem kryptimis. Laiko įvykio vietinės kalendorinės dienos tampa visos dienos intervalu su išskirtine tiekėjo pabaiga; tiksli pabaiga vidurnaktį neprideda tuščios papildomos dienos.
+- Visos dienos įvykis, kuris neturi ankstesnės laiko zonos ar valandos, saugiai pradeda konvertavimą nuo 09:00–10:00 UTC; prieš išsaugojimą galima pasirinkti kitą IANA zoną ir laiką. Google gauna `date` arba RFC 3339 laukus, o Outlook — aiškų `isAllDay` bei jo režimui tinkamą `dateTime` ir zoną.
+- Konvertavimas išsaugo aprašymą, vietą, susitikimo nuorodą, priminimus ir kitus nesiunčiamus tiekėjo metaduomenis. Laiko pasikeitimui su dalyviais reikia patvirtinimo, paskyra ir versija tikrinamos kaip anksčiau, o pasikartojančio egzemplioriaus režimas paliktas D4 serijos taisyklėms.
+- Patikra: `git diff --check`, `npm run typecheck`, 244/244 `npm test`, `npm run build` ir 34/34 `npm run test:e2e` scenarijai praėjo.
+- Ribos: tikros Google ir Microsoft paskyros nekeistos. Visos dienos → laiko konvertavimas sąmoningai nespėja ankstesnės valandos ar zonos, nes tiekėjas jų visos dienos įvykyje neturi.

@@ -10,7 +10,7 @@ function fixture(provider) {
     calls.push({path,...init,body:init.body ? JSON.parse(init.body) : undefined});
     if(path.startsWith("/me/outlook/supportedTimeZones"))return {value:state.supportedTimeZones.map(alias=>({alias}))};
     if(init.method==="PATCH") {if(state.rejectWrite)throw Object.assign(new Error("Conflict"),{status:412});const body=JSON.parse(init.body);
-      if(provider==="outlook"&&!raw.isAllDay&&body.start?.timeZone){
+      if(provider==="outlook"&&body.isAllDay!==true&&body.start?.timeZone){
         Object.assign(raw,body,{start:{dateTime:zonedInstant(body.start.dateTime.slice(0,16),body.start.timeZone).replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:zonedInstant(body.end.dateTime.slice(0,16),body.end.timeZone).replace(/Z$/,""),timeZone:"UTC"},originalStartTimeZone:body.start.timeZone,originalEndTimeZone:body.end.timeZone});
       }else Object.assign(raw,body);
       if(provider==="google")raw.etag='"v2"';else raw["@odata.etag"]='W/"v2"';}
@@ -124,7 +124,7 @@ test("Outlook matches equivalent IANA aliases and sends the mailbox-supported na
   const current=normalizeEvent("outlook",raw,"account-a"),updated=await service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,start:"2026-10-24T08:00:00Z",end:"2026-10-24T09:00:00Z",timeZone:"Europe/Kyiv"});
   const write=calls.find(call=>call.method==="PATCH");assert.equal(write.body.start.timeZone,"Europe/Kiev");assert.equal(write.body.end.timeZone,"Europe/Kiev");assert.equal(updated.timeZone,"Europe/Kiev");
 });
-for(const provider of ["google","outlook"])test(`${provider}: all-day date changes require attendee confirmation and reject mode conversion`,async()=>{
+for(const provider of ["google","outlook"])test(`${provider}: all-day date changes and mode conversion require attendee confirmation`,async()=>{
   const {service,raw,calls}=fixture(provider);
   if(provider==="google"){raw.start={date:"2026-10-24"};raw.end={date:"2026-10-25"};raw.attendees=[{email:"guest@example.test"}];}
   else {raw.isAllDay=true;raw.start={dateTime:"2026-10-24T00:00:00",timeZone:"UTC"};raw.end={dateTime:"2026-10-25T00:00:00",timeZone:"UTC"};raw.attendees=[{emailAddress:{address:"guest@example.test"}}];}
@@ -133,7 +133,26 @@ for(const provider of ["google","outlook"])test(`${provider}: all-day date chang
   await assert.rejects(service.update(input),error=>error.status===409);assert.equal(calls.filter(call=>call.method).length,0);
   await service.update({...input,confirmAttendees:true});assert.equal(calls.filter(call=>call.method).length,1);
   const next=normalizeEvent(provider,raw,"account-a");
-  await assert.rejects(service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:next.version,start:"2026-10-25T00:00:00Z",end:"2026-10-26T00:00:00Z"}),error=>error.status===409);
+  const timed={id:raw.id,calendarId:"primary",connectionId:"account-a",version:next.version,allDay:false,start:"2026-10-25T07:00:00Z",end:"2026-10-25T08:00:00Z",timeZone:"Europe/Vilnius"};
+  await assert.rejects(service.update(timed),error=>error.status===409);assert.equal(calls.filter(call=>call.method).length,1);
+  const converted=await service.update({...timed,confirmAttendees:true});assert.equal(converted.allDay,false);assert.equal(converted.start.dateTime,"2026-10-25T07:00:00.000Z");assert.equal(calls.filter(call=>call.method).length,2);
+});
+for(const provider of ["google","outlook"])test(`${provider}: timed and all-day modes round-trip without metadata loss`,async()=>{
+  const {service,raw,calls}=fixture(provider),before=structuredClone(raw),current=normalizeEvent(provider,raw,"account-a");
+  const allDay=await service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,allDay:true,start:"2026-10-24",end:"2026-10-26"});
+  assert.equal(allDay.allDay,true);assert.deepEqual(allDay.start,{date:"2026-10-24"});assert.deepEqual(allDay.end,{date:"2026-10-26"});
+  const firstWrite=calls.find(call=>call.method==="PATCH");
+  if(provider==="google")assert.deepEqual(firstWrite.body,{start:{date:"2026-10-24"},end:{date:"2026-10-26"}});
+  else assert.deepEqual(firstWrite.body,{isAllDay:true,start:{dateTime:"2026-10-24T00:00:00",timeZone:"UTC"},end:{dateTime:"2026-10-26T00:00:00",timeZone:"UTC"}});
+  const timed=await service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:allDay.version,allDay:false,start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"Europe/Vilnius"});
+  const secondWrite=calls.filter(call=>call.method==="PATCH").at(-1);assert.equal(timed.allDay,false);assert.equal(timed.start.dateTime,"2026-10-24T07:00:00.000Z");assert.equal(timed.end.dateTime,"2026-10-24T08:00:00.000Z");
+  if(provider==="google")assert.deepEqual(secondWrite.body,{start:{dateTime:"2026-10-24T07:00:00.000Z",timeZone:"Europe/Vilnius"},end:{dateTime:"2026-10-24T08:00:00.000Z",timeZone:"Europe/Vilnius"}});
+  else assert.deepEqual(secondWrite.body,{isAllDay:false,start:{dateTime:"2026-10-24T10:00:00",timeZone:"Europe/Vilnius"},end:{dateTime:"2026-10-24T11:00:00",timeZone:"Europe/Vilnius"}});
+  assert.deepEqual(raw.attendees,before.attendees);assert.deepEqual(raw.body,before.body);assert.deepEqual(raw.conferenceData,before.conferenceData);assert.deepEqual(raw.reminders,before.reminders);
+});
+for(const provider of ["google","outlook"])test(`${provider}: recurring instances cannot change timed or all-day mode`,async()=>{
+  const {service,raw,calls}=fixture(provider);if(provider==="google")raw.recurringEventId="series";else raw.type="occurrence";
+  const current=normalizeEvent(provider,raw,"account-a");await assert.rejects(service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,allDay:true,start:"2026-10-24",end:"2026-10-25"}),error=>error.status===409&&/originaliame kalendoriuje/.test(error.message));assert.equal(calls.filter(call=>call.method).length,0);
 });
 test("all-day date validation rejects impossible, reversed and timestamp values",()=>{
   for(const values of [["2026-02-30","2026-03-02"],["2026-10-25","2026-10-25"],["2026-10-26","2026-10-25"],["2026-10-25T00:00:00Z","2026-10-26"]])assert.throws(()=>eventDates(...values),error=>error.status===400);

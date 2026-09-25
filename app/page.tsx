@@ -31,6 +31,7 @@ function monday(date: Date) { const d = new Date(date); const weekday = d.getDay
 function sameDay(a: Date, b: Date) { return a.toDateString() === b.toDateString(); }
 function localInput(date: Date) { return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }
 function shiftIsoDate(value:string,days:number){const date=new Date(`${value}T00:00:00Z`);date.setUTCDate(date.getUTCDate()+days);return date.toISOString().slice(0,10);}
+function timedAllDayDates(start:string,end:string){const first=start.slice(0,10);let last=end.slice(0,10);if(end.slice(11,16)==="00:00"&&last>first)last=shiftIsoDate(last,-1);return {start:first,end:last<first?first:last};}
 function durationLabel(value: number) { return value < 60 ? `${value} min.` : `${Math.floor(value / 60)} val.${value % 60 ? ` ${value % 60} min.` : ""}`; }
 function monthStart(date: Date) { return monday(new Date(date.getFullYear(), date.getMonth(), 1)); }
 function addDays(date: Date, amount: number) { const next = new Date(date); next.setDate(next.getDate() + amount); return next; }
@@ -731,7 +732,11 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{
   const {event}=value;
   const eventTimeZone=event.timeZone||"UTC";
   const eventTimeZones=timeZones.includes(eventTimeZone)?timeZones:[eventTimeZone,...timeZones];
+  const originalTimedStart=event.allDay?`${event.start.date}T09:00`:zonedLocalInput(value.start||event.start.dateTime!,eventTimeZone);
+  const originalTimedEnd=event.allDay?`${event.start.date}T10:00`:zonedLocalInput(value.end||event.end.dateTime!,eventTimeZone);
+  const originalDates=event.allDay?{start:event.start.date!,end:shiftIsoDate(event.end.date!,-1)}:timedAllDayDates(originalTimedStart,originalTimedEnd);
   const [error,setError]=useState(""),[saving,setSaving]=useState(false),[responding,setResponding]=useState<Exclude<CalendarResponseStatus,"needsAction">|null>(null),[conflict,setConflict]=useState(false);
+  const [allDay,setAllDay]=useState(event.allDay),[timed,setTimed]=useState({start:originalTimedStart,end:originalTimedEnd,timeZone:eventTimeZone}),[dates,setDates]=useState(originalDates),[timedTouched,setTimedTouched]=useState(false);
   const [attendees,setAttendees]=useState<{email:string;name?:string;self?:boolean;responseStatus:string}[]>(event.attendees||[]);
   const [newEmail,setNewEmail]=useState("");
   function addAttendee() {
@@ -740,6 +745,11 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{
     setAttendees(prev=>[...prev,{email:e,responseStatus:"needsAction"}]);setNewEmail("");
   }
   function removeAttendee(email:string) {setAttendees(prev=>prev.filter(a=>a.email!==email));}
+  function changeAllDay(next:boolean){
+    if(next)setDates(timedAllDayDates(timed.start,timed.end));
+    else if(event.allDay&&!timedTouched)setTimed(current=>({...current,start:`${dates.start}T09:00`,end:`${dates.start}T10:00`}));
+    setAllDay(next);
+  }
   async function respond(status:Exclude<CalendarResponseStatus,"needsAction">) {
     setError("");setConflict(false);setResponding(status);
     try{await onRespond(status);}catch(err){setError(err instanceof Error?err.message:"Nepavyko pateikti dalyvavimo atsakymo.");}finally{setResponding(null);}
@@ -748,25 +758,25 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{
     e.preventDefault();const data=new FormData(e.currentTarget);setError("");setSaving(true);
     try {
       let startValue:string,endValue:string;
-      if(event.allDay){startValue=String(data.get("startDate"));const lastDate=String(data.get("endDate"));endValue=shiftIsoDate(lastDate,1);}
+      if(allDay){startValue=String(data.get("startDate"));const lastDate=String(data.get("endDate"));endValue=shiftIsoDate(lastDate,1);}
       else {const originalStart=value.start || event.start.dateTime!,originalEnd=value.end || event.end.dateTime!;
         const selectedTimeZone=String(data.get("timeZone")||eventTimeZone),startInput=String(data.get("start")),endInput=String(data.get("end"));
-        startValue=selectedTimeZone===eventTimeZone&&startInput===zonedLocalInput(originalStart,eventTimeZone)?originalStart:zonedInstant(startInput,selectedTimeZone);
-        endValue=selectedTimeZone===eventTimeZone&&endInput===zonedLocalInput(originalEnd,eventTimeZone)?originalEnd:zonedInstant(endInput,selectedTimeZone);
+        startValue=!event.allDay&&selectedTimeZone===eventTimeZone&&startInput===zonedLocalInput(originalStart,eventTimeZone)?originalStart:zonedInstant(startInput,selectedTimeZone);
+        endValue=!event.allDay&&selectedTimeZone===eventTimeZone&&endInput===zonedLocalInput(originalEnd,eventTimeZone)?originalEnd:zonedInstant(endInput,selectedTimeZone);
         if(Date.parse(endValue)<=Date.parse(startValue))throw new Error("Pabaiga turi būti vėliau už pradžią.");}
       const attendeesChanged=JSON.stringify(attendees.map(a=>a.email).sort())!==JSON.stringify((event.attendees||[]).map(a=>a.email).sort());
       const summary=data.get("summary"),description=data.get("description"),location=data.get("location");
       const showAs=data.get("showAs"),visibility=data.get("visibility"),reminderValue=data.get("reminder"),originalReminder=eventReminderValue(event),timeZone=data.get("timeZone");
       const reminder=typeof reminderValue==="string"&&reminderValue!==originalReminder ? reminderValue.startsWith("minutes:")?{mode:"minutes",minutes:Number(reminderValue.slice(8))}:{mode:reminderValue} : undefined;
       setConflict(false);
-      await onSave({start:startValue,end:endValue,...(event.allDay?{allDay:true}:{}),
+      await onSave({start:startValue,end:endValue,allDay,
         ...(typeof summary==="string"&&summary!==event.summary?{summary}:{}),
         ...(typeof description==="string"&&description!==(event.description||"")?{description}:{}),
         ...(typeof location==="string"&&location!==(event.location||"")?{location}:{}),
         ...(attendeesChanged ? {attendees:attendees.map(a=>({email:a.email}))} : {}),
         ...(typeof showAs==="string"&&showAs!==event.showAs?{showAs}:{}),
         ...(typeof visibility==="string"&&visibility!==event.visibility?{visibility}:{}),
-        ...(!event.allDay&&typeof timeZone==="string"&&timeZone!==eventTimeZone?{timeZone}:{}),
+        ...(!allDay&&typeof timeZone==="string"&&(event.allDay||timeZone!==eventTimeZone)?{timeZone}:{}),
         ...(reminder?{reminder}:{}),
         confirmAttendees:data.get("confirm")==="on"});
     } catch(err) {
@@ -780,15 +790,16 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{
   const safeLink=event.htmlLink?.startsWith("https://") ? event.htmlLink : undefined;
   return <Modal eyebrow={event.provider==="outlook"?"OUTLOOK":"GOOGLE CALENDAR"} title="Kalendoriaus įvykis" onClose={()=>{if(!saving&&!responding)onClose();}}>
     {!event.editable && <p className="formHint">{event.readOnlyReason}</p>}
-    {event.recurring && event.editable && <p className="formHint">↻ Kartojamas įvykis. Keičiamas tik šis egzempliorius — serija lieka nepakeista.</p>}
+    {event.recurring && event.editable && <p className="formHint">↻ Kartojamas įvykis. Keičiamas tik šis egzempliorius — serija lieka nepakeista, o laiko / visos dienos režimą keisk originaliame kalendoriuje.</p>}
     {error && <p className="formError" role="alert">{error}{conflict && onRefresh && <> <button type="button" className="inlineRefreshBtn" onClick={()=>{onRefresh();onClose();}}>Atnaujinti ir uždaryti →</button></>}</p>}
     {event.canRespond&&event.responseStatus&&<div className="rsvpActions" role="group" aria-label="Dalyvavimo atsakymas"><span>{rsvpLabel(event.responseStatus)}</span><div><button type="button" aria-pressed={event.responseStatus==="accepted"} disabled={!!responding||saving} onClick={()=>void respond("accepted")}>{responding==="accepted"?"Siunčiama…":"Taip"}</button><button type="button" aria-pressed={event.responseStatus==="tentative"} disabled={!!responding||saving} onClick={()=>void respond("tentative")}>{responding==="tentative"?"Siunčiama…":"Galbūt"}</button><button type="button" aria-pressed={event.responseStatus==="declined"} disabled={!!responding||saving} onClick={()=>void respond("declined")}>{responding==="declined"?"Siunčiama…":"Ne"}</button></div></div>}
     <form className="modalForm" onSubmit={submit}>
       <label>Pavadinimas<input name="summary" required maxLength={1024} defaultValue={event.summary} disabled={!event.editable || saving || !!responding}/></label>
       <label>Vieta<input name="location" maxLength={1000} defaultValue={event.location || ""} disabled={!event.editable || saving || !!responding} placeholder="Kabinetas, miestas arba nuoroda…"/></label>
       <label>Aprašymas<textarea name="description" maxLength={10000} defaultValue={event.description || ""} disabled={!event.editable || saving || !!responding} placeholder="Darbotvarkė…"/></label>
-      {!event.allDay && <><div className="formRow"><label>Pradžia<input name="start" type="datetime-local" required disabled={!event.editable || saving || !!responding} defaultValue={zonedLocalInput(value.start || event.start.dateTime!,eventTimeZone)}/></label><label>Pabaiga<input name="end" type="datetime-local" required disabled={!event.editable || saving || !!responding} defaultValue={zonedLocalInput(value.end || event.end.dateTime!,eventTimeZone)}/></label></div><label>Laiko zona<select name="timeZone" defaultValue={eventTimeZone} disabled={!event.editable||saving||!!responding}>{eventTimeZones.map(zone=><option key={zone} value={zone}>{zone}</option>)}</select></label></>}
-      {event.allDay && <div className="formRow"><label>Pirma diena<input name="startDate" type="date" required disabled={!event.editable||saving||!!responding} defaultValue={event.start.date}/></label><label>Paskutinė diena<input name="endDate" type="date" required disabled={!event.editable||saving||!!responding} defaultValue={shiftIsoDate(event.end.date!,-1)}/></label></div>}
+      <label className="onlineSwitch"><input type="checkbox" checked={allDay} onChange={change=>changeAllDay(change.target.checked)} disabled={!event.editable||saving||!!responding||event.recurring}/><i/>Visos dienos įvykis</label>
+      {!allDay && <><div className="formRow"><label>Pradžia<input name="start" type="datetime-local" required disabled={!event.editable || saving || !!responding} value={timed.start} onChange={change=>{setTimedTouched(true);setTimed(current=>({...current,start:change.target.value}));}}/></label><label>Pabaiga<input name="end" type="datetime-local" required disabled={!event.editable || saving || !!responding} value={timed.end} onChange={change=>{setTimedTouched(true);setTimed(current=>({...current,end:change.target.value}));}}/></label></div><label>Laiko zona<select name="timeZone" value={timed.timeZone} onChange={change=>setTimed(current=>({...current,timeZone:change.target.value}))} disabled={!event.editable||saving||!!responding}>{eventTimeZones.map(zone=><option key={zone} value={zone}>{zone}</option>)}</select></label></>}
+      {allDay && <div className="formRow"><label>Pirma diena<input name="startDate" type="date" required disabled={!event.editable||saving||!!responding} value={dates.start} onChange={change=>setDates(current=>({...current,start:change.target.value}))}/></label><label>Paskutinė diena<input name="endDate" type="date" required disabled={!event.editable||saving||!!responding} value={dates.end} onChange={change=>setDates(current=>({...current,end:change.target.value}))}/></label></div>}
       <div className="formRow"><label>Laisvas / užimtas<select name="showAs" defaultValue={event.showAs} disabled={!event.editable||saving||!!responding}><option value="busy">Užimtas</option><option value="free">Laisvas</option>{event.provider==="outlook"&&<><option value="tentative">Neapsispręsta</option><option value="oof">Ne biure</option><option value="workingElsewhere">Dirba kitur</option><option value="unknown">Kita Outlook būsena</option></>}</select></label><label>Matomumas<select name="visibility" defaultValue={event.visibility} disabled={!event.editable||saving||!!responding||event.recurring}><option value="default">Numatytasis</option>{event.provider==="google"&&<option value="public">Viešas</option>}{event.provider==="outlook"&&<option value="personal">Asmeninis</option>}<option value="private">Privatus</option><option value="confidential">Konfidencialus</option></select></label></div>
       <label>Priminimas<select name="reminder" defaultValue={eventReminderValue(event)} disabled={!event.editable||saving||!!responding}>{event.provider==="google"&&<option value="default">Kalendoriaus numatytasis</option>}<option value="none">Be priminimo</option>{[0,5,10,15,30,60,1440].map(minutes=><option key={minutes} value={`minutes:${minutes}`}>{minutes===0?"Įvykio metu":minutes===60?"1 val. prieš":minutes===1440?"1 d. prieš":`${minutes} min. prieš`}</option>)}{event.reminder.mode==="custom"&&<option value="custom">Kitas tiekėjo nustatymas (nekeisti)</option>}{event.reminder.mode==="minutes"&&![0,5,10,15,30,60,1440].includes(event.reminder.minutes||0)&&<option value={`minutes:${event.reminder.minutes}`}>{event.reminder.minutes} min. prieš (nekeisti)</option>}</select></label>
       <div className="attendeeSection">
@@ -798,7 +809,7 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh}:{value:{
         {event.editable && <div className="addAttendee"><input type="email" value={newEmail} onChange={e=>setNewEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addAttendee();}}} placeholder="el.paštas@pavyzdys.lt" disabled={saving||!!responding}/><button type="button" onClick={addAttendee} disabled={saving||!!responding||!newEmail.trim()}>Pridėti</button></div>}
       </div>
       {event.editable && attendees.length>0 && <label className="confirmAttendees"><input type="checkbox" name="confirm" disabled={saving||!!responding}/>Patvirtinu pakeitimus — bus išsiųsti pranešimai dalyviams, jei laikas pasikeitė</label>}
-      <p className="formHint">Keičiami pavadinimas, vieta, aprašymas, laikas, laiko zona, dalyviai, matomumas, laisvo / užimto laiko būsena ir priminimas. Susitikimo nuoroda išsaugoma.</p>
+      <p className="formHint">Keičiami pavadinimas, vieta, aprašymas, laikas arba visos dienos datos, laiko zona, dalyviai, matomumas, laisvo / užimto laiko būsena ir priminimas. Susitikimo nuoroda išsaugoma.</p>
       <div className="modalActions">{safeLink && <a className="originalEvent" href={safeLink} target="_blank" rel="noopener noreferrer">Atverti originalą ↗</a>}{event.editable && <button className="newButton" disabled={saving||!!responding}>{saving?"Saugoma…":"Išsaugoti įvykį"}</button>}</div>
     </form>
   </Modal>;

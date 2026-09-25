@@ -61,7 +61,7 @@ globalThis.fetch=async(input,init={})=>{
     }else{
       const supported=isGoogle?["start","end","summary","subject","transparency","visibility","reminders"]:["start","end","summary","subject","showAs","sensitivity","isReminderOn","reminderMinutesBeforeStart","isAllDay"];
       if(Object.keys(body).some(k=>!supported.includes(k)))throw new Error("Fixture caught destructive metadata update");
-      if(!isGoogle&&!event.isAllDay&&body.start?.timeZone)Object.assign(event,body,{start:{dateTime:zonedInstant(body.start.dateTime.slice(0,16),body.start.timeZone).replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:zonedInstant(body.end.dateTime.slice(0,16),body.end.timeZone).replace(/Z$/,""),timeZone:"UTC"},originalStartTimeZone:body.start.timeZone,originalEndTimeZone:body.end.timeZone});
+      if(!isGoogle&&body.isAllDay!==true&&body.start?.timeZone)Object.assign(event,body,{start:{dateTime:zonedInstant(body.start.dateTime.slice(0,16),body.start.timeZone).replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:zonedInstant(body.end.dateTime.slice(0,16),body.end.timeZone).replace(/Z$/,""),timeZone:"UTC"},originalStartTimeZone:body.start.timeZone,originalEndTimeZone:body.end.timeZone});
       else Object.assign(event,body);
     }
     version++;event[isGoogle?"etag":"@odata.etag"]=`"v${version}"`;

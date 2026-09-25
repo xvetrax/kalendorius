@@ -1,4 +1,4 @@
-import {isCalendarTimeZone,matchingCalendarTimeZone,zonedProviderDateTime} from "./calendar-time-zone.ts";
+import {isCalendarTimeZone,matchingCalendarTimeZone,unambiguousZonedProviderDateTime} from "./calendar-time-zone.ts";
 
 export type CalendarProvider = "google" | "outlook";
 export type CalendarResponseStatus = "needsAction" | "accepted" | "tentative" | "declined";
@@ -116,6 +116,10 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     const calendar=encodeURIComponent(calendarId),event=encodeURIComponent(eventId);
     return google ? `/calendars/${calendar}/events/${event}` : calendarId==="primary" ? `/me/calendar/events/${event}` : `/me/calendars/${calendar}/events/${event}`;
   }
+  function outlookDateTime(value:string,timeZone:string){
+    try{return unambiguousZonedProviderDateTime(value,timeZone);}
+    catch(error){throw new CalendarError(error instanceof Error?error.message:"Neteisingas Outlook įvykio laikas.");}
+  }
   async function listOne(start:string,end:string,calId:string|null,calName:string|undefined,calColor:string|undefined,connectionId:string) {
     const raw:any[]=[];
     const calEnc=calId && (google || calId!=="primary") ? encodeURIComponent(calId) : null;
@@ -192,21 +196,22 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       const current=normalizeEvent(provider,raw,connectionId,calendarId);
       if (!current.editable) throw new CalendarError(current.readOnlyReason,403);
       if (current.version !== input.version) throw new CalendarError("Įvykis jau pakeistas kitur. Atnaujink kalendorių ir peržiūrėk laiką.",409);
-      if(current.allDay!==allDayInput)throw new CalendarError("Laiko ir visos dienos įvykio konvertavimas dar nepalaikomas.",409);
-      let timeZone=current.allDay?undefined:requestedTimeZone||current.timeZone||"UTC";
+      const modeChanged=current.allDay!==allDayInput;
+      if(modeChanged&&current.recurring)throw new CalendarError("Pasikartojančio įvykio režimą keisk originaliame kalendoriuje.",409);
+      let timeZone=allDayInput?undefined:requestedTimeZone||(!current.allDay?current.timeZone:undefined)||"UTC";
       const rawEndTimeZone=google?raw.end?.timeZone:raw.originalEndTimeZone;
-      if(!google&&requestedTimeZone&&requestedTimeZone!==current.timeZone&&requestedTimeZone!=="UTC"){
+      if(!google&&!allDayInput&&requestedTimeZone&&requestedTimeZone!=="UTC"&&(current.allDay||requestedTimeZone!==current.timeZone)){
         const supported=await gateway.request("/me/outlook/supportedTimeZones(TimeZoneStandard=microsoft.graph.timeZoneStandard'Iana')");connected(connectionId);
         if(!Array.isArray(supported?.value))throw new CalendarError("Microsoft negrąžino palaikomų laiko zonų.",502);
         const matched=matchingCalendarTimeZone(requestedTimeZone,supported.value.map((item:any)=>item?.alias));
         if(!matched)throw new CalendarError("Microsoft pašto dėžutė nepalaiko pasirinktos laiko zonos.");
         timeZone=matched;
       }
-      const endTimeZone=current.allDay?undefined:requestedTimeZone?timeZone:(isCalendarTimeZone(rawEndTimeZone)?rawEndTimeZone:timeZone);
+      const endTimeZone=allDayInput?undefined:(requestedTimeZone||current.allDay)?timeZone:(isCalendarTimeZone(rawEndTimeZone)?rawEndTimeZone:timeZone);
       if(current.recurring&&input.visibility!==undefined&&input.visibility!==current.visibility)throw new CalendarError("Pasikartojančio įvykio matomumą keisk originaliame kalendoriuje.",409);
       const curStart=current.start.dateTime ? new Date(current.start.dateTime).getTime() : NaN;
       const curEnd=current.end.dateTime ? new Date(current.end.dateTime).getTime() : NaN;
-      const timeChanged=current.allDay ? current.start.date!==dates!.start||current.end.date!==dates!.end : !Number.isNaN(curStart)&&(curStart!==new Date(times!.start).getTime()||curEnd!==new Date(times!.end).getTime());
+      const timeChanged=modeChanged||(current.allDay ? current.start.date!==dates!.start||current.end.date!==dates!.end : !Number.isNaN(curStart)&&(curStart!==new Date(times!.start).getTime()||curEnd!==new Date(times!.end).getTime()));
       if (timeChanged && current.attendeeCount && input.confirmAttendees !== true) throw new CalendarError("Laiko pakeitimas išsiųs atnaujinimą dalyviams. Patvirtink pakeitimą.",409);
       const locPatch=input.location !== undefined ? (google ? {location:String(input.location||"").slice(0,1000)||null} : {location:{displayName:String(input.location||"").slice(0,1000)}}) : {};
       const descPatch=input.description !== undefined ? (google ? {description:String(input.description||"").slice(0,10000)} : {body:{contentType:"text",content:String(input.description||"").slice(0,10000)}}) : {};
@@ -222,8 +227,8 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
         ...(input.visibility!==undefined?{sensitivity:input.visibility==="default"?"normal":input.visibility}:{}),
         ...(reminder?reminder.mode==="none"?{isReminderOn:false}:{isReminderOn:true,reminderMinutesBeforeStart:reminder.minutes}:{}),
       };
-      const timePatch=current.allDay ? (google ? {start:{date:dates!.start},end:{date:dates!.end}} : {isAllDay:true,start:{dateTime:`${dates!.start}T00:00:00`,timeZone:"UTC"},end:{dateTime:`${dates!.end}T00:00:00`,timeZone:"UTC"}})
-        : (google ? {start:{dateTime:times!.start,timeZone:timeZone!},end:{dateTime:times!.end,timeZone:endTimeZone!}} : {start:{dateTime:zonedProviderDateTime(times!.start,timeZone!),timeZone:timeZone!},end:{dateTime:zonedProviderDateTime(times!.end,endTimeZone!),timeZone:endTimeZone!}});
+      const timePatch=allDayInput ? (google ? {start:{date:dates!.start},end:{date:dates!.end}} : {isAllDay:true,start:{dateTime:`${dates!.start}T00:00:00`,timeZone:"UTC"},end:{dateTime:`${dates!.end}T00:00:00`,timeZone:"UTC"}})
+        : (google ? {start:{dateTime:times!.start,timeZone:timeZone!},end:{dateTime:times!.end,timeZone:endTimeZone!}} : {...(current.allDay?{isAllDay:false}:{}),start:{dateTime:outlookDateTime(times!.start,timeZone!),timeZone:timeZone!},end:{dateTime:outlookDateTime(times!.end,endTimeZone!),timeZone:endTimeZone!}});
       const patch=google ? {...timePatch,...(input.summary !== undefined ? {summary:input.summary} : {}),...locPatch,...descPatch,...attendeePatch,...propertyPatch} : {...timePatch,...(input.summary !== undefined ? {subject:input.summary} : {}),...locPatch,...descPatch,...attendeePatch,...propertyPatch};
       const updated=await gateway.request(base+(google ? "?sendUpdates=all&conferenceDataVersion=1" : ""),{method:"PATCH",headers:{...headers,...((google || raw["@odata.etag"]) ? {"If-Match":current.version} : {})},body:JSON.stringify(patch)});
       connected(connectionId);
