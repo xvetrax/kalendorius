@@ -1,4 +1,5 @@
-import { CalendarError, createCalendarService } from "@/lib/calendar-events";
+import { CalendarError, createCalendarService, eventDates, eventTimes } from "@/lib/calendar-events";
+import {isCalendarTimeZone,matchingCalendarTimeZone} from "@/lib/calendar-time-zone";
 import { db, saveSetting, setting } from "@/lib/db";
 import { OUTLOOK_DEFAULT_CALENDAR_SETTING, outlookDefaultCalendarId, outlookMirrorTaskKey } from "@/lib/outlook-mirror-link";
 import { graphFetch, isMicrosoftConnected } from "@/lib/microsoft";
@@ -49,12 +50,33 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const body = await request.json();
+    if(!body||typeof body!=="object"||Array.isArray(body))throw new CalendarError("Neteisingi įvykio duomenys.");
     if (!String(body.summary || "").trim() || !body.start || !body.end) return Response.json({ error: "Trūksta pavadinimo arba laiko" }, { status: 400 });
-    const event = buildOutlookEvent(body);
-    if (new Date(String(body.end)) <= new Date(String(body.start))) return Response.json({ error: "Pabaiga turi būti vėliau už pradžią" }, { status: 400 });
+    const connectionId=isMicrosoftConnected()?setting("microsoft_connection_generation")||"legacy":null;
+    if(!connectionId)throw new CalendarError("Microsoft paskyra neprijungta.",409);
+    if(body.allDay){
+      if(body.timeZone!==undefined)throw new CalendarError("Visos dienos įvykiui laiko zona nesiunčiama.");
+      const dates=eventDates(body.start,body.end);body.start=dates.start;body.end=dates.end;
+    }else{
+      const times=eventTimes(body.start,body.end),requested=body.timeZone===undefined?"UTC":body.timeZone;
+      if(!isCalendarTimeZone(requested))throw new CalendarError("Pasirink galiojančią IANA laiko zoną.");
+      body.start=times.start;body.end=times.end;body.timeZone=requested;
+      if(requested!=="UTC"){
+        const supported=await graphFetch("/me/outlook/supportedTimeZones(TimeZoneStandard=microsoft.graph.timeZoneStandard'Iana')");
+        if(!isMicrosoftConnected()||(setting("microsoft_connection_generation")||"legacy")!==connectionId)throw new CalendarError("Microsoft paskyra pasikeitė. Atnaujink kalendorių.",409);
+        if(!Array.isArray(supported?.value))throw new CalendarError("Microsoft negrąžino palaikomų laiko zonų.",502);
+        const matched=matchingCalendarTimeZone(requested,supported.value.map((item:any)=>item?.alias));
+        if(!matched)throw new CalendarError("Microsoft pašto dėžutė nepalaiko pasirinktos laiko zonos.");
+        body.timeZone=matched;
+      }
+    }
+    let event:ReturnType<typeof buildOutlookEvent>;
+    try{event=buildOutlookEvent(body);}catch(error){throw new CalendarError(error instanceof Error?error.message:"Neteisingas įvykio laikas.");}
+    if(!isMicrosoftConnected()||(setting("microsoft_connection_generation")||"legacy")!==connectionId)throw new CalendarError("Microsoft paskyra pasikeitė. Atnaujink kalendorių.",409);
     const data = await graphFetch("/me/events", { method: "POST", body: JSON.stringify(event) });
+    if(!isMicrosoftConnected()||(setting("microsoft_connection_generation")||"legacy")!==connectionId)throw new CalendarError("Microsoft paskyra pasikeitė. Atnaujink kalendorių.",409);
     return Response.json(data, { status: 201 });
-  } catch (error) { return apiError(error); }
+  } catch (error) { return failure(error); }
 }
 
 export async function DELETE(request: Request) {

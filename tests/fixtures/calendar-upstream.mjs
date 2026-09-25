@@ -18,6 +18,7 @@ google.set("google-short",{...structuredClone(google.get("google-personal")),id:
 google.set("google-invite",{...structuredClone(google.get("google-personal")),id:"google-invite",summary:"Google kvietimas",organizer:{self:false},attendees:[{email:"me@example.test",self:true,responseStatus:"needsAction"},{email:"host@example.test",organizer:true,responseStatus:"accepted"}],start:{dateTime:date(3,15)},end:{dateTime:date(3,16)}});
 outlook.set("outlook-readonly",{...outlook.get("outlook-readonly"),responseStatus:{response:"notResponded"},attendees:[{emailAddress:{address:"host@example.test"},status:{response:"accepted"}}]});
 export const calendarUpstream={google:new Map([["primary",google],["other/calendar",new Map([["google-personal",{...structuredClone(google.get("google-personal")),summary:"Kitas Google"}]])]]),outlook:new Map([["primary",outlook],["other/calendar",new Map([["outlook-personal",{...structuredClone(outlook.get("outlook-personal")),subject:"Kitas Outlook"}]])]])};
+export const calendarUpstreamWrites=[];
 globalThis.fetch=async(input,init={})=>{
   const url=new URL(String(input)),method=init.method || "GET";
   if(url.hostname==="oauth2.googleapis.com" || url.hostname==="login.microsoftonline.com")return Response.json({access_token:"synthetic-access"});
@@ -28,17 +29,22 @@ globalThis.fetch=async(input,init={})=>{
     {id:"opaque-default",name:"Pagrindinis",color:"auto",isDefaultCalendar:true,canEdit:true},
     {id:"other/calendar",name:"Kitas",color:"lightBlue",isDefaultCalendar:false,canEdit:true},
   ]});
-  if(url.pathname.startsWith("/v1.0/me/outlook/supportedTimeZones"))return Response.json({value:[{alias:"Europe/Vilnius",displayName:"Europe/Vilnius"},{alias:"Europe/London",displayName:"Europe/London"}]});
+  if(url.pathname.startsWith("/v1.0/me/outlook/supportedTimeZones"))return Response.json({value:[{alias:"Europe/Vilnius",displayName:"Europe/Vilnius"},{alias:"Europe/London",displayName:"Europe/London"},{alias:"Europe/Kiev",displayName:"Europe/Kiev"}]});
   if(url.pathname==="/v1.0/me/calendar")return Response.json({id:"opaque-default"});
   const isGoogle=url.hostname==="www.googleapis.com";
   const match=isGoogle ? url.pathname.match(/^\/calendar\/v3\/calendars\/([^/]+)\/events(?:\/(.+))?$/)
     : url.pathname.match(/^\/v1\.0\/me\/calendars\/([^/]+)\/(?:calendarView|events)(?:\/(.+))?$/);
-  const defaultOutlook=!isGoogle && (url.pathname==="/v1.0/me/calendarView" || url.pathname.startsWith("/v1.0/me/calendar/events/"));
+  const defaultOutlook=!isGoogle && (url.pathname==="/v1.0/me/events" || url.pathname==="/v1.0/me/calendarView" || url.pathname.startsWith("/v1.0/me/calendar/events/"));
   if(!match && !defaultOutlook)return Response.json({error:"Fixture endpoint missing"},{status:404});
   const calendarId=match?decodeURIComponent(match[1]):"primary",map=calendarUpstream[isGoogle?"google":"outlook"].get(calendarId);
   if(!map)return Response.json({error:"Missing calendar"},{status:404});
   const encodedId=match?match[2]:url.pathname.startsWith("/v1.0/me/calendar/events/")?url.pathname.slice("/v1.0/me/calendar/events/".length):undefined;
   if(!encodedId && method==="GET")return Response.json({[isGoogle?"items":"value"]:[...map.values()]});
+  if(!encodedId&&method==="POST"){
+    const body=JSON.parse(init.body),id=`created-${isGoogle?"google":"outlook"}-${++version}`;calendarUpstreamWrites.push({provider:isGoogle?"google":"outlook",path:url.pathname,body:structuredClone(body)});
+    const created=isGoogle?{id,etag:`"v${version}"`,organizer:{self:true},...body}:{id,"@odata.etag":`W/"v${version}"`,isOrganizer:true,type:"singleInstance",...body,...(!body.isAllDay?{start:{dateTime:zonedInstant(body.start.dateTime.slice(0,16),body.start.timeZone).replace(/Z$/,""),timeZone:"UTC"},end:{dateTime:zonedInstant(body.end.dateTime.slice(0,16),body.end.timeZone).replace(/Z$/,""),timeZone:"UTC"},originalStartTimeZone:body.start.timeZone,originalEndTimeZone:body.end.timeZone}:{})};
+    map.set(id,created);return Response.json(created,{status:201});
+  }
   const actionMatch=!isGoogle&&encodedId?.match(/^(.+)\/(accept|tentativelyAccept|decline)$/),id=decodeURIComponent(actionMatch?.[1]||encodedId||""),event=map.get(id);
   if(!event)return Response.json({error:"Not found"},{status:404});
   if(actionMatch&&method==="POST"){

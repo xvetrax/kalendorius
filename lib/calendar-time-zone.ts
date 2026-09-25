@@ -34,6 +34,12 @@ export function isCalendarTimeZone(value:unknown):value is string{
   return canonicalCalendarTimeZone(value)!==null;
 }
 
+export function matchingCalendarTimeZone(value:unknown,aliases:unknown[]){
+  const canonical=canonicalCalendarTimeZone(value);
+  if(!canonical)return null;
+  return aliases.find((alias):alias is string=>typeof alias==="string"&&canonicalCalendarTimeZone(alias)===canonical)||null;
+}
+
 export function calendarTimeZones(){
   return ["UTC",...Intl.supportedValuesOf("timeZone").filter(value=>value!=="UTC")];
 }
@@ -48,6 +54,12 @@ export function zonedProviderDateTime(iso:string,timeZone:string){
   const instant=Date.parse(iso);
   if(!Number.isFinite(instant)||!isCalendarTimeZone(timeZone))throw new Error("Neteisingas įvykio laikas arba laiko zona.");
   return wallValue(instant,timeZone,true);
+}
+
+export function unambiguousZonedProviderDateTime(iso:string,timeZone:string){
+  const value=zonedProviderDateTime(iso,timeZone);
+  zonedInstant(value.slice(0,16),timeZone);
+  return value;
 }
 
 export function zonedInstant(value:string,timeZone:string){

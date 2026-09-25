@@ -15,7 +15,7 @@ process.env.APP_ORIGIN="http://localhost:3000";process.env.CALENDAR_TEST_FIXTURE
 for(const provider of ["GOOGLE","MICROSOFT"]){process.env[`${provider}_CLIENT_ID`]="synthetic-client";process.env[`${provider}_CLIENT_SECRET`]="synthetic-secret";process.env[`${provider}_REDIRECT_URI`]=`http://localhost:3000/api/${provider.toLowerCase()}/callback`;}
 const hooks=registerHooks({resolve(specifier,context,next){return next(specifier.startsWith("@/")?pathToFileURL(path.resolve(import.meta.dirname,"..",specifier.slice(2)+".ts")).href:specifier,context);}});
 const originalFetch=globalThis.fetch;
-await import("./fixtures/calendar-upstream.mjs");
+const fixture=await import("./fixtures/calendar-upstream.mjs"),{calendarUpstream,calendarUpstreamWrites}=fixture;
 const {db,saveSetting,setting}=await import("../lib/db.ts");const {encrypt}=await import("../lib/secrets.ts");
 for(const provider of ["google","microsoft"]){saveSetting(`${provider}_refresh_token`,encrypt("synthetic-refresh"));saveSetting(`${provider}_account_id`,"fixture-account");saveSetting(`${provider}_connection_generation`,`${provider}-fixture`);}
 const routes={google:await import("../app/api/google/events/route.ts"),microsoft:await import("../app/api/microsoft/events/route.ts")};
@@ -26,6 +26,7 @@ const shiftDate=(value,days)=>{const date=new Date(`${value}T00:00:00Z`);date.se
 for(const provider of ["google","microsoft"]){
   const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
   const patch=(body,origin="http://localhost:3000")=>route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify(body)}));
+  const post=(body,origin="http://localhost:3000")=>route.POST(new Request(url,{method:"POST",headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify(body)}));
   test(`${provider} actual routes: normalized list, move, duration, source reload and conflict status`,async()=>{
     const listed=await route.GET(new Request(url));assert.equal(listed.status,200);assert.equal(listed.headers.get("cache-control"),"no-store");
     const event=(await listed.json()).items.find(e=>e.editable&&!e.attendeeCount);assert.ok(event);
@@ -60,6 +61,24 @@ for(const provider of ["google","microsoft"]){
     const target=event.timeZone==="Europe/London"?"Europe/Vilnius":"Europe/London",start=zonedInstant(zonedLocalInput(event.start.dateTime,event.timeZone),target),end=zonedInstant(zonedLocalInput(event.end.dateTime,event.timeZone),target);
     const response=await patch({...inputFor(event),start,end,timeZone:target});assert.equal(response.status,200);const updated=await response.json();assert.equal(updated.timeZone,target);assert.equal(updated.start.dateTime,start);assert.equal(updated.end.dateTime,end);
     const reloaded=(await (await route.GET(new Request(url))).json()).items.find(item=>item.key===event.key);assert.equal(reloaded.timeZone,target);assert.equal(reloaded.start.dateTime,start);assert.equal(reloaded.end.dateTime,end);
+  });
+  test(`${provider} actual routes: timed creation writes the selected timezone`,async()=>{
+    const requested=provider==="google"?"Europe/Vilnius":"Europe/Kyiv",providerZone=provider==="google"?requested:"Europe/Kiev",before=calendarUpstreamWrites.length;
+    const body={summary:`${provider} zonos kūrimas`,start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:requested,showAs:"busy"};
+    const response=await post(body);assert.equal(response.status,201);assert.equal(calendarUpstreamWrites.length,before+1);
+    const write=calendarUpstreamWrites.at(-1);assert.equal(write.provider,provider==="google"?"google":"outlook");assert.equal(write.body.start.timeZone,providerZone);assert.equal(write.body.end.timeZone,providerZone);
+    if(provider==="google"){assert.equal(write.body.start.dateTime,"2026-10-24T07:00:00.000Z");assert.equal(write.body.end.dateTime,"2026-10-24T08:00:00.000Z");}
+    else {assert.equal(write.body.start.dateTime,"2026-10-24T10:00:00");assert.equal(write.body.end.dateTime,"2026-10-24T11:00:00");}
+  });
+  test(`${provider} actual routes: invalid and all-day timezones never create`,async()=>{
+    const before=calendarUpstreamWrites.length,base={summary:"Nekurti",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z"};
+    assert.equal((await post({...base,timeZone:"+03:00"})).status,400);
+    assert.equal((await post({summary:"Nekurti",allDay:true,start:"2026-10-24",end:"2026-10-25",timeZone:"Europe/Vilnius"})).status,400);
+    if(provider==="microsoft"){
+      assert.equal((await post({...base,timeZone:"Pacific/Auckland"})).status,400);
+      const fold=await post({...base,start:"2026-10-24T23:30:00Z",end:"2026-10-25T00:30:00Z",timeZone:"Europe/Vilnius"});assert.equal(fold.status,400);assert.match((await fold.json()).error,/kartojasi/);
+    }
+    assert.equal((await post({...base,timeZone:"UTC"},"https://attacker.example")).status,403);assert.equal(calendarUpstreamWrites.length,before);
   });
 }
 for(const provider of ["google","microsoft"])test(`${provider} actual route submits an account-bound RSVP and reloads its status`,async()=>{
@@ -113,7 +132,6 @@ for(const provider of ["google","microsoft"]) test(`${provider}: same-ID events 
 });
 
 test("Outlook route confirms mirror identity by account and transaction, never by event ID alone",async()=>{
-  const {calendarUpstream}=await import("./fixtures/calendar-upstream.mjs");
   const source=calendarUpstream.outlook.get("primary").get("outlook-personal");
   const mirror={...structuredClone(source),id:"mirror-shared",showAs:"free",transactionId:"created-by-this-plan",subject:"✓ Darbas",
     bodyPreview:"Dienos planas: pasirenkamas užduoties darbo laikas.",body:{contentType:"text",content:"Dienos planas: pasirenkamas užduoties darbo laikas."},

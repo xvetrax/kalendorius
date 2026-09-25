@@ -1,4 +1,4 @@
-import {canonicalCalendarTimeZone,isCalendarTimeZone,zonedProviderDateTime} from "./calendar-time-zone.ts";
+import {isCalendarTimeZone,matchingCalendarTimeZone,zonedProviderDateTime} from "./calendar-time-zone.ts";
 
 export type CalendarProvider = "google" | "outlook";
 export type CalendarResponseStatus = "needsAction" | "accepted" | "tentative" | "declined";
@@ -198,10 +198,9 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       if(!google&&requestedTimeZone&&requestedTimeZone!==current.timeZone&&requestedTimeZone!=="UTC"){
         const supported=await gateway.request("/me/outlook/supportedTimeZones(TimeZoneStandard=microsoft.graph.timeZoneStandard'Iana')");connected(connectionId);
         if(!Array.isArray(supported?.value))throw new CalendarError("Microsoft negrąžino palaikomų laiko zonų.",502);
-        const requestedCanonical=canonicalCalendarTimeZone(requestedTimeZone);
-        const matched=supported.value.find((item:any)=>typeof item?.alias==="string"&&canonicalCalendarTimeZone(item.alias)===requestedCanonical);
+        const matched=matchingCalendarTimeZone(requestedTimeZone,supported.value.map((item:any)=>item?.alias));
         if(!matched)throw new CalendarError("Microsoft pašto dėžutė nepalaiko pasirinktos laiko zonos.");
-        timeZone=matched.alias;
+        timeZone=matched;
       }
       const endTimeZone=current.allDay?undefined:requestedTimeZone?timeZone:(isCalendarTimeZone(rawEndTimeZone)?rawEndTimeZone:timeZone);
       if(current.recurring&&input.visibility!==undefined&&input.visibility!==current.visibility)throw new CalendarError("Pasikartojančio įvykio matomumą keisk originaliame kalendoriuje.",409);

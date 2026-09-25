@@ -15,7 +15,7 @@ import { MicrosoftTaskReminder } from "@/app/microsoft-task-reminder";
 import { MicrosoftTaskRecurrence } from "@/app/microsoft-task-recurrence";
 import { GoogleTaskOrder } from "@/app/google-task-order";
 import {FOCUS_DURATION_SECONDS,parseFocusSession,remainingFocusSeconds,serializeFocusSession} from "@/lib/focus-session";
-import {calendarTimeZones,zonedInstant,zonedLocalInput} from "@/lib/calendar-time-zone";
+import {calendarTimeZones,isCalendarTimeZone,zonedInstant,zonedLocalInput} from "@/lib/calendar-time-zone";
 
 type View = "calendar" | "tasks" | "focus";
 type Mode = "day" | "workweek" | "week" | "month";
@@ -473,10 +473,13 @@ function TaskModal({onClose,onSave,lists,destination,onDestination}:{onClose:()=
 }
 function EventModal({ initial, outlook, google, outlookReady, googleReady, onClose, onSave }: { initial: Date; outlook: boolean; google: boolean; outlookReady: boolean; googleReady: boolean; onClose: () => void; onSave: () => void }) {
   const start = new Date(initial);
+  const [timed,setTimed]=useState(()=>{const value=Intl.DateTimeFormat().resolvedOptions().timeZone,timeZone=isCalendarTimeZone(value)?value:"UTC";return {timeZone,start:zonedLocalInput(start.toISOString(),timeZone)};});
+  const timeZone=timed.timeZone;
+  const modalTimeZones=timeZones.includes(timeZone)?timeZones:[timeZone,...timeZones];
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [allDay, setAllDay] = useState(false);
-  const startDate = localInput(start).slice(0, 10);
+  const startDate = zonedLocalInput(start.toISOString(),timeZone).slice(0, 10);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); setSaving(true); setError("");
     try {
@@ -489,9 +492,9 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
         const nextDay = new Date(ed); nextDay.setDate(nextDay.getDate() + 1);
         body = { ...common, allDay: true, start: sd, end: nextDay.toISOString().slice(0, 10) };
       } else {
-        const from = new Date(String(f.get("start"))); const end = new Date(from.getTime() + Number(f.get("duration")) * 60000);
+        const selectedTimeZone=String(f.get("timeZone")),from=zonedInstant(String(f.get("start")),selectedTimeZone),end=new Date(Date.parse(from)+Number(f.get("duration"))*60000).toISOString();
         const rm = f.get("reminderMinutes"); const reminderMinutes = rm !== null && rm !== "" ? Number(rm) : undefined;
-        body = { ...common, start: from.toISOString(), end: end.toISOString(), attendees: f.get("attendees"), addMeet: f.get("online") === "on", ...(reminderMinutes !== undefined ? { reminderMinutes } : {}) };
+        body = { ...common, start: from, end, timeZone:selectedTimeZone, attendees: f.get("attendees"), addMeet: f.get("online") === "on", ...(reminderMinutes !== undefined ? { reminderMinutes } : {}) };
       }
       const response = await fetch(`/api/${provider === "outlook" ? "microsoft" : "google"}/events`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       await responseJson(response); await onSave();
@@ -504,7 +507,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
       <label>Pavadinimas<input name="summary" required autoFocus placeholder="Susitikimo pavadinimas"/></label>
       <div className="formRow"><label>Kalendorius<select name="provider" defaultValue={outlook ? "outlook" : "google"}>{outlook && <option value="outlook">Outlook Calendar</option>}{google && <option value="google">Google Calendar</option>}</select></label>{!allDay && <label>Trukmė<select name="duration" defaultValue="30"><option value="15">15 min.</option><option value="30">30 min.</option><option value="60">1 val.</option><option value="90">1,5 val.</option></select></label>}</div>
       <label className="onlineSwitch"><input type="checkbox" checked={allDay} onChange={e=>setAllDay(e.target.checked)}/><i/>Visos dienos įvykis</label>
-      {allDay ? <div className="formRow"><label>Pradžia<input name="startDate" type="date" required defaultValue={startDate}/></label><label>Pabaiga<input name="endDate" type="date" defaultValue={startDate}/></label></div> : <label>Pradžia<input name="start" type="datetime-local" required defaultValue={localInput(start)}/></label>}
+      {allDay ? <div className="formRow"><label>Pradžia<input name="startDate" type="date" required defaultValue={startDate}/></label><label>Pabaiga<input name="endDate" type="date" defaultValue={startDate}/></label></div> : <><label>Pradžia<input name="start" type="datetime-local" required value={timed.start} onChange={event=>setTimed(current=>({...current,start:event.target.value}))}/></label><label>Laiko zona<select name="timeZone" value={timeZone} onChange={event=>setTimed(current=>({...current,timeZone:event.target.value}))}>{modalTimeZones.map(zone=><option key={zone} value={zone}>{zone}</option>)}</select></label></>}
       <div className="formRow"><label>Laisvas / užimtas<select name="showAs"><option value="busy">Užimtas</option><option value="free">Laisvas</option></select></label><label>Matomumas<select name="visibility"><option value="">Numatytasis</option><option value="private">Privatus</option></select></label></div>
       {!allDay && <label>Priminimas<select name="reminderMinutes"><option value="">Numatytasis</option><option value="0">Įvykio metu</option><option value="5">5 min. prieš</option><option value="10">10 min. prieš</option><option value="15">15 min. prieš</option><option value="30">30 min. prieš</option><option value="60">1 val. prieš</option><option value="1440">1 d. prieš</option></select></label>}
       <label>Vieta<input name="location" maxLength={1000} placeholder="Kabinetas, miestas arba nuoroda…"/></label>

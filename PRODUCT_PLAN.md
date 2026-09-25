@@ -121,7 +121,7 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 
 - [x] Visų prieinamų kalendorių sąrašas, spalvos, rašymo teisės, skaitymo pasirinkimas ir pilnas puslapiavimas.
 - [ ] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė turi apimti kalendoriaus ID.
-- [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Esamų laiko įvykių redaktorius valdo IANA laiko zoną, matomumą, laisvo / užimto laiko būseną ir priminimą, o visos dienos redaktorius — pirmą bei paskutinę dieną; liko naujo įvykio laiko zonos pasirinkimas ir konvertavimas tarp laiko bei visos dienos režimų.
+- [ ] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Naujų ir esamų laiko įvykių redaktoriai valdo IANA laiko zoną, o esamo visos dienos įvykio redaktorius — pirmą bei paskutinę dieną; liko konvertavimas tarp laiko ir visos dienos režimų.
 - [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. RSVP veiksmas patikrintas sintetiniais Google ir Microsoft tiekėjais.
 - [ ] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ tik su atskirai patikrintu serijos skaidymu.
 - [ ] ETag / versijų konfliktai, išoriniai pakeitimai ir 401/403/429 apdorojami; dar reikia nedubliuojančio įvykių kūrimo po neaiškaus atsakymo ir gyvos Graph patikros.
@@ -455,3 +455,11 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio nau
 - Outlook prieš pakeitimą perskaito pašto dėžutės palaikomas IANA zonas, kanoniškai sulygina lygiaverčius aliasus ir siunčia Graph vietinį `dateTime` su konkrečiu pašto dėžutės grąžintu zonos vardu. Google gauna absoliutų RFC 3339 laiką ir zoną. Nesusijęs redagavimas išsaugo atskiras tiekėjo pradžios bei pabaigos zonas; visos dienos įvykiui zona nesiunčiama.
 - Patikra: `git diff --check`, `npm run typecheck`, 233/233 `npm test`, `npm run build` ir 32/32 `npm run test:e2e` scenarijai praėjo.
 - Ribos: tikros Google ir Microsoft paskyros nekeistos. Outlook įvykio sena Windows zonos reikšmė, kurios JavaScript neatpažįsta kaip IANA, redaktoriuje saugiai rodoma kaip UTC. Naujo įvykio laiko zonos pasirinkimas ir režimų konvertavimas lieka kitiems žingsniams; D2 punktas dar neužbaigtas.
+
+### 2026-09-25 — naujo laiko įvykio laiko zona
+
+- Naujo Google arba Outlook laiko įvykio formoje galima pasirinkti IANA zoną. Pakeitus zoną įvestas sieninis pradžios laikas lieka toks pats, o klientas perskaičiuoja absoliutų momentą; trukmė pridedama prie momento. Outlook kūrimas atmetamas prieš tiekėjo POST, jei galinis Graph sieninis laikas dėl DST atsukimo būtų dviprasmis.
+- Google POST gauna RFC 3339 pradžią bei pabaigą kartu su pasirinkta zona. Outlook prieš kūrimą patikrina pašto dėžutės palaikomas IANA zonas, suderina lygiaverčius aliasus ir Graph siunčia vietinį `dateTime` su pašto dėžutės grąžintu zonos vardu. Paskyros pasikeitimas tarp patikros ir kūrimo atmetamas.
+- Serveris atmeta fiksuoto poslinkio, nepalaikomą ar visos dienos įvykiui pateiktą zoną. Senesni klientai be zonos lieka suderinami ir kuria UTC įvykį; Microsoft To Do Outlook blokų UTC sutartis nepakeista.
+- Patikra: `git diff --check`, `npm run typecheck`, 238/238 `npm test`, `npm run build` ir 33/33 `npm run test:e2e` scenarijai praėjo.
+- Ribos: tikros Google ir Microsoft paskyros nekeistos. Kūrimas vis dar vyksta pirminiame kalendoriuje, o neaiškios sėkmingo POST baigties nedubliuojantis pakartojimas ir konvertavimas tarp laiko bei visos dienos režimų lieka kitiems žingsniams.

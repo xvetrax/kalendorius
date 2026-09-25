@@ -1,4 +1,5 @@
-import { CalendarError, createCalendarService } from "@/lib/calendar-events";
+import { CalendarError, createCalendarService, eventDates, eventTimes } from "@/lib/calendar-events";
+import {isCalendarTimeZone} from "@/lib/calendar-time-zone";
 import { setting } from "@/lib/db";
 import crypto from "node:crypto";
 import { googleFetch, isGoogleConnected } from "@/lib/google";
@@ -26,7 +27,10 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const body = await request.json();
+    if(!body||typeof body!=="object"||Array.isArray(body))throw new CalendarError("Neteisingi įvykio duomenys.");
     if (!String(body.summary || "").trim() || !body.start || !body.end) return Response.json({ error: "Trūksta pavadinimo arba laiko" }, { status: 400 });
+    const connectionId=isGoogleConnected()?setting("google_connection_generation")||"legacy":null;
+    if(!connectionId)throw new CalendarError("Google paskyra neprijungta.",409);
     const common: Record<string, unknown> = {
       summary: String(body.summary).trim(), description: String(body.description || ""),
       ...(body.location ? { location: String(body.location).slice(0, 1000) } : {}),
@@ -35,21 +39,22 @@ export async function POST(request: Request) {
     };
     let event: Record<string, unknown>;
     if (body.allDay) {
-      const startDate = String(body.start).slice(0, 10);
-      const endDate = String(body.end).slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate <= startDate) return Response.json({ error: "Neteisingas įvykio laikas" }, { status: 400 });
-      event = { ...common, start: { date: startDate }, end: { date: endDate } };
+      if(body.timeZone!==undefined)throw new CalendarError("Visos dienos įvykiui laiko zona nesiunčiama.");
+      const dates=eventDates(body.start,body.end);
+      event = { ...common, start: { date: dates.start }, end: { date: dates.end } };
     } else {
-      const start = new Date(String(body.start)); const end = new Date(String(body.end));
-      if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return Response.json({ error: "Neteisingas įvykio laikas" }, { status: 400 });
+      const times=eventTimes(body.start,body.end),timeZone=body.timeZone===undefined?"UTC":body.timeZone;
+      if(!isCalendarTimeZone(timeZone))throw new CalendarError("Pasirink galiojančią IANA laiko zoną.");
       const mins = Number(body.reminderMinutes);
       const reminders = Number.isFinite(mins) && mins >= 0 ? { useDefault: false, overrides: [{ method: "popup", minutes: mins }] } : { useDefault: true };
-      event = { ...common, start: { dateTime: start.toISOString(), timeZone: "UTC" }, end: { dateTime: end.toISOString(), timeZone: "UTC" }, attendees: String(body.attendees || "").split(",").map((email) => email.trim()).filter(Boolean).map((email) => ({ email })), reminders };
+      event = { ...common, start: { dateTime: times.start, timeZone }, end: { dateTime: times.end, timeZone }, attendees: String(body.attendees || "").split(",").map((email) => email.trim()).filter(Boolean).map((email) => ({ email })), reminders };
       if (body.addMeet) event.conferenceData = { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } } };
     }
+    if(!isGoogleConnected()||(setting("google_connection_generation")||"legacy")!==connectionId)throw new CalendarError("Google paskyra pasikeitė. Atnaujink kalendorių.",409);
     const data = await googleFetch("/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all", { method: "POST", body: JSON.stringify(event) });
+    if(!isGoogleConnected()||(setting("google_connection_generation")||"legacy")!==connectionId)throw new CalendarError("Google paskyra pasikeitė. Atnaujink kalendorių.",409);
     return Response.json(data, { status: 201 });
-  } catch (error) { return apiError(error); }
+  } catch (error) { return failure(error); }
 }
 
 export async function DELETE(request: Request) {
