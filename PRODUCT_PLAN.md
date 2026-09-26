@@ -1,10 +1,12 @@
 # „Dienos planas“ — kelias iki kasdien naudojamo produkto
 
-Atnaujinta: 2026-09-25. Būsena: **tikslas aktyvus; auditas atliktas, produktas dar nebaigtas**.
+Atnaujinta: 2026-09-26. Būsena: **asmeninio produkto tikslas aktyvus; kelių naudotojų plėtra suplanuota atskirai**.
 
 ## Tikslas ir darbo principas
 
 Vieno naudotojo, nemokama, savarankiškai talpinama planavimo programėlė lietuvių kalba. Viename lange — Google ir Outlook kalendoriai, Google Tasks, Microsoft To Do ir vietinės užduotys. Pagrindinis scenarijus: sukurti užduotį, nutempti ją į antradienio 10:00 langelį, perkelti į trečiadienį, prailginti iki 60 min., užbaigti tiesiai kalendoriuje ir matyti teisingą būseną šaltinyje.
+
+Pasirinktas kitas produkto plėtros tikslas — viena bendra instancija su atskiromis pakviestų naudotojų paskyromis ir izoliuotais OAuth ryšiais. Švari naujos DB architektūra, darbų seka ir priėmimo scenarijai aprašyti [MULTI_USER_PLAN.md](MULTI_USER_PLAN.md).
 
 Užduoties terminas ir suplanuotas darbo laikas yra atskiri duomenys. Planavimo veiksmas nekeičia termino ir nesukuria išorinio įvykio. Pasirenkamas Outlook blokas visada `showAs: free`. Vietinės užduotys matomos ir prijungus išorines paskyras.
 
