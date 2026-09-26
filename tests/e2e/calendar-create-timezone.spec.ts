@@ -19,6 +19,7 @@ test("new Google and Outlook events keep wall time in the selected timezone",asy
 
   await page.getByRole("button",{name:"Naujas įvykis",exact:true}).click();
   let dialog=page.getByRole("dialog",{name:"Naujas įvykis"});
+  await expect(dialog.getByText("Pasikartojimas",{exact:true})).toBeVisible();
   await dialog.getByLabel("Paskyra").selectOption("google");await dialog.getByLabel("Kalendorius").selectOption("other/calendar");await expect(dialog.getByLabel("Kalendorius").locator('option[value="readonly"]')).toHaveCount(0);await dialog.getByLabel("Pavadinimas").fill("Google zona");
   await dialog.getByLabel("Pradžia").fill("2026-10-24T10:00");await dialog.getByLabel("Laiko zona").selectOption("Europe/Vilnius");await expect(dialog.getByLabel("Pradžia")).toHaveValue("2026-10-24T10:00");
   await dialog.getByLabel("Kartoti įvykį").check();await dialog.getByLabel("Įvykio kartojimo intervalas").fill("2");await dialog.getByLabel("Įvykio kartojimo pabaiga").selectOption("count");await dialog.getByLabel("Kartojamų įvykių skaičius").fill("5");

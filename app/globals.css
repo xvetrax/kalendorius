@@ -31,7 +31,7 @@
 .focusStarted{display:block;margin-top:7px;color:#8f9cb0;font-size:.7rem}
 [data-theme="dark"] html,[data-theme="dark"] body{background:var(--surface)}
 [data-theme="dark"] .mainSurface{background:var(--surface)}
-[data-theme="dark"] .ghostButton,[data-theme="dark"] .newButton{background:var(--surface);border-color:var(--line)}
+[data-theme="dark"] .ghostButton{background:var(--surface);border-color:var(--line)}
 [data-theme="dark"] .calendarToolbar button{background:var(--surface);color:var(--muted)}
 [data-theme="dark"] .modeTabs button.active{background:var(--surface);color:var(--ink)}
 [data-theme="dark"] .corner,[data-theme="dark"] .dayHead,[data-theme="dark"] .hourLabels{background:var(--surface)}

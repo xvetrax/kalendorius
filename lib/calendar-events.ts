@@ -63,16 +63,23 @@ export function calendarEventKey(provider:CalendarProvider,connectionId:string,c
   return JSON.stringify([provider,connectionId,calendarId,id]);
 }
 function stripHtml(html: string): string {
+  const numericEntity=(_:string,value:string,radix=10)=>{const code=Number.parseInt(value,radix);return Number.isInteger(code)&&code>=0&&code<=0x10ffff?String.fromCodePoint(code):"�";};
   return html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<(head|style|script)[^>]*>[\s\S]*?<\/\1>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|h[1-6])\s*>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "• ")
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
+    .replace(/&apos;|&#39;/g, "'")
+    .replace(/&#(\d+);/g,(match,value)=>numericEntity(match,value))
+    .replace(/&#x([0-9a-f]+);/gi,(match,value)=>numericEntity(match,value,16))
     .replace(/\r\n|\r/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }

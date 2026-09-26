@@ -142,6 +142,11 @@ test("Outlook matches equivalent IANA aliases and sends the mailbox-supported na
   const current=normalizeEvent("outlook",raw,"account-a"),updated=await service.update({id:raw.id,calendarId:"primary",connectionId:"account-a",version:current.version,start:"2026-10-24T08:00:00Z",end:"2026-10-24T09:00:00Z",timeZone:"Europe/Kyiv"});
   const write=calls.find(call=>call.method==="PATCH");assert.equal(write.body.start.timeZone,"Europe/Kiev");assert.equal(write.body.end.timeZone,"Europe/Kiev");assert.equal(updated.timeZone,"Europe/Kiev");
 });
+test("Outlook HTML descriptions become readable plain text",()=>{
+  const {raw}=fixture("outlook");
+  raw.body.content='<!doctype html><html><head><meta charset="utf-8"><style>.x{color:red}</style></head><body><p>Pirma eilutė<br>Antra &amp; trečia</p><ul><li>Punktas &#x2713;</li><li>Blogas kodas &#99999999;</li></ul><script>alert(1)</script></body></html>';
+  assert.equal(normalizeEvent("outlook",raw,"account-a").description,"Pirma eilutė\nAntra & trečia\n• Punktas ✓\n• Blogas kodas �");
+});
 for(const provider of ["google","outlook"])test(`${provider}: all-day date changes and mode conversion require attendee confirmation`,async()=>{
   const {service,raw,calls}=fixture(provider);
   if(provider==="google"){raw.start={date:"2026-10-24"};raw.end={date:"2026-10-25"};raw.attendees=[{email:"guest@example.test"}];}

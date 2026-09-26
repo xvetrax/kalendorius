@@ -35,6 +35,13 @@ function localInput(date: Date) { return new Date(date.getTime() - date.getTimez
 function shiftIsoDate(value:string,days:number){const date=new Date(`${value}T00:00:00Z`);date.setUTCDate(date.getUTCDate()+days);return date.toISOString().slice(0,10);}
 function timedAllDayDates(start:string,end:string){const first=start.slice(0,10);let last=end.slice(0,10);if(end.slice(11,16)==="00:00"&&last>first)last=shiftIsoDate(last,-1);return {start:first,end:last<first?first:last};}
 function durationLabel(value: number) { return value < 60 ? `${value} min.` : `${Math.floor(value / 60)} val.${value % 60 ? ` ${value % 60} min.` : ""}`; }
+function taskDropHint(lane:HTMLElement,clientY:number,grab:number,duration:number){
+  const day=lane.dataset.day;
+  if(!day)return null;
+  const date=dateAtMinute(new Date(`${day}T00:00:00`),clientY-lane.getBoundingClientRect().top-grab);
+  const minute=minuteOfDay(date);
+  return {day,minute,height:Math.min(duration,1440-minute)};
+}
 function monthStart(date: Date) { return monday(new Date(date.getFullYear(), date.getMonth(), 1)); }
 function addDays(date: Date, amount: number) { const next = new Date(date); next.setDate(next.getDate() + amount); return next; }
 class HttpError extends Error {status:number;constructor(message:string,status:number){super(message);this.status=status;}}
@@ -325,9 +332,9 @@ function TaskCard({task,onDone,onFocus}:{task:Task;onDone:()=>void;onFocus:()=>v
       if(saving || event.button!==0 || event.pointerType==="touch" || (button && !button.classList.contains("taskDetailsButton")))return;
       pointer.current={x:event.clientX,y:event.clientY};
     }}
-    onPointerMove={event=>{const p=pointer.current;if(!p)return;if(moved.current || Math.hypot(event.clientX-p.x,event.clientY-p.y)>5){if(!moved.current)event.currentTarget.setPointerCapture(event.pointerId);moved.current=true;setGhost({x:event.clientX,y:event.clientY});}}}
+    onPointerMove={event=>{const p=pointer.current;if(!p)return;if(moved.current || Math.hypot(event.clientX-p.x,event.clientY-p.y)>5){if(!moved.current)event.currentTarget.setPointerCapture(event.pointerId);moved.current=true;setGhost({x:event.clientX,y:event.clientY});const lane=document.elementsFromPoint(event.clientX,event.clientY).find(el=>el instanceof HTMLElement&&el.classList.contains("dayLane")) as HTMLElement|undefined;if(lane){try{actions.setDragHint(taskDropHint(lane,event.clientY,0,task.duration_minutes));}catch{actions.setDragHint(null);}}else actions.setDragHint(null);}}}
     onPointerLeave={()=>{if(!moved.current)pointer.current=null;}}
-    onPointerCancel={()=>{pointer.current=null;setGhost(null);}}
+    onPointerCancel={()=>{pointer.current=null;setGhost(null);actions.setDragHint(null);}}
     onPointerUp={event=>{
       if(!pointer.current)return;pointer.current=null;if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);setGhost(null);actions.setDragHint(null);if(!moved.current)return;
       const lane=document.elementsFromPoint(event.clientX,event.clientY).find(el=>el instanceof HTMLElement && el.classList.contains("dayLane")) as HTMLElement|undefined;
@@ -402,7 +409,7 @@ function TaskBlock({ task, segment }: { task: Task; segment:DaySegment }) {
       onClick={(e) => {if (e.detail===0 || !moved.current) actions.edit(task);}}
       onKeyDown={(e) => {if(!segment.gestureSafe||!e.shiftKey)return;const steps:Record<string,number>={ArrowDown:15,ArrowUp:-15,ArrowRight:1440,ArrowLeft:-1440};const step=steps[e.key];if(!step)return;e.preventDefault();const ns=new Date(start.getTime()+step*60000);setSaving(true);void actions.move(task,ns).finally(()=>setSaving(false));}}
       onPointerDown={(e) => {moved.current=false;if (!segment.gestureSafe || e.button !== 0) return;moveGesture.current={x:e.clientX,y:e.clientY,grab:e.clientY-e.currentTarget.closest(".eventBlock")!.getBoundingClientRect().top};moved.current=false;e.currentTarget.setPointerCapture(e.pointerId);}}
-      onPointerMove={(e) => {const g=moveGesture.current;if (!g) return;const dx=e.clientX-g.x,dy=e.clientY-g.y;if (moved.current || Math.hypot(dx,dy)>5) {moved.current=true;setOffset({x:dx,y:dy});const hintLane=document.elementsFromPoint(e.clientX,e.clientY).find(el=>el instanceof HTMLElement && el.classList.contains("dayLane")) as HTMLElement|undefined;const sourceLane=e.currentTarget.closest(".dayLane") as HTMLElement|undefined;if(hintLane?.dataset.day){const laneTop=hintLane.getBoundingClientRect().top;actions.setDragHint({day:hintLane.dataset.day,minute:e.clientY-laneTop-g.grab,height:task.duration_minutes});setCrossedDay(hintLane.dataset.day!==sourceLane?.dataset.day);}else{actions.setDragHint(null);setCrossedDay(false);}}}}
+      onPointerMove={(e) => {const g=moveGesture.current;if (!g) return;const dx=e.clientX-g.x,dy=e.clientY-g.y;if (moved.current || Math.hypot(dx,dy)>5) {moved.current=true;setOffset({x:dx,y:dy});const hintLane=document.elementsFromPoint(e.clientX,e.clientY).find(el=>el instanceof HTMLElement && el.classList.contains("dayLane")) as HTMLElement|undefined;const sourceLane=e.currentTarget.closest(".dayLane") as HTMLElement|undefined;if(hintLane?.dataset.day){try{actions.setDragHint(taskDropHint(hintLane,e.clientY,g.grab,task.duration_minutes));setCrossedDay(hintLane.dataset.day!==sourceLane?.dataset.day);}catch{actions.setDragHint(null);setCrossedDay(false);}}else{actions.setDragHint(null);setCrossedDay(false);}}}}
       onPointerCancel={() => {moveGesture.current=null;setOffset(null);setCrossedDay(false);actions.setDragHint(null);}}
       onPointerUp={(e) => {
         if (!moveGesture.current) return;const grab=moveGesture.current.grab;moveGesture.current=null;e.currentTarget.releasePointerCapture(e.pointerId);
