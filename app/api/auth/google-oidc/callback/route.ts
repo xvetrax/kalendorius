@@ -13,7 +13,7 @@
  *   - Logs security_event for every outcome.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { db, createSession, SESSION_COOKIE } from "@/lib/db-multi";
 import { consumeInvite, markInviteUsed, addIdentity } from "@/lib/user-service";
 import { verifyGoogleIdToken } from "@/lib/oidc";
@@ -79,6 +79,19 @@ export async function GET(request: Request): Promise<Response> {
     return Response.redirect(`${origin}/?error=login-cancelled`, 302);
   }
 
+  // Fix 1: Verify state is bound to this browser's cookie (CSRF protection)
+  const cookieHeader = request.headers.get("cookie") ?? "";
+  const cookieState = parseCookieValue(cookieHeader, "oauth_state_google");
+  if (!cookieState) {
+    logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "missing_state_cookie" } });
+    return clearStateCookie(Response.redirect(`${origin}/?error=auth-invalid`, 302), origin);
+  }
+  const cs = Buffer.from(cookieState), qs = Buffer.from(rawState);
+  if (cs.length !== qs.length || !timingSafeEqual(cs, qs)) {
+    logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "state_cookie_mismatch" } });
+    return clearStateCookie(Response.redirect(`${origin}/?error=auth-invalid`, 302), origin);
+  }
+
   const stateHash = sha256Hex(rawState);
 
   // Look up auth_operation by state hash
@@ -98,17 +111,17 @@ export async function GET(request: Request): Promise<Response> {
 
   if (!op) {
     logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "state_not_found" } });
-    return Response.redirect(`${origin}/?error=auth-invalid`, 302);
+    return clearStateCookie(Response.redirect(`${origin}/?error=auth-invalid`, 302), origin);
   }
 
   if (op.used !== 0) {
     logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "state_replayed" } });
-    return Response.redirect(`${origin}/?error=auth-replayed`, 302);
+    return clearStateCookie(Response.redirect(`${origin}/?error=auth-replayed`, 302), origin);
   }
 
   if (new Date(op.expires_at) <= new Date()) {
     logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "auth_op_expired" } });
-    return Response.redirect(`${origin}/?error=auth-expired`, 302);
+    return clearStateCookie(Response.redirect(`${origin}/?error=auth-expired`, 302), origin);
   }
 
   // Mark auth_operation used atomically to prevent replay
@@ -118,14 +131,14 @@ export async function GET(request: Request): Promise<Response> {
 
   if (markResult.changes === 0) {
     logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "state_race" } });
-    return Response.redirect(`${origin}/?error=auth-replayed`, 302);
+    return clearStateCookie(Response.redirect(`${origin}/?error=auth-replayed`, 302), origin);
   }
 
   // Exchange authorization code for tokens
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
-    return Response.redirect(`${origin}/?error=not-configured`, 302);
+    return clearStateCookie(Response.redirect(`${origin}/?error=not-configured`, 302), origin);
   }
 
   const redirectUri = `${origin}/api/auth/google-oidc/callback`;
@@ -160,7 +173,7 @@ export async function GET(request: Request): Promise<Response> {
       ipHint: ip,
       details: { provider: "google", reason: "token_exchange_error", error: String(err).slice(0, 200) },
     });
-    return Response.redirect(`${origin}/?error=auth-failed`, 302);
+    return clearStateCookie(Response.redirect(`${origin}/?error=auth-failed`, 302), origin);
   }
 
   // Verify id_token
@@ -172,7 +185,7 @@ export async function GET(request: Request): Promise<Response> {
       ipHint: ip,
       details: { provider: "google", reason: "id_token_invalid", error: String(err).slice(0, 200) },
     });
-    return Response.redirect(`${origin}/?error=auth-failed`, 302);
+    return clearStateCookie(Response.redirect(`${origin}/?error=auth-failed`, 302), origin);
   }
 
   // id_token verified — NEVER store it; work only with claims from here
@@ -196,13 +209,25 @@ export async function GET(request: Request): Promise<Response> {
         ipHint: ip,
         details: { provider: "google", reason: `invite_invalid: ${reason}`, subject },
       });
-      return Response.redirect(`${origin}/?error=invite-invalid`, 302);
+      return clearStateCookie(Response.redirect(`${origin}/?error=invite-invalid`, 302), origin);
     }
 
-    // Create user + identity + mark invite used in a single transaction
+    // Fix 3: Atomic invite consumption — claim invite FIRST to prevent race conditions
     let userId: number;
     try {
       db.exec("BEGIN");
+
+      // FIRST: atomically claim the invite (prevents double-use race)
+      const inviteClaimResult = db.prepare(`
+        UPDATE invites SET used_at = ?, used_by = 0 WHERE id = ? AND used_at IS NULL
+      `).run(nowIso(), invite.id);
+      if (inviteClaimResult.changes !== 1) {
+        db.exec("ROLLBACK");
+        logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "invite_race", invite_id: invite.id } });
+        return clearStateCookie(Response.redirect(`${origin}/?error=invite-invalid`, 302), origin);
+      }
+
+      // THEN create user + identity
       const userResult = db.prepare(`
         INSERT INTO users (display_name, primary_email, role, status, created_at, last_login_at)
         VALUES (?, ?, ?, 'active', ?, ?)
@@ -214,9 +239,8 @@ export async function GET(request: Request): Promise<Response> {
         VALUES (?, 'google', ?, ?, ?)
       `).run(userId, issuer, subject, email || null);
 
-      db.prepare(`
-        UPDATE invites SET used_at = ?, used_by = ? WHERE id = ? AND used_at IS NULL
-      `).run(nowIso(), userId, invite.id);
+      // Update invite used_by with actual userId (was set to 0 above for atomicity)
+      db.prepare(`UPDATE invites SET used_by = ? WHERE id = ?`).run(userId, invite.id);
 
       // Update last_login_at for users table
       db.prepare(`UPDATE users SET last_login_at = ? WHERE id = ?`).run(nowIso(), userId);
@@ -228,7 +252,7 @@ export async function GET(request: Request): Promise<Response> {
         ipHint: ip,
         details: { provider: "google", reason: "user_create_error", error: String(err).slice(0, 200) },
       });
-      return Response.redirect(`${origin}/?error=auth-failed`, 302);
+      return clearStateCookie(Response.redirect(`${origin}/?error=auth-failed`, 302), origin);
     }
 
     const { rawToken } = createSession(userId);
@@ -242,45 +266,49 @@ export async function GET(request: Request): Promise<Response> {
 
     const resp = Response.redirect(`${origin}/`, 302);
     resp.headers.set("Set-Cookie", sessionCookieHeader(rawToken, origin));
+    clearStateCookie(resp, origin);
     return resp;
   }
 
   // --- Identity linking: adding Google to an existing session ---
   if (op.session_id !== null) {
-    // Verify the session is still valid
-    const session = db.prepare(`
-      SELECT user_id FROM sessions
-      WHERE id = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
-    `).get(op.session_id) as { user_id: number } | undefined;
-
-    if (!session) {
-      logSecurityEvent("login_failure", {
-        ipHint: ip,
-        details: { provider: "google", reason: "linking_session_expired", session_id: op.session_id },
-      });
-      return Response.redirect(`${origin}/?error=session-expired`, 302);
+    // Fix 2: Verify the CURRENT request's session cookie belongs to the same session
+    // as the one that initiated the link — prevents CSRF account takeover
+    const currentRawToken = parseCookieValue(request.headers.get("cookie") ?? "", SESSION_COOKIE);
+    if (!currentRawToken) {
+      logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "linking_no_session_cookie" } });
+      return clearStateCookie(Response.redirect(`${origin}/?error=session-expired`, 302), origin);
+    }
+    const currentTokenHash = sha256Hex(currentRawToken);
+    const currentSession = db.prepare(`
+      SELECT id, user_id FROM sessions
+      WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+    `).get(currentTokenHash) as { id: number; user_id: number } | undefined;
+    if (!currentSession || currentSession.id !== op.session_id) {
+      logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "linking_session_mismatch" } });
+      return clearStateCookie(Response.redirect(`${origin}/?error=auth-invalid`, 302), origin);
     }
 
     try {
-      addIdentity(session.user_id, "google", issuer, subject, email || null);
+      addIdentity(currentSession.user_id, "google", issuer, subject, email || null);
     } catch (err) {
       const reason = err instanceof Error ? err.message : "unknown";
       logSecurityEvent("login_failure", {
         ipHint: ip,
-        details: { provider: "google", reason: `identity_link_error: ${reason}`, user_id: session.user_id },
+        details: { provider: "google", reason: `identity_link_error: ${reason}`, user_id: currentSession.user_id },
       });
       const errorSlug =
         reason === "identity_linked_to_different_user" ? "identity-conflict" : "identity-link-failed";
-      return Response.redirect(`${origin}/settings?error=${errorSlug}`, 302);
+      return clearStateCookie(Response.redirect(`${origin}/settings?error=${errorSlug}`, 302), origin);
     }
 
     logSecurityEvent("identity_linked", {
-      userId: session.user_id,
+      userId: currentSession.user_id,
       ipHint: ip,
       details: { provider: "google" },
     });
 
-    return Response.redirect(`${origin}/settings?linked=google`, 302);
+    return clearStateCookie(Response.redirect(`${origin}/settings?linked=google`, 302), origin);
   }
 
   // --- Returning user login ---
@@ -293,7 +321,7 @@ export async function GET(request: Request): Promise<Response> {
       ipHint: ip,
       details: { provider: "google", reason: "no_identity", issuer },
     });
-    return Response.redirect(`${origin}/?error=no-invite`, 302);
+    return clearStateCookie(Response.redirect(`${origin}/?error=no-invite`, 302), origin);
   }
 
   // Verify user is active
@@ -306,7 +334,7 @@ export async function GET(request: Request): Promise<Response> {
       ipHint: ip,
       details: { provider: "google", reason: "account_disabled", user_id: identity.user_id },
     });
-    return Response.redirect(`${origin}/?error=account-disabled`, 302);
+    return clearStateCookie(Response.redirect(`${origin}/?error=account-disabled`, 302), origin);
   }
 
   // Update last_login_at
@@ -318,11 +346,12 @@ export async function GET(request: Request): Promise<Response> {
 
   const resp = Response.redirect(`${origin}/`, 302);
   resp.headers.set("Set-Cookie", sessionCookieHeader(rawToken, origin));
+  clearStateCookie(resp, origin);
   return resp;
 }
 
 // ---------------------------------------------------------------------------
-// Cookie header builder
+// Cookie helpers
 // ---------------------------------------------------------------------------
 
 function sessionCookieHeader(rawToken: string, origin: string): string {
@@ -335,4 +364,21 @@ function sessionCookieHeader(rawToken: string, origin: string): string {
     "SameSite=Lax",
     ...(secure ? ["Secure"] : []),
   ].join("; ");
+}
+
+function clearStateCookie(resp: Response, origin: string): Response {
+  const secure = origin.startsWith("https://");
+  resp.headers.append(
+    "Set-Cookie",
+    `oauth_state_google=; Path=/api/auth/google-oidc/callback; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`,
+  );
+  return resp;
+}
+
+function parseCookieValue(cookieHeader: string, name: string): string | null {
+  for (const part of cookieHeader.split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (k?.trim() === name) return rest.join("=").trim() || null;
+  }
+  return null;
 }

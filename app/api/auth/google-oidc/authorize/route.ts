@@ -122,7 +122,14 @@ export async function GET(request: Request): Promise<Response> {
   authUrl.searchParams.set("code_challenge_method", "S256");
   authUrl.searchParams.set("prompt", "select_account");
 
-  return Response.redirect(authUrl.toString(), 302);
+  // Fix 1: Bind state to browser via cookie (CSRF protection)
+  const secure = origin.startsWith("https://");
+  const redirectResponse = Response.redirect(authUrl.toString(), 302);
+  redirectResponse.headers.set(
+    "Set-Cookie",
+    `oauth_state_google=${rawState}; Path=/api/auth/google-oidc/callback; Max-Age=600; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`,
+  );
+  return redirectResponse;
 }
 
 // ---------------------------------------------------------------------------
