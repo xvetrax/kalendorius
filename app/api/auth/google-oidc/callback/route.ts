@@ -1,0 +1,338 @@
+/**
+ * GET /api/auth/google-oidc/callback
+ *
+ * Google OIDC authorization code callback.
+ *
+ * Security:
+ *   - Validates state by SHA-256 hash lookup; marks auth_operation used atomically.
+ *   - Exchanges code for tokens using PKCE verifier (stored server-side).
+ *   - Verifies id_token with verifyGoogleIdToken (iss, aud, exp, nonce, signature).
+ *   - NEVER stores id_token or access_token — only verified claims.
+ *   - Identity linked by verified issuer+subject only; never by email.
+ *   - No automatic account merging.
+ *   - Logs security_event for every outcome.
+ */
+
+import { createHash } from "node:crypto";
+import { db, createSession, SESSION_COOKIE } from "@/lib/db-multi";
+import { consumeInvite, markInviteUsed, addIdentity } from "@/lib/user-service";
+import { verifyGoogleIdToken } from "@/lib/oidc";
+import { appOrigin } from "@/lib/http";
+
+export const runtime = "nodejs";
+
+const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const GOOGLE_ISSUER = "https://accounts.google.com";
+const SESSION_MAX_AGE = 7 * 24 * 60 * 60; // 7 days in seconds
+
+function sha256Hex(input: string): string {
+  return createHash("sha256").update(input, "utf8").digest("hex");
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function ipHint(request: Request): string {
+  const fwd = request.headers.get("x-forwarded-for");
+  if (fwd) {
+    const ip = fwd.split(",")[0]?.trim() ?? "";
+    // Partial IP as signal only
+    const parts = ip.split(".");
+    if (parts.length === 4) return `${parts[0]}.${parts[1]}.*.*`;
+    return ip.slice(0, 8);
+  }
+  return "";
+}
+
+function logSecurityEvent(
+  eventType: string,
+  opts?: { userId?: number; ipHint?: string; details?: Record<string, unknown> },
+): void {
+  try {
+    db.prepare(`
+      INSERT INTO security_events (user_id, event_type, ip_hint, details, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      opts?.userId ?? null,
+      eventType,
+      opts?.ipHint ?? null,
+      opts?.details ? JSON.stringify(opts.details) : null,
+      nowIso(),
+    );
+  } catch (err) {
+    console.error("[security_event] failed to log:", eventType, err);
+  }
+}
+
+export async function GET(request: Request): Promise<Response> {
+  const origin = appOrigin(request.url);
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  const rawState = url.searchParams.get("state");
+  const errorParam = url.searchParams.get("error");
+  const ip = ipHint(request);
+
+  // Handle provider-side errors (e.g. user denied)
+  if (errorParam || !code || !rawState) {
+    logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: errorParam ?? "missing_params" } });
+    return Response.redirect(`${origin}/?error=login-cancelled`, 302);
+  }
+
+  const stateHash = sha256Hex(rawState);
+
+  // Look up auth_operation by state hash
+  const op = db.prepare(`
+    SELECT id, nonce, pkce_verifier, invite_id, session_id, expires_at, used
+    FROM auth_operations
+    WHERE state_hash = ? AND provider = 'google'
+  `).get(stateHash) as {
+    id: number;
+    nonce: string;
+    pkce_verifier: string;
+    invite_id: number | null;
+    session_id: number | null;
+    expires_at: string;
+    used: number;
+  } | undefined;
+
+  if (!op) {
+    logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "state_not_found" } });
+    return Response.redirect(`${origin}/?error=auth-invalid`, 302);
+  }
+
+  if (op.used !== 0) {
+    logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "state_replayed" } });
+    return Response.redirect(`${origin}/?error=auth-replayed`, 302);
+  }
+
+  if (new Date(op.expires_at) <= new Date()) {
+    logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "auth_op_expired" } });
+    return Response.redirect(`${origin}/?error=auth-expired`, 302);
+  }
+
+  // Mark auth_operation used atomically to prevent replay
+  const markResult = db.prepare(`
+    UPDATE auth_operations SET used = 1 WHERE id = ? AND used = 0
+  `).run(op.id);
+
+  if (markResult.changes === 0) {
+    logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "state_race" } });
+    return Response.redirect(`${origin}/?error=auth-replayed`, 302);
+  }
+
+  // Exchange authorization code for tokens
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return Response.redirect(`${origin}/?error=not-configured`, 302);
+  }
+
+  const redirectUri = `${origin}/api/auth/google-oidc/callback`;
+
+  let idToken: string;
+  try {
+    const tokenResp = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: redirectUri,
+        client_id: clientId,
+        client_secret: clientSecret,
+        code_verifier: op.pkce_verifier,
+      }),
+    });
+
+    if (!tokenResp.ok) {
+      const body = await tokenResp.text();
+      throw new Error(`Token exchange failed: ${tokenResp.status} ${body.slice(0, 200)}`);
+    }
+
+    const tokenData = (await tokenResp.json()) as { id_token?: string };
+    if (!tokenData.id_token) {
+      throw new Error("Token response missing id_token");
+    }
+    idToken = tokenData.id_token;
+  } catch (err) {
+    logSecurityEvent("login_failure", {
+      ipHint: ip,
+      details: { provider: "google", reason: "token_exchange_error", error: String(err).slice(0, 200) },
+    });
+    return Response.redirect(`${origin}/?error=auth-failed`, 302);
+  }
+
+  // Verify id_token
+  let claims: { issuer: string; subject: string; email: string; name: string };
+  try {
+    claims = await verifyGoogleIdToken(idToken, op.nonce, clientId);
+  } catch (err) {
+    logSecurityEvent("login_failure", {
+      ipHint: ip,
+      details: { provider: "google", reason: "id_token_invalid", error: String(err).slice(0, 200) },
+    });
+    return Response.redirect(`${origin}/?error=auth-failed`, 302);
+  }
+
+  // id_token verified — NEVER store it; work only with claims from here
+  const { issuer, subject, email, name } = claims;
+
+  // --- Invite flow: new user registration ---
+  if (op.invite_id !== null) {
+    // Re-validate invite (it may have been used or expired between authorize and callback)
+    let invite: { id: number; role: "admin" | "member" };
+    try {
+      const raw = db.prepare(`
+        SELECT id, role, used_at, expires_at FROM invites WHERE id = ?
+      `).get(op.invite_id) as { id: number; role: "admin" | "member"; used_at: string | null; expires_at: string } | undefined;
+      if (!raw) throw new Error("invite_not_found");
+      if (raw.used_at !== null) throw new Error("invite_already_used");
+      if (new Date(raw.expires_at) <= new Date()) throw new Error("invite_expired");
+      invite = { id: raw.id, role: raw.role };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "unknown";
+      logSecurityEvent("login_failure", {
+        ipHint: ip,
+        details: { provider: "google", reason: `invite_invalid: ${reason}`, subject },
+      });
+      return Response.redirect(`${origin}/?error=invite-invalid`, 302);
+    }
+
+    // Create user + identity + mark invite used in a single transaction
+    let userId: number;
+    try {
+      db.exec("BEGIN");
+      const userResult = db.prepare(`
+        INSERT INTO users (display_name, primary_email, role, status, created_at, last_login_at)
+        VALUES (?, ?, ?, 'active', ?, ?)
+      `).run(name || email, email, invite.role, nowIso(), nowIso());
+      userId = Number(userResult.lastInsertRowid);
+
+      db.prepare(`
+        INSERT INTO auth_identities (user_id, provider, issuer, subject, display_email)
+        VALUES (?, 'google', ?, ?, ?)
+      `).run(userId, issuer, subject, email || null);
+
+      db.prepare(`
+        UPDATE invites SET used_at = ?, used_by = ? WHERE id = ? AND used_at IS NULL
+      `).run(nowIso(), userId, invite.id);
+
+      // Update last_login_at for users table
+      db.prepare(`UPDATE users SET last_login_at = ? WHERE id = ?`).run(nowIso(), userId);
+
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      logSecurityEvent("login_failure", {
+        ipHint: ip,
+        details: { provider: "google", reason: "user_create_error", error: String(err).slice(0, 200) },
+      });
+      return Response.redirect(`${origin}/?error=auth-failed`, 302);
+    }
+
+    const { rawToken } = createSession(userId);
+
+    logSecurityEvent("invite_used", {
+      userId,
+      ipHint: ip,
+      details: { provider: "google", invite_id: invite.id },
+    });
+    logSecurityEvent("login_success", { userId, ipHint: ip, details: { provider: "google" } });
+
+    const resp = Response.redirect(`${origin}/`, 302);
+    resp.headers.set("Set-Cookie", sessionCookieHeader(rawToken, origin));
+    return resp;
+  }
+
+  // --- Identity linking: adding Google to an existing session ---
+  if (op.session_id !== null) {
+    // Verify the session is still valid
+    const session = db.prepare(`
+      SELECT user_id FROM sessions
+      WHERE id = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+    `).get(op.session_id) as { user_id: number } | undefined;
+
+    if (!session) {
+      logSecurityEvent("login_failure", {
+        ipHint: ip,
+        details: { provider: "google", reason: "linking_session_expired", session_id: op.session_id },
+      });
+      return Response.redirect(`${origin}/?error=session-expired`, 302);
+    }
+
+    try {
+      addIdentity(session.user_id, "google", issuer, subject, email || null);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "unknown";
+      logSecurityEvent("login_failure", {
+        ipHint: ip,
+        details: { provider: "google", reason: `identity_link_error: ${reason}`, user_id: session.user_id },
+      });
+      const errorSlug =
+        reason === "identity_linked_to_different_user" ? "identity-conflict" : "identity-link-failed";
+      return Response.redirect(`${origin}/settings?error=${errorSlug}`, 302);
+    }
+
+    logSecurityEvent("identity_linked", {
+      userId: session.user_id,
+      ipHint: ip,
+      details: { provider: "google" },
+    });
+
+    return Response.redirect(`${origin}/settings?linked=google`, 302);
+  }
+
+  // --- Returning user login ---
+  const identity = db.prepare(`
+    SELECT user_id FROM auth_identities WHERE issuer = ? AND subject = ?
+  `).get(issuer, subject) as { user_id: number } | undefined;
+
+  if (!identity) {
+    logSecurityEvent("login_failure", {
+      ipHint: ip,
+      details: { provider: "google", reason: "no_identity", issuer },
+    });
+    return Response.redirect(`${origin}/?error=no-invite`, 302);
+  }
+
+  // Verify user is active
+  const user = db.prepare(`
+    SELECT id, status FROM users WHERE id = ? AND status = 'active'
+  `).get(identity.user_id) as { id: number; status: string } | undefined;
+
+  if (!user) {
+    logSecurityEvent("login_failure", {
+      ipHint: ip,
+      details: { provider: "google", reason: "account_disabled", user_id: identity.user_id },
+    });
+    return Response.redirect(`${origin}/?error=account-disabled`, 302);
+  }
+
+  // Update last_login_at
+  db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(nowIso(), user.id);
+
+  const { rawToken } = createSession(user.id);
+
+  logSecurityEvent("login_success", { userId: user.id, ipHint: ip, details: { provider: "google" } });
+
+  const resp = Response.redirect(`${origin}/`, 302);
+  resp.headers.set("Set-Cookie", sessionCookieHeader(rawToken, origin));
+  return resp;
+}
+
+// ---------------------------------------------------------------------------
+// Cookie header builder
+// ---------------------------------------------------------------------------
+
+function sessionCookieHeader(rawToken: string, origin: string): string {
+  const secure = origin.startsWith("https://");
+  return [
+    `${SESSION_COOKIE}=${rawToken}`,
+    "Path=/",
+    `Max-Age=${SESSION_MAX_AGE}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
+}
