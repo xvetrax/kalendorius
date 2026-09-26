@@ -1,17 +1,13 @@
 import { db, requireUserContext } from "@/lib/db-multi";
 import { apiError, assertSameOrigin } from "@/lib/http";
-import { cachedGoogleAccountId, googleAccountId, googleTasksFetch, isGoogleTasksConnected } from "@/lib/google";
-import { cachedMicrosoftAccountId, defaultTaskListId, graphFetch, isMicrosoftConnected, microsoftAccountId } from "@/lib/microsoft";
 import { createTaskService, TaskError } from "@/lib/task-service";
+import { makeMicrosoftTaskGateway, makeGoogleTaskGateway } from "@/lib/task-gateway";
 
 export const runtime = "nodejs";
 
 function getTaskService(request: Request) {
   const user = requireUserContext(request);
-  return createTaskService(db, user.id,
-    { connected: isMicrosoftConnected, cachedAccountId: cachedMicrosoftAccountId,
-      accountId: microsoftAccountId, defaultListId: defaultTaskListId, request: graphFetch },
-    { connected: isGoogleTasksConnected, cachedAccountId: cachedGoogleAccountId, accountId: googleAccountId, request: googleTasksFetch });
+  return createTaskService(db, user.id, makeMicrosoftTaskGateway(user.id), makeGoogleTaskGateway(user.id));
 }
 
 function failure(error: unknown) {

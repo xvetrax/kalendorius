@@ -22,10 +22,8 @@ const hooks=registerHooks({resolve(specifier,context,next){
 }});
 const originalFetch=globalThis.fetch;
 const {upstream}=await import("./fixtures/tasks-upstream.mjs");
-// Legacy db for provider OAuth settings (still used by provider adapters via lib/db.ts)
-const {db:legacyDb,saveSetting}=await import("../lib/db.ts");
 const {encrypt}=await import("../lib/secrets.ts");
-// Multi-user db: routes use this for tasks/plans; we bootstrap a test session here
+// Multi-user db: routes use this for tasks/plans/oauth; we bootstrap a test session here
 const {db:multiDb,createSession,SESSION_COOKIE}=await import("../lib/db-multi.ts");
 const route=await import("../app/api/task-lists/route.ts");
 
@@ -48,18 +46,18 @@ bootstrapTestUser();
 
 function connect() {
   // Clear multi-user tables for this user
-  multiDb.exec(`DELETE FROM tasks WHERE user_id=${testUserId};DELETE FROM remote_tasks WHERE user_id=${testUserId};DELETE FROM remote_task_lists WHERE user_id=${testUserId};DELETE FROM task_plans WHERE user_id=${testUserId};`);
-  // Clear legacy settings
-  legacyDb.exec("DELETE FROM settings;");
+  multiDb.exec(`DELETE FROM tasks WHERE user_id=${testUserId};DELETE FROM remote_tasks WHERE user_id=${testUserId};DELETE FROM remote_task_lists WHERE user_id=${testUserId};DELETE FROM task_plans WHERE user_id=${testUserId};DELETE FROM oauth_connections WHERE user_id=${testUserId};`);
+  // Insert oauth_connections for both providers in the multi-user db
   for(const source of ["google","microsoft"]){
-    saveSetting(`${source}_refresh_token`,encrypt(`${source}-refresh`));
-    saveSetting(`${source}_account_id`,`${source}-account`);
-    saveSetting(`${source}_connection_generation`,`${source}-generation`);
+    const scopes=source==="google"
+      ? "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/tasks offline_access"
+      : "offline_access User.Read Calendars.ReadWrite Tasks.ReadWrite";
+    multiDb.prepare(`INSERT INTO oauth_connections (user_id,provider,provider_account_id,provider_email,encrypted_refresh_token,scopes,generation,status,connected_at) VALUES (?,?,?,?,?,?,1,'active',CURRENT_TIMESTAMP)`)
+      .run(testUserId,source,`${source}-account`,`${source}@example.com`,encrypt(`${source}-refresh`),scopes);
   }
-  saveSetting("google_granted_scopes","https://www.googleapis.com/auth/tasks");
 }
 beforeEach(()=>{upstream.reset();connect();});
-after(()=>{globalThis.fetch=originalFetch;legacyDb.close();multiDb.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
+after(()=>{globalThis.fetch=originalFetch;multiDb.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 
 const api="http://localhost:3000/api/task-lists";
 const request=(method,body,origin="http://localhost:3000")=>new Request(api,{method,headers:{Origin:origin,"Content-Type":"application/json",Cookie:sessionCookie},body:body === undefined ? undefined : JSON.stringify(body)});

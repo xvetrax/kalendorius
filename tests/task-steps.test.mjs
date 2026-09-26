@@ -18,7 +18,6 @@ process.env.MICROSOFT_REDIRECT_URI="http://localhost:3000/api/microsoft/callback
 const hooks=registerHooks({resolve(specifier,context,next){return next(specifier.startsWith("@/")?pathToFileURL(path.resolve(import.meta.dirname,"..",specifier.slice(2)+".ts")).href:specifier,context);}});
 const originalFetch=globalThis.fetch;
 const {upstream}=await import("./fixtures/tasks-upstream.mjs");
-const {db,saveSetting}=await import("../lib/db.ts");
 const {encrypt}=await import("../lib/secrets.ts");
 const {db:multiDb,createSession,SESSION_COOKIE}=await import("../lib/db-multi.ts");
 const route=await import("../app/api/tasks/steps/route.ts");
@@ -41,14 +40,12 @@ function bootstrapTestUser(){
 bootstrapTestUser();
 
 function connect(){
-  multiDb.exec(`DELETE FROM tasks WHERE user_id=${testUserId}; DELETE FROM remote_tasks WHERE user_id=${testUserId}; DELETE FROM remote_task_lists WHERE user_id=${testUserId}; DELETE FROM task_plans WHERE user_id=${testUserId};`);
-  db.exec("DELETE FROM settings;");
-  saveSetting("microsoft_refresh_token",encrypt("microsoft-refresh"));
-  saveSetting("microsoft_account_id","microsoft-account");
-  saveSetting("microsoft_connection_generation","microsoft-generation");
+  multiDb.exec(`DELETE FROM tasks WHERE user_id=${testUserId}; DELETE FROM remote_tasks WHERE user_id=${testUserId}; DELETE FROM remote_task_lists WHERE user_id=${testUserId}; DELETE FROM task_plans WHERE user_id=${testUserId}; DELETE FROM oauth_connections WHERE user_id=${testUserId};`);
+  multiDb.prepare(`INSERT INTO oauth_connections (user_id,provider,provider_account_id,provider_email,encrypted_refresh_token,scopes,generation,status,connected_at) VALUES (?,?,?,?,?,?,1,'active',CURRENT_TIMESTAMP)`)
+    .run(testUserId,"microsoft","microsoft-account","ms@example.com",encrypt("microsoft-refresh"),"offline_access User.Read Calendars.ReadWrite Tasks.ReadWrite");
 }
 beforeEach(()=>{upstream.reset();connect();intercept=null;upstream.microsoft.get("shared-id").checklistItems=[{id:"step-a",displayName:"Pirmas",isChecked:false}];});
-after(()=>{globalThis.fetch=originalFetch;db.close();multiDb.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
+after(()=>{globalThis.fetch=originalFetch;multiDb.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 
 const api="http://localhost:3000/api/tasks/steps";
 const ref={source:"microsoft",account_id:"microsoft-account",list_id:"microsoft-list",id:"shared-id"};

@@ -25,8 +25,8 @@ const hooks=registerHooks({resolve(specifier,context,next){
 }});
 const originalFetch=globalThis.fetch;
 const {upstream}=await import("./fixtures/tasks-upstream.mjs");
-// Old db for provider settings (google/microsoft tokens stored via saveSetting)
-const {db:legacyDb,saveSetting}=await import("../lib/db.ts");
+// Legacy db is still imported to satisfy the close() call in after()
+const {db:legacyDb}=await import("../lib/db.ts");
 const {encrypt}=await import("../lib/secrets.ts");
 // Multi-user db: routes use this for tasks/plans; we also bootstrap a test session here
 const {db:multiDb,createSession}=await import("../lib/db-multi.ts");
@@ -57,16 +57,16 @@ bootstrapTestUser();
 const taskScope="https://www.googleapis.com/auth/tasks";
 function connect() {
   // Clear multi-user tables for this user
-  multiDb.exec(`DELETE FROM tasks WHERE user_id=${testUserId};DELETE FROM remote_tasks WHERE user_id=${testUserId};DELETE FROM remote_task_lists WHERE user_id=${testUserId};DELETE FROM task_plans WHERE user_id=${testUserId};`);
-  // Clear legacy settings for provider connections
-  legacyDb.exec("DELETE FROM settings;");
-  saveSetting("microsoft_refresh_token",encrypt("microsoft-refresh"));
-  saveSetting("microsoft_account_id","microsoft-account");
-  saveSetting("microsoft_connection_generation","microsoft-generation");
-  saveSetting("google_refresh_token",encrypt("google-refresh"));
-  saveSetting("google_account_id","google-account");
-  saveSetting("google_granted_scopes",`${taskScope} https://www.googleapis.com/auth/calendar`);
-  saveSetting("google_connection_generation","google-generation");
+  multiDb.exec(`DELETE FROM tasks WHERE user_id=${testUserId};DELETE FROM remote_tasks WHERE user_id=${testUserId};DELETE FROM remote_task_lists WHERE user_id=${testUserId};DELETE FROM task_plans WHERE user_id=${testUserId};DELETE FROM oauth_connections WHERE user_id=${testUserId};`);
+  // Insert per-user oauth_connections (replaces legacy saveSetting for tokens)
+  multiDb.prepare(`
+    INSERT INTO oauth_connections (user_id, provider, provider_account_id, provider_email, encrypted_refresh_token, scopes, generation, status)
+    VALUES (?, 'microsoft', 'microsoft-account', 'test@microsoft.example', ?, ?, 1, 'active')
+  `).run(testUserId, encrypt("microsoft-refresh"), "openid offline_access User.Read Calendars.ReadWrite Tasks.ReadWrite");
+  multiDb.prepare(`
+    INSERT INTO oauth_connections (user_id, provider, provider_account_id, provider_email, encrypted_refresh_token, scopes, generation, status)
+    VALUES (?, 'google', 'google-account', 'test@google.example', ?, ?, 1, 'active')
+  `).run(testUserId, encrypt("google-refresh"), `${taskScope} https://www.googleapis.com/auth/calendar`);
 }
 beforeEach(()=>{upstream.reset();connect();});
 after(()=>{globalThis.fetch=originalFetch;legacyDb.close();multiDb.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
@@ -128,9 +128,13 @@ test("task mutations enforce same-origin and refresh cached remote task source d
 test("an account swap rejects references selected for the old provider account",async()=>{
   const result=await (await list()).json();
   for(const source of ["microsoft","google"]){
-    const task=item(result,source); saveSetting(`${source}_account_id`,`${source}-other-account`);
+    const task=item(result,source);
+    // Simulate account swap by updating the provider_account_id in oauth_connections
+    multiDb.prepare(`UPDATE oauth_connections SET provider_account_id = ? WHERE user_id = ? AND provider = ?`).run(`${source}-other-account`,testUserId,source);
     const response=await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2026-11-04T08:00:00.000Z"}));
-    assert.equal(response.status,409); saveSetting(`${source}_account_id`,`${source}-account`);
+    assert.equal(response.status,409);
+    // Restore original account id
+    multiDb.prepare(`UPDATE oauth_connections SET provider_account_id = ? WHERE user_id = ? AND provider = ?`).run(`${source}-account`,testUserId,source);
   }
 });
 

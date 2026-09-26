@@ -1,8 +1,7 @@
 import { db, requireUserContext } from "@/lib/db-multi";
-import { cachedMicrosoftAccountId, defaultTaskListId, graphFetch, isMicrosoftConnected, microsoftAccountId } from "@/lib/microsoft";
-import { cachedGoogleAccountId, googleAccountId, googleTasksFetch, isGoogleTasksConnected } from "@/lib/google";
 import { apiError, assertSameOrigin } from "@/lib/http";
 import { createTaskService, TaskError } from "@/lib/task-service";
+import { makeMicrosoftTaskGateway, makeGoogleTaskGateway } from "@/lib/task-gateway";
 
 export const runtime = "nodejs";
 
@@ -10,10 +9,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const user = requireUserContext(request);
-    const tasks = createTaskService(db, user.id,
-      { connected: isMicrosoftConnected, cachedAccountId: cachedMicrosoftAccountId,
-        accountId: microsoftAccountId, defaultListId: defaultTaskListId, request: graphFetch },
-      { connected: isGoogleTasksConnected, cachedAccountId: cachedGoogleAccountId, accountId: googleAccountId, request: googleTasksFetch });
+    const tasks = createTaskService(db, user.id, makeMicrosoftTaskGateway(user.id), makeGoogleTaskGateway(user.id));
     const body = await request.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new TaskError("Neteisingi užklausos duomenys.");
     return Response.json(await tasks.moveGoogle(body as Record<string, unknown>));

@@ -50,12 +50,14 @@ export async function GET(request: Request) {
     // Fix: bind state to this browser via an HttpOnly cookie so the callback can
     // verify that the response was initiated by the same browser (CSRF protection).
     const isSecure = new URL(request.url).protocol === "https:";
-    const redirect = Response.redirect(microsoftAuthUrl(state, challenge, loginHint));
-    redirect.headers.set(
-      "Set-Cookie",
-      `microsoft_connect_state=${state}; Path=/api/microsoft/callback; Max-Age=600; HttpOnly; SameSite=Lax${isSecure ? "; Secure" : ""}`,
-    );
-    return redirect;
+    // Use new Response instead of Response.redirect to avoid immutable headers
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: microsoftAuthUrl(state, challenge, loginHint),
+        "Set-Cookie": `microsoft_connect_state=${state}; Path=/api/microsoft/callback; Max-Age=600; HttpOnly; SameSite=Lax${isSecure ? "; Secure" : ""}`,
+      },
+    });
   } catch {
     return Response.redirect(oauthResultUrl(request.url, "microsoft", "error"));
   }

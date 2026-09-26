@@ -64,12 +64,14 @@ export async function GET(request: Request) {
     // Fix: bind state to this browser via an HttpOnly cookie so the callback can
     // verify that the response was initiated by the same browser (CSRF protection).
     const isSecure = new URL(request.url).protocol === "https:";
-    const redirect = Response.redirect(googleAuthUrl(state, challenge, loginHint));
-    redirect.headers.set(
-      "Set-Cookie",
-      `google_connect_state=${state}; Path=/api/google/callback; Max-Age=600; HttpOnly; SameSite=Lax${isSecure ? "; Secure" : ""}`,
-    );
-    return redirect;
+    // Use new Response instead of Response.redirect to avoid immutable headers
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: googleAuthUrl(state, challenge, loginHint),
+        "Set-Cookie": `google_connect_state=${state}; Path=/api/google/callback; Max-Age=600; HttpOnly; SameSite=Lax${isSecure ? "; Secure" : ""}`,
+      },
+    });
   } catch {
     return Response.redirect(oauthResultUrl(request.url, "google", "error"));
   }

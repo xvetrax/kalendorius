@@ -1,15 +1,13 @@
 import { db, requireUserContext } from "@/lib/db-multi";
 import { createTaskService, TaskError } from "@/lib/task-service";
-import { cachedMicrosoftAccountId, defaultTaskListId, graphFetch, isMicrosoftConnected, microsoftAccountId } from "@/lib/microsoft";
 import { apiError, assertSameOrigin } from "@/lib/http";
+import { makeMicrosoftTaskGateway } from "@/lib/task-gateway";
 
 export const runtime = "nodejs";
 
 function getTaskService(request: Request) {
   const user = requireUserContext(request);
-  return createTaskService(db, user.id,
-    { connected: isMicrosoftConnected, cachedAccountId: cachedMicrosoftAccountId,
-      accountId: microsoftAccountId, defaultListId: defaultTaskListId, request: graphFetch });
+  return createTaskService(db, user.id, makeMicrosoftTaskGateway(user.id));
 }
 
 function failure(error: unknown) {
