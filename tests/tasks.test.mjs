@@ -6,9 +6,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createTaskService, migrateTaskPlanning } from "../lib/task-service.ts";
 
+const TEST_USER_ID = 1;
 function schema(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS user_settings(user_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(user_id, key));
+    CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL DEFAULT ${TEST_USER_ID}, title TEXT NOT NULL,
     notes TEXT NOT NULL DEFAULT '', due_at TEXT, duration_minutes INTEGER NOT NULL DEFAULT 30,
     completed INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     project TEXT NOT NULL DEFAULT 'Asmeniniai', priority TEXT NOT NULL DEFAULT 'normal',
@@ -51,7 +53,7 @@ function gateway() {
 }
 function fixture(t, {migrate = true} = {}) {
   const db = new DatabaseSync(":memory:"); schema(db); if (migrate) migrateTaskPlanning(db);
-  const graph = gateway(); const service = createTaskService(db,graph);
+  const graph = gateway(); const service = createTaskService(db,TEST_USER_ID,graph);
   t.after(() => db.close()); return {db,graph,service};
 }
 const ref = (task) => ({id:task.id,source:task.source,account_id:task.account_id,list_id:task.list_id,schedule_version:task.schedule_version});
@@ -85,13 +87,13 @@ test("Microsoft planning, moving, duration and unscheduling persist without any 
   const temp = mkdtempSync(path.join(tmpdir(),"planner-contract-"));
   let db = new DatabaseSync(path.join(temp,"test.db")); schema(db); migrateTaskPlanning(db);
   t.after(() => {db.close(); rmSync(temp,{recursive:true,force:true});});
-  const graph = gateway(); let service = createTaskService(db,graph);
+  const graph = gateway(); let service = createTaskService(db,TEST_USER_ID,graph);
   let task = (await service.list()).items[0]; const deadline = task.due_at;
   graph.calls.length=0;
   task = await service.update({...ref(task),scheduled_at:start});
   task = await service.update({...ref(task),scheduled_at:"2026-10-26T10:00:00+02:00",duration_minutes:75});
   assert.equal(graph.calls.length,0); assert.equal(task.due_at,deadline);
-  db.close(); db=new DatabaseSync(path.join(temp,"test.db")); migrateTaskPlanning(db); service=createTaskService(db,graph);
+  db.close(); db=new DatabaseSync(path.join(temp,"test.db")); migrateTaskPlanning(db); service=createTaskService(db,TEST_USER_ID,graph);
   task=(await service.list()).items[0];
   assert.equal(task.duration_minutes,75); assert.equal(task.scheduled_at,"2026-10-26T08:00:00.000Z"); assert.equal(task.due_at,deadline);
   task=await service.update({...ref(task),scheduled_at:null});
@@ -139,7 +141,7 @@ test("uncertain block creation retains its transaction and can be resolved then 
   graph.state.uncertainCreate=true;
   task=await service.update({...ref(task),scheduled_at:start,mirror_requested:true});
   assert.equal(task.scheduled_at,start); assert.ok(task.mirror_error); assert.equal(graph.events.size,1);
-  const restarted=createTaskService(db,graph);
+  const restarted=createTaskService(db,TEST_USER_ID,graph);
   task=await restarted.update({...ref(task),scheduled_at:null,mirror_requested:false});
   const creates=graph.calls.filter(c => c.method === "POST");
   assert.equal(creates.length,2); assert.deepEqual(creates[0].body,creates[1].body);
@@ -179,7 +181,7 @@ test("explicit UTC offsets on Microsoft deadlines are normalized without appendi
 test("pagination is followed only for the same Graph task list", async (t) => {
   const {db,graph}=fixture(t); let calls=0;
   graph.request=async () => { calls++; return {value:[],"@odata.nextLink":"https://evil.example/v1.0/me/todo/lists/list-a/tasks"}; };
-  const service=createTaskService(db,graph);
+  const service=createTaskService(db,TEST_USER_ID,graph);
   assert.ok((await service.list()).warnings.length); assert.equal(calls,1);
   calls=0;
   graph.request=async (url) => {if(url.startsWith("/me/todo/lists?"))return {value:[{id:"list-a"}]};calls++; return calls===1 ? {value:[{id:"a",title:"Pirma"}],"@odata.nextLink":"https://graph.microsoft.com/v1.0/me/todo/lists/list-a/tasks?$skiptoken=next"} : {value:[{id:"b",title:"Antra"}]};};
@@ -206,7 +208,7 @@ test("Microsoft multi-list discovery and creation use selected account-bound lis
     if(init.method==="POST"){writes.push({raw,body:JSON.parse(init.body)});return {id:"created",...JSON.parse(init.body)};}
     return {value:[{id:"same",title:"Užduotis"}]};
   };
-  const service=createTaskService(db,graph),result=await service.list();assert.equal(result.lists.length,3);assert.equal(new Set(result.items.map(t=>t.key)).size,3);
+  const service=createTaskService(db,TEST_USER_ID,graph),result=await service.list();assert.equal(result.lists.length,3);assert.equal(new Set(result.items.map(t=>t.key)).size,3);
   const task=await service.create({source:"microsoft",account_id:"account-a",list_id:"second",title:"Pasirinktas sąrašas"});
   assert.equal(task.list_id,"second");assert.equal(writes[0].raw,"/me/todo/lists/second/tasks");
   await assert.rejects(service.create({source:"microsoft",account_id:"account-a",list_id:"flagged",title:"Neleistina"}),e=>e.status===403);

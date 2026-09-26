@@ -17,9 +17,11 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
 const { ProviderError } = await import("../lib/provider-error.ts");
 const { createTaskService, migrateTaskPlanning } = await import("../lib/task-service.ts");
 
+const TEST_USER_ID = 1;
 function schema(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS user_settings(user_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(user_id, key));
+    CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL DEFAULT ${TEST_USER_ID}, title TEXT NOT NULL,
     notes TEXT NOT NULL DEFAULT '', due_at TEXT, duration_minutes INTEGER NOT NULL DEFAULT 30,
     completed INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     project TEXT NOT NULL DEFAULT 'Asmeniniai', priority TEXT NOT NULL DEFAULT 'normal',
@@ -68,7 +70,7 @@ function fixture(overrides = {}) {
   schema(db);
   migrateTaskPlanning(db);
   const graph = makeGateway(overrides);
-  const service = createTaskService(db, graph);
+  const service = createTaskService(db, TEST_USER_ID, graph);
   return { db, graph, service };
 }
 
@@ -209,7 +211,7 @@ test("listProvider: externally deleted task with mirror_event_id gets orphan mir
     },
   });
 
-  const service = createTaskService(db, graph);
+  const service = createTaskService(db, TEST_USER_ID, graph);
 
   // Seed old task in remote_tasks and task_plans with mirror_event_id
   seedMicrosoftTask(db, { key, listId: "list-a", mirrorEventId: "orphan-event-1", mirrorRequested: 0, scheduledAt: null });
@@ -326,7 +328,7 @@ test("Google task restoration wins over concurrent Outlook orphan cleanup",async
     if(url.startsWith("/lists/list-a/tasks")){startTasks();await tasksGate;return {items:[{id:"restored",title:"Sugrįžusi",status:"needsAction"}]};}
     throw new Error(`Unexpected Google request: ${url}`);
   }};
-  const service=createTaskService(db,graph,google);
+  const service=createTaskService(db,TEST_USER_ID,graph,google);
   db.prepare(`INSERT INTO task_plans(task_key,mirror_event_id,mirror_account_id,mirror_orphaned_at,mirror_orphan_title)
     VALUES (?,'restored-event','account-a',?,'Sugrįžusi')`).run(key,orphanedAt);
   graph.events.set("restored-event",{subject:"✓ Sugrįžusi"});
@@ -368,7 +370,7 @@ test("listProvider: externally deleted task with mirror_requested set gets orpha
     },
   });
 
-  const service = createTaskService(db, graph);
+  const service = createTaskService(db, TEST_USER_ID, graph);
 
   // Seed with mirror_requested=1 but no event_id yet
   seedMicrosoftTask(db, { key, listId: "list-a", mirrorEventId: null, mirrorRequested: 1, scheduledAt: start });
@@ -401,7 +403,7 @@ test("listProvider: task still present in provider is not marked as orphan", asy
     },
   });
 
-  const service = createTaskService(db, graph);
+  const service = createTaskService(db, TEST_USER_ID, graph);
   seedMicrosoftTask(db, { key, listId: "list-a", mirrorEventId: "keep-event", mirrorRequested: 1, scheduledAt: start });
   db.prepare("UPDATE task_plans SET mirror_orphaned_at='2026-09-23 10:00:00',mirror_orphan_title='Senas',mirror_error=? WHERE task_key=?")
     .run("Užduotis pašalinta šaltinyje. Pašalink likusį Outlook bloką nustatymuose.",key);

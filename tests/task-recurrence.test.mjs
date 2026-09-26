@@ -7,6 +7,7 @@ import path from "node:path";
 import {pathToFileURL} from "node:url";
 
 const temp=mkdtempSync(path.join(tmpdir(),"planner-task-recurrence-"));
+process.env.MULTI_USER_DATABASE_PATH=path.join(temp,"multi.db");
 process.env.DATABASE_PATH=path.join(temp,"test.db");
 process.env.TOKEN_ENCRYPTION_KEY="ab".repeat(32);
 process.env.APP_ORIGIN="http://localhost:3000";
@@ -23,6 +24,7 @@ const originalFetch=globalThis.fetch;
 const {upstream}=await import("./fixtures/tasks-upstream.mjs");
 const {db,saveSetting}=await import("../lib/db.ts");
 const {encrypt}=await import("../lib/secrets.ts");
+const {db:multiDb,createSession,SESSION_COOKIE}=await import("../lib/db-multi.ts");
 const route=await import("../app/api/tasks/recurrence/route.ts");
 const reminderRoute=await import("../app/api/tasks/reminder/route.ts");
 const tasksRoute=await import("../app/api/tasks/route.ts");
@@ -30,8 +32,23 @@ const fixtureFetch=globalThis.fetch;
 let intercept=null;
 globalThis.fetch=(url,init)=>intercept ? intercept(String(url),init,fixtureFetch) : fixtureFetch(url,init);
 
+// Bootstrap test user and session in the multi-user DB
+let testUserId, sessionCookie;
+function bootstrapTestUser(){
+  const existing=multiDb.prepare("SELECT id FROM users LIMIT 1").get();
+  if(existing){ testUserId=existing.id; }
+  else {
+    const result=multiDb.prepare("INSERT INTO users (display_name, primary_email, role, status, created_at) VALUES (?, ?, 'admin', 'active', CURRENT_TIMESTAMP)").run("Test User","test@example.com");
+    testUserId=Number(result.lastInsertRowid);
+  }
+  const {rawToken}=createSession(testUserId);
+  sessionCookie=`${SESSION_COOKIE}=${rawToken}`;
+}
+bootstrapTestUser();
+
 function connect() {
-  db.exec("DELETE FROM settings; DELETE FROM tasks; DELETE FROM remote_tasks; DELETE FROM remote_task_lists; DELETE FROM task_plans;");
+  multiDb.exec(`DELETE FROM tasks WHERE user_id=${testUserId}; DELETE FROM remote_tasks WHERE user_id=${testUserId}; DELETE FROM remote_task_lists WHERE user_id=${testUserId}; DELETE FROM task_plans WHERE user_id=${testUserId};`);
+  db.exec("DELETE FROM settings;");
   for(const source of ["google","microsoft"]){
     saveSetting(`${source}_refresh_token`,encrypt(`${source}-refresh`));
     saveSetting(`${source}_account_id`,`${source}-account`);
@@ -40,18 +57,18 @@ function connect() {
   saveSetting("google_granted_scopes","https://www.googleapis.com/auth/tasks");
 }
 beforeEach(()=>{upstream.reset();connect();intercept=null;});
-after(()=>{globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
+after(()=>{globalThis.fetch=originalFetch;db.close();multiDb.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 
 const api="http://localhost:3000/api/tasks/recurrence";
 const reminderApi="http://localhost:3000/api/tasks/reminder";
 const ref={source:"microsoft",account_id:"microsoft-account",list_id:"microsoft-list",id:"shared-id"};
-const req=(body,origin="http://localhost:3000")=>new Request(api,{method:"PATCH",headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify(body)});
-const read=(reference=ref)=>route.GET(new Request(`${api}?${new URLSearchParams(reference)}`));
+const req=(body,origin="http://localhost:3000")=>new Request(api,{method:"PATCH",headers:{Origin:origin,"Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify(body)});
+const read=(reference=ref)=>route.GET(new Request(`${api}?${new URLSearchParams(reference)}`,{headers:{Cookie:sessionCookie}}));
 const snapshot=async(reference=ref)=>{const response=await read(reference);assert.equal(response.status,200);return response.json();};
 const patch=async(current,recurrence,reference=ref)=>route.PATCH(req({...reference,version:current.version,recurrence}));
-const reminderRead=()=>reminderRoute.GET(new Request(`${reminderApi}?${new URLSearchParams(ref)}`));
-const reminderPatch=(current,changes)=>reminderRoute.PATCH(new Request(reminderApi,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({...ref,version:current.version,...changes})}));
-const rows=()=>Object.fromEntries(["tasks","remote_tasks","task_plans","remote_task_lists"].map(table=>[table,db.prepare(`SELECT * FROM ${table}`).all()]));
+const reminderRead=()=>reminderRoute.GET(new Request(`${reminderApi}?${new URLSearchParams(ref)}`,{headers:{Cookie:sessionCookie}}));
+const reminderPatch=(current,changes)=>reminderRoute.PATCH(new Request(reminderApi,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({...ref,version:current.version,...changes})}));
+const rows=()=>Object.fromEntries(["tasks","remote_tasks","task_plans","remote_task_lists"].map(table=>[table,multiDb.prepare(`SELECT * FROM ${table} WHERE user_id=${testUserId}`).all()]));
 
 const rules=[
   {rule:{frequency:"daily",interval:2,start_date:"2026-09-17"},graph:{pattern:{type:"daily",interval:2},range:{type:"noEnd",startDate:"2026-09-17"}}},
@@ -65,9 +82,9 @@ test("Microsoft recurrence reads, writes every supported shape, clears, and pres
   task.isReminderOn=true;task.reminderDateTime={dateTime:"2026-10-25T08:30:00.000",timeZone:"UTC"};
   task.checklistItems=[{id:"step",displayName:"Keep step",isChecked:false}];
   task.startDateTime={dateTime:"2026-10-20T07:00:00",timeZone:"UTC"};
-  await tasksRoute.GET(new Request("http://localhost:3000/api/tasks"));
+  await tasksRoute.GET(new Request("http://localhost:3000/api/tasks",{headers:{Cookie:sessionCookie}}));
   const key=JSON.stringify(["microsoft","microsoft-account","microsoft-list","shared-id"]);
-  db.prepare("INSERT INTO task_plans(task_key,scheduled_at,duration_minutes,mirror_requested,mirror_event_id) VALUES (?,?,?,?,?)").run(key,"2026-10-24T10:00:00.000Z",75,1,"untouched-mirror");
+  multiDb.prepare("INSERT INTO task_plans(user_id,task_key,scheduled_at,duration_minutes,mirror_requested,mirror_event_id) VALUES (?,?,?,?,?,?)").run(testUserId,key,"2026-10-24T10:00:00.000Z",75,1,"untouched-mirror");
   const before=structuredClone(task),localBefore=rows();
   const response=await read();assert.equal(response.headers.get("cache-control"),"no-store");let current=await response.json();
   assert.deepEqual(current.recurrence,null);assert.equal(current.supported,true);assert.equal(typeof current.version,"string");
@@ -126,7 +143,7 @@ test("special lists and completed tasks expose a read-only recurrence and reject
 });
 
 test("recurrence maps provider failures, conflicts, account changes, and an unconfirmed write without local mutation",async()=>{
-  await tasksRoute.GET(new Request("http://localhost:3000/api/tasks"));const current=await snapshot(),before=rows();
+  await tasksRoute.GET(new Request("http://localhost:3000/api/tasks",{headers:{Cookie:sessionCookie}}));const current=await snapshot(),before=rows();
   intercept=async(url,init,next)=>url.includes("/tasks/shared-id")&&init?.method==="PATCH" ? Response.json({error:"Changed"},{status:412}) : next(url,init);
   assert.equal((await patch(current,rules[0].rule)).status,409);assert.deepEqual(rows(),before);
   intercept=async(url,init,next)=>url.includes("/tasks/shared-id") ? Response.json({error:"Offline"},{status:503}) : next(url,init);

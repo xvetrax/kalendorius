@@ -7,6 +7,7 @@ import path from "node:path";
 import {pathToFileURL} from "node:url";
 
 const temp=mkdtempSync(path.join(tmpdir(),"planner-task-steps-"));
+process.env.MULTI_USER_DATABASE_PATH=path.join(temp,"multi.db");
 process.env.DATABASE_PATH=path.join(temp,"test.db");
 process.env.TOKEN_ENCRYPTION_KEY="ab".repeat(32);
 process.env.APP_ORIGIN="http://localhost:3000";
@@ -19,24 +20,40 @@ const originalFetch=globalThis.fetch;
 const {upstream}=await import("./fixtures/tasks-upstream.mjs");
 const {db,saveSetting}=await import("../lib/db.ts");
 const {encrypt}=await import("../lib/secrets.ts");
+const {db:multiDb,createSession,SESSION_COOKIE}=await import("../lib/db-multi.ts");
 const route=await import("../app/api/tasks/steps/route.ts");
 const fixtureFetch=globalThis.fetch;
 let intercept=null;
 globalThis.fetch=(url,init)=>intercept?intercept(String(url),init,fixtureFetch):fixtureFetch(url,init);
 
+// Bootstrap test user and session in the multi-user DB
+let testUserId, sessionCookie;
+function bootstrapTestUser(){
+  const existing=multiDb.prepare("SELECT id FROM users LIMIT 1").get();
+  if(existing){ testUserId=existing.id; }
+  else {
+    const result=multiDb.prepare("INSERT INTO users (display_name, primary_email, role, status, created_at) VALUES (?, ?, 'admin', 'active', CURRENT_TIMESTAMP)").run("Test User","test@example.com");
+    testUserId=Number(result.lastInsertRowid);
+  }
+  const {rawToken}=createSession(testUserId);
+  sessionCookie=`${SESSION_COOKIE}=${rawToken}`;
+}
+bootstrapTestUser();
+
 function connect(){
-  db.exec("DELETE FROM settings; DELETE FROM tasks; DELETE FROM remote_tasks; DELETE FROM remote_task_lists; DELETE FROM task_plans;");
+  multiDb.exec(`DELETE FROM tasks WHERE user_id=${testUserId}; DELETE FROM remote_tasks WHERE user_id=${testUserId}; DELETE FROM remote_task_lists WHERE user_id=${testUserId}; DELETE FROM task_plans WHERE user_id=${testUserId};`);
+  db.exec("DELETE FROM settings;");
   saveSetting("microsoft_refresh_token",encrypt("microsoft-refresh"));
   saveSetting("microsoft_account_id","microsoft-account");
   saveSetting("microsoft_connection_generation","microsoft-generation");
 }
 beforeEach(()=>{upstream.reset();connect();intercept=null;upstream.microsoft.get("shared-id").checklistItems=[{id:"step-a",displayName:"Pirmas",isChecked:false}];});
-after(()=>{globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
+after(()=>{globalThis.fetch=originalFetch;db.close();multiDb.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 
 const api="http://localhost:3000/api/tasks/steps";
 const ref={source:"microsoft",account_id:"microsoft-account",list_id:"microsoft-list",id:"shared-id"};
-const read=(reference=ref)=>route.GET(new Request(`${api}?${new URLSearchParams(reference)}`));
-const request=(method,body,origin="http://localhost:3000")=>new Request(api,{method,headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify(body)});
+const read=(reference=ref)=>route.GET(new Request(`${api}?${new URLSearchParams(reference)}`,{headers:{Cookie:sessionCookie}}));
+const request=(method,body,origin="http://localhost:3000")=>new Request(api,{method,headers:{Origin:origin,"Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify(body)});
 const mutate=(method,current,changes,reference=ref)=>route[method](request(method,{...reference,version:current.version,...changes}));
 const snapshot=async(reference=ref)=>{const response=await read(reference);assert.equal(response.status,200);return response.json();};
 

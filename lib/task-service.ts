@@ -112,6 +112,8 @@ function googleTaskLink(value: unknown) {
 // Called after the original tasks schema/migrations. This migration is atomic
 // and preserves the original ambiguous due_at value as a deadline AND snapshot.
 export function migrateTaskPlanning(db: DatabaseSync) {
+  // Schema-only migration: creates tables and adds missing columns.
+  // Not scoped to a specific user — safe to call at startup on the old single-user DB.
   db.exec("BEGIN IMMEDIATE");
   try {
     db.exec(`CREATE TABLE IF NOT EXISTS task_plans (
@@ -126,8 +128,20 @@ export function migrateTaskPlanning(db: DatabaseSync) {
     if (!columns.some((column) => column.name === "local_priority")) db.exec("ALTER TABLE task_plans ADD COLUMN local_priority TEXT");
     if (!columns.some((column) => column.name === "mirror_orphaned_at")) db.exec("ALTER TABLE task_plans ADD COLUMN mirror_orphaned_at TEXT");
     if (!columns.some((column) => column.name === "mirror_orphan_title")) db.exec("ALTER TABLE task_plans ADD COLUMN mirror_orphan_title TEXT");
-    if (!(db.prepare("PRAGMA table_info(remote_tasks)").all() as {name:string}[]).some(c=>c.name === "source")) db.exec("ALTER TABLE remote_tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'microsoft'");
+    // H3: add user_id column if upgrading from pre-multi-user schema
+    if (!columns.some((column) => column.name === "user_id")) db.exec("ALTER TABLE task_plans ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1");
+    const remoteTaskColumns = db.prepare("PRAGMA table_info(remote_tasks)").all() as {name:string}[];
+    if (!remoteTaskColumns.some(c=>c.name === "source")) db.exec("ALTER TABLE remote_tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'microsoft'");
+    if (!remoteTaskColumns.some(c=>c.name === "user_id")) db.exec("ALTER TABLE remote_tasks ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1");
+    // Ensure (user_id, task_key) unique index exists for ON CONFLICT upserts
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS remote_tasks_user_task ON remote_tasks(user_id, task_key)");
     db.exec("CREATE TABLE IF NOT EXISTS remote_task_lists (list_key TEXT PRIMARY KEY, source TEXT NOT NULL, account_id TEXT NOT NULL, list_json TEXT NOT NULL)");
+    const remoteListColumns = db.prepare("PRAGMA table_info(remote_task_lists)").all() as {name:string}[];
+    if (!remoteListColumns.some(c=>c.name === "user_id")) db.exec("ALTER TABLE remote_task_lists ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1");
+    // Ensure (user_id, list_key) unique index exists for ON CONFLICT upserts
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS remote_task_lists_user_list ON remote_task_lists(user_id, list_key)");
+    // Create user_settings table if it does not exist (needed by H3 pending-move logic)
+    db.exec("CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(user_id, key))");
     if (!db.prepare("SELECT 1 FROM settings WHERE key = 'migration_task_plans_v1'").get()) {
       const legacy = db.prepare("SELECT id, due_at, duration_minutes FROM tasks WHERE due_at IS NOT NULL").all() as { id: number; due_at: string; duration_minutes: number }[];
       const insert = db.prepare("INSERT OR IGNORE INTO task_plans(task_key, scheduled_at, duration_minutes, legacy_schedule) VALUES (?, ?, ?, 1)");
@@ -140,7 +154,7 @@ export function migrateTaskPlanning(db: DatabaseSync) {
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }
 
-export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, google?: TaskGateway) {
+export function createTaskService(db: DatabaseSync, userId: number, microsoft: TaskGateway, google?: TaskGateway) {
   function gateway(source: RemoteTaskSource) {
     const result = source === "microsoft" ? microsoft : google;
     if (!result || !result.connected()) throw new TaskError(`${source === "google" ? "Google Tasks" : "Microsoft"} paskyra neprijungta arba nesuteikti leidimai.`, 409);
@@ -149,7 +163,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
   function requireAccount(account: string, source: RemoteTaskSource = "microsoft") {
     if (gateway(source).cachedAccountId() !== account) throw new TaskError("Paskyra pasikeitė. Atnaujink duomenis.", 409);
   }
-  function plan(key: string) { return db.prepare("SELECT * FROM task_plans WHERE task_key = ?").get(key) as Plan | undefined; }
+  function plan(key: string) { return db.prepare("SELECT * FROM task_plans WHERE task_key = ? AND user_id = ?").get(key, userId) as Plan | undefined; }
   function decorate(base: Task): Task {
     const extra = plan(base.key);
     return { ...base, scheduled_at: extra?.scheduled_at ?? null, duration_minutes: extra?.duration_minutes ?? base.duration_minutes,
@@ -159,12 +173,12 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       priority: base.source === "google" ? extra?.local_priority ?? base.priority : base.priority };
   }
   function ensurePlan(task: Task) {
-    db.prepare("INSERT OR IGNORE INTO task_plans(task_key, duration_minutes) VALUES (?, ?)").run(task.key, task.duration_minutes || 30);
+    db.prepare("INSERT OR IGNORE INTO task_plans(user_id, task_key, duration_minutes) VALUES (?, ?, ?)").run(userId, task.key, task.duration_minutes || 30);
     return plan(task.key)!;
   }
   function pendingMoveKey(oldKey: string) { return `task_move_pending:${createHash("sha256").update(oldKey).digest("hex")}`; }
   function pendingMoves(account: string): PendingGoogleMove[] {
-    const rows = db.prepare("SELECT key,value FROM settings WHERE key LIKE 'task_move_pending:%'").all() as {key:string;value:string}[];
+    const rows = db.prepare("SELECT key,value FROM user_settings WHERE user_id = ? AND key LIKE 'task_move_pending:%'").all(userId) as {key:string;value:string}[];
     return rows.flatMap(row=>{
       try {
         const value=JSON.parse(row.value) as Omit<PendingGoogleMove,"setting_key">;
@@ -174,7 +188,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
   }
   function writePendingMove(move: PendingGoogleMove) {
     const {setting_key,...value}=move;
-    db.prepare("INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(setting_key,JSON.stringify(value));
+    db.prepare("INSERT INTO user_settings(user_id,key,value) VALUES (?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP").run(userId,setting_key,JSON.stringify(value));
   }
   function applyMoveRows(move: PendingGoogleMove, moved: Task, expectedVersion?: number) {
     const destinationPlan = plan(moved.key);
@@ -190,15 +204,15 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     const oldPlan=plan(move.old_key);
     if (oldPlan) {
       const version=expectedVersion ?? oldPlan.schedule_version;
-      const changed=db.prepare("UPDATE task_plans SET task_key=?,schedule_version=schedule_version+1 WHERE task_key=? AND schedule_version=?")
-        .run(moved.key,move.old_key,version);
+      const changed=db.prepare("UPDATE task_plans SET task_key=?,schedule_version=schedule_version+1 WHERE task_key=? AND user_id=? AND schedule_version=?")
+        .run(moved.key,move.old_key,userId,version);
       if (changed.changes!==1) throw new TaskError("Planas jau pakeistas. Atnaujink duomenis ir bandyk dar kartą.",409);
     }
-    db.prepare(`INSERT INTO remote_tasks(task_key,account_id,list_id,task_json,source) VALUES (?,?,?,?,?)
-      ON CONFLICT(task_key) DO UPDATE SET account_id=excluded.account_id,list_id=excluded.list_id,task_json=excluded.task_json,source=excluded.source`)
-      .run(moved.key,move.account_id,move.destination_list_id,JSON.stringify(moved),"google");
-    db.prepare("DELETE FROM remote_tasks WHERE task_key=? AND task_key<>?").run(move.old_key,moved.key);
-    db.prepare("DELETE FROM settings WHERE key=?").run(move.setting_key);
+    db.prepare(`INSERT INTO remote_tasks(user_id,task_key,account_id,list_id,task_json,source) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(user_id,task_key) DO UPDATE SET account_id=excluded.account_id,list_id=excluded.list_id,task_json=excluded.task_json,source=excluded.source`)
+      .run(userId,moved.key,move.account_id,move.destination_list_id,JSON.stringify(moved),"google");
+    db.prepare("DELETE FROM remote_tasks WHERE task_key=? AND task_key<>? AND user_id=?").run(move.old_key,moved.key,userId);
+    db.prepare("DELETE FROM user_settings WHERE key=? AND user_id=?").run(move.setting_key,userId);
   }
   function reconcilePendingMoves(account: string, staged: {list:TaskList;tasks:Task[];fresh:boolean}[], warnings: string[]) {
     for (const move of pendingMoves(account)) {
@@ -207,7 +221,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       const sourceExists=source.tasks.some(task=>String(task.id)===move.old_task_id);
       const expectedId=move.moved_id ?? move.old_task_id;
       const candidates=destination.tasks.filter(task=>String(task.id)===expectedId);
-      if (sourceExists && !candidates.length) { db.prepare("DELETE FROM settings WHERE key=?").run(move.setting_key); continue; }
+      if (sourceExists && !candidates.length) { db.prepare("DELETE FROM user_settings WHERE key=? AND user_id=?").run(move.setting_key,userId); continue; }
       if (sourceExists || candidates.length!==1) { warnings.push("Google: nepavyko automatiškai suderinti nutrūkusio užduoties perkėlimo."); continue; }
       db.exec("SAVEPOINT reconcile_google_move");
       try {
@@ -221,16 +235,16 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     }
   }
   function localTasks() {
-    return (db.prepare("SELECT * FROM tasks ORDER BY completed, COALESCE(due_at, '9999'), created_at DESC").all() as unknown as Task[])
+    return (db.prepare("SELECT * FROM tasks WHERE user_id = ? ORDER BY completed, COALESCE(due_at, '9999'), created_at DESC").all(userId) as unknown as Task[])
       .map((task) => decorate({ ...task, source: "local", key: localKey(task.id) }));
   }
   function cachedTasks(account: string, source: RemoteTaskSource, list?: string) {
-    return (db.prepare("SELECT task_json FROM remote_tasks WHERE account_id = ? AND source = ? AND (? IS NULL OR list_id = ?)").all(account, source, list ?? null, list ?? null) as {task_json: string}[]).map((row) => decorate(JSON.parse(row.task_json) as Task));
+    return (db.prepare("SELECT task_json FROM remote_tasks WHERE user_id = ? AND account_id = ? AND source = ? AND (? IS NULL OR list_id = ?)").all(userId, account, source, list ?? null, list ?? null) as {task_json: string}[]).map((row) => decorate(JSON.parse(row.task_json) as Task));
   }
   function mirrorCleanups():MirrorCleanup[] {
     const rows=db.prepare(`SELECT task_key,mirror_event_id,mirror_account_id,mirror_transaction_id,mirror_create_payload,mirror_orphaned_at,mirror_orphan_title
-      FROM task_plans WHERE mirror_orphaned_at IS NOT NULL
-      ORDER BY mirror_orphaned_at,task_key`).all() as {task_key:string;mirror_event_id:string|null;mirror_account_id:string|null;mirror_transaction_id:string|null;mirror_create_payload:string|null;mirror_orphaned_at:string;mirror_orphan_title:string|null}[];
+      FROM task_plans WHERE user_id = ? AND mirror_orphaned_at IS NOT NULL
+      ORDER BY mirror_orphaned_at,task_key`).all(userId) as {task_key:string;mirror_event_id:string|null;mirror_account_id:string|null;mirror_transaction_id:string|null;mirror_create_payload:string|null;mirror_orphaned_at:string;mirror_orphan_title:string|null}[];
     return rows.flatMap(row=>{
       try {
         const parts=JSON.parse(row.task_key);
@@ -254,18 +268,18 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
   function get(input: Input): Task {
     const key = reference(input);
     if (!input.source || input.source === "local") {
-      const row = db.prepare("SELECT * FROM tasks WHERE id = ?").get(Number(input.id)) as unknown as Task | undefined;
+      const row = db.prepare("SELECT * FROM tasks WHERE id = ? AND user_id = ?").get(Number(input.id), userId) as unknown as Task | undefined;
       if (!row) throw new TaskError("Užduotis nerasta.", 404);
       return decorate({ ...row, source: "local", key });
     }
     requireAccount(input.account_id as string, input.source as RemoteTaskSource);
-    const row = db.prepare("SELECT task_json FROM remote_tasks WHERE task_key = ?").get(key) as { task_json: string } | undefined;
+    const row = db.prepare("SELECT task_json FROM remote_tasks WHERE task_key = ? AND user_id = ?").get(key, userId) as { task_json: string } | undefined;
     if (!row) throw new TaskError("Užduotis nerasta. Atnaujink sąrašą.", 404);
     return decorate(JSON.parse(row.task_json) as Task);
   }
   function cache(task: Task) {
-    db.prepare("INSERT INTO remote_tasks(task_key, account_id, list_id, task_json, source) VALUES (?, ?, ?, ?, ?) ON CONFLICT(task_key) DO UPDATE SET task_json=excluded.task_json")
-      .run(task.key, task.account_id!, task.list_id!, JSON.stringify(task), task.source);
+    db.prepare("INSERT INTO remote_tasks(user_id, task_key, account_id, list_id, task_json, source) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, task_key) DO UPDATE SET task_json=excluded.task_json")
+      .run(userId, task.key, task.account_id!, task.list_id!, JSON.stringify(task), task.source);
   }
   function mapped(task: any, list: TaskList): Task {
     const isGoogle = list.source === "google";
@@ -327,11 +341,11 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     return [...new Map(lists.map(list=>[list.key,list])).values()];
   }
   function cachedLists(source: RemoteTaskSource, account: string): TaskList[] {
-    return (db.prepare("SELECT list_json FROM remote_task_lists WHERE source=? AND account_id=?").all(source,account) as {list_json:string}[]).map(row=>JSON.parse(row.list_json));
+    return (db.prepare("SELECT list_json FROM remote_task_lists WHERE user_id = ? AND source=? AND account_id=?").all(userId,source,account) as {list_json:string}[]).map(row=>JSON.parse(row.list_json));
   }
   function saveList(list: TaskList) {
-    db.prepare("INSERT INTO remote_task_lists(list_key,source,account_id,list_json) VALUES (?,?,?,?) ON CONFLICT(list_key) DO UPDATE SET list_json=excluded.list_json")
-      .run(list.key,list.source,list.account_id,JSON.stringify(list));
+    db.prepare("INSERT INTO remote_task_lists(user_id,list_key,source,account_id,list_json) VALUES (?,?,?,?,?) ON CONFLICT(user_id,list_key) DO UPDATE SET list_json=excluded.list_json")
+      .run(userId,list.key,list.source,list.account_id,JSON.stringify(list));
   }
   function listReference(input: Input): {source:RemoteTaskSource;account:string} {
     if (input.source !== "google" && input.source !== "microsoft") throw new TaskError("Pasirink Google arba Microsoft sąrašą.");
@@ -347,7 +361,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
   }
   const listPath = (source:RemoteTaskSource,id?:string) => (source === "google" ? "/users/@me/lists" : "/me/todo/lists") + (id ? "/"+encodeURIComponent(id) : "");
   function matchingPlans(list: TaskList) {
-    return (db.prepare("SELECT * FROM task_plans").all() as Plan[]).filter(plan=>{
+    return (db.prepare("SELECT * FROM task_plans WHERE user_id = ?").all(userId) as Plan[]).filter(plan=>{
       try {const parts=JSON.parse(plan.task_key);return Array.isArray(parts) && parts.length===4 && parts[0]===list.source && parts[1]===list.account_id && parts[2]===list.list_id;}
       catch {return false;}
     });
@@ -412,10 +426,10 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     requireAccount(list.account_id,list.source);
     db.exec("BEGIN IMMEDIATE");
     try {
-      for (const plan of matchingPlans(list)) db.prepare("DELETE FROM task_plans WHERE task_key=?").run(plan.task_key);
-      db.prepare("DELETE FROM remote_tasks WHERE source=? AND account_id=? AND list_id=?").run(list.source,list.account_id,list.list_id);
-      db.prepare("DELETE FROM remote_task_lists WHERE list_key=?").run(list.key);
-      if (list.source === "microsoft") db.prepare("DELETE FROM settings WHERE key='microsoft_task_list_id' AND value=?").run(list.list_id);
+      for (const plan of matchingPlans(list)) db.prepare("DELETE FROM task_plans WHERE task_key=? AND user_id=?").run(plan.task_key,userId);
+      db.prepare("DELETE FROM remote_tasks WHERE user_id=? AND source=? AND account_id=? AND list_id=?").run(userId,list.source,list.account_id,list.list_id);
+      db.prepare("DELETE FROM remote_task_lists WHERE user_id=? AND list_key=?").run(userId,list.key);
+      if (list.source === "microsoft") db.prepare("DELETE FROM user_settings WHERE user_id=? AND key='microsoft_task_list_id' AND value=?").run(userId,list.list_id);
       db.exec("COMMIT");
     } catch(error){db.exec("ROLLBACK");throw error;}
   }
@@ -587,21 +601,21 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       requireAccount(account, source);
       const previousTasks=new Map(cachedTasks(account,source).map(task=>[task.key,task]));
       const markOrphan=db.prepare(`UPDATE task_plans SET mirror_error=?,mirror_orphaned_at=COALESCE(mirror_orphaned_at,?),
-        mirror_orphan_title=COALESCE(mirror_orphan_title,?) WHERE task_key=?
+        mirror_orphan_title=COALESCE(mirror_orphan_title,?) WHERE task_key=? AND user_id=?
         AND (mirror_event_id IS NOT NULL OR mirror_requested<>0 OR mirror_transaction_id IS NOT NULL OR mirror_create_payload IS NOT NULL)`);
       const orphanVersion=()=>`${new Date().toISOString()}#${randomUUID()}`;
       // Commit only after all reads and account checks. Planning rows survive
       // remote deletion; a failed list never replaces its last good snapshot.
       db.exec("BEGIN IMMEDIATE");
       try {
-        db.prepare("DELETE FROM remote_task_lists WHERE source=? AND account_id=?").run(source,account);
+        db.prepare("DELETE FROM remote_task_lists WHERE user_id=? AND source=? AND account_id=?").run(userId,source,account);
         for (const entry of staged) {
-          db.prepare("INSERT INTO remote_task_lists(list_key,source,account_id,list_json) VALUES (?,?,?,?)").run(entry.list.key,source,account,JSON.stringify(entry.list));
+          db.prepare("INSERT INTO remote_task_lists(user_id,list_key,source,account_id,list_json) VALUES (?,?,?,?,?)").run(userId,entry.list.key,source,account,JSON.stringify(entry.list));
           if (entry.fresh) {
-            db.prepare("DELETE FROM remote_tasks WHERE source=? AND account_id=? AND list_id=?").run(source,account,entry.list.list_id);
+            db.prepare("DELETE FROM remote_tasks WHERE user_id=? AND source=? AND account_id=? AND list_id=?").run(userId,source,account,entry.list.list_id);
             for (const task of entry.tasks) {
               db.prepare(`UPDATE task_plans SET mirror_orphaned_at=NULL,mirror_orphan_title=NULL,
-                mirror_error=CASE WHEN mirror_error=? THEN NULL ELSE mirror_error END WHERE task_key=?`).run(ORPHAN_MIRROR_ERROR,task.key);
+                mirror_error=CASE WHEN mirror_error=? THEN NULL ELSE mirror_error END WHERE task_key=? AND user_id=?`).run(ORPHAN_MIRROR_ERROR,task.key,userId);
               // A completion observed at the source must not resurrect the old
               // work block when that task is later reopened. Failed reads never
               // enter this branch, so an outage cannot erase a local plan.
@@ -609,27 +623,27 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
                 schedule_version=schedule_version+1,
                 mirror_error=CASE WHEN mirror_event_id IS NOT NULL OR mirror_transaction_id IS NOT NULL
                   THEN 'Užduotis užbaigta šaltinyje. Atverk ją ir išsaugok, kad pašalintum susietą Outlook bloką.' ELSE mirror_error END
-                WHERE task_key=? AND (scheduled_at IS NOT NULL OR mirror_requested<>0)`).run(task.key);
+                WHERE task_key=? AND user_id=? AND (scheduled_at IS NOT NULL OR mirror_requested<>0)`).run(task.key,userId);
               cache(task);
             }
           }
         }
         if (source === "google") reconcilePendingMoves(account,staged,warnings);
-        for (const task of cachedTasks(account,source)) if (!available.some(list=>list.list_id === task.list_id)) db.prepare("DELETE FROM remote_tasks WHERE task_key=?").run(task.key);
+        for (const task of cachedTasks(account,source)) if (!available.some(list=>list.list_id === task.list_id)) db.prepare("DELETE FROM remote_tasks WHERE task_key=? AND user_id=?").run(task.key,userId);
         // Mark orphaned plans in the same transaction that removes their last
         // provider snapshot. A crash can never discard the evidence first.
         for (const entry of staged) {
           if (!entry.fresh) continue;
-          const orphans = (db.prepare("SELECT tp.task_key FROM task_plans tp WHERE tp.task_key NOT IN (SELECT task_key FROM remote_tasks WHERE source=? AND account_id=? AND list_id=?) AND (tp.mirror_event_id IS NOT NULL OR tp.mirror_requested<>0 OR tp.mirror_transaction_id IS NOT NULL OR tp.mirror_create_payload IS NOT NULL)").all(source, account, entry.list.list_id) as {task_key:string}[]).filter(row => {
+          const orphans = (db.prepare("SELECT tp.task_key FROM task_plans tp WHERE tp.user_id=? AND tp.task_key NOT IN (SELECT task_key FROM remote_tasks WHERE user_id=? AND source=? AND account_id=? AND list_id=?) AND (tp.mirror_event_id IS NOT NULL OR tp.mirror_requested<>0 OR tp.mirror_transaction_id IS NOT NULL OR tp.mirror_create_payload IS NOT NULL)").all(userId, userId, source, account, entry.list.list_id) as {task_key:string}[]).filter(row => {
             try { const parts = JSON.parse(row.task_key); return Array.isArray(parts) && parts.length === 4 && parts[0] === source && parts[1] === account && parts[2] === entry.list.list_id; } catch { return false; }
           });
-          for (const orphan of orphans) markOrphan.run(ORPHAN_MIRROR_ERROR,orphanVersion(),previousTasks.get(orphan.task_key)?.title ?? null,orphan.task_key);
+          for (const orphan of orphans) markOrphan.run(ORPHAN_MIRROR_ERROR,orphanVersion(),previousTasks.get(orphan.task_key)?.title ?? null,orphan.task_key,userId);
         }
         // A successful list catalog is authoritative. Removed lists queue every
         // cached task that may still own an Outlook block.
         const availableListIds=new Set(available.map(list=>list.list_id));
         for (const task of previousTasks.values()) {
-          if (!availableListIds.has(task.list_id!)) markOrphan.run(ORPHAN_MIRROR_ERROR,orphanVersion(),task.title,task.key);
+          if (!availableListIds.has(task.list_id!)) markOrphan.run(ORPHAN_MIRROR_ERROR,orphanVersion(),task.title,task.key,userId);
         }
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
@@ -662,7 +676,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
           const recovered = await microsoft.request("/me/events", {method:"POST", body: current.mirror_create_payload});
           if (!recovered?.id) throw new Error("Nepavyko nustatyti bloko");
           current.mirror_event_id = recovered.id;
-          db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=?").run(recovered.id, task.key);
+          db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=? AND user_id=?").run(recovered.id, task.key, userId);
         }
         if (current.mirror_event_id) {
           try {
@@ -671,11 +685,11 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
             if (!(e instanceof ProviderError && e.status === 404)) throw e;
           }
         }
-        db.prepare("UPDATE task_plans SET mirror_event_id=NULL, mirror_account_id=NULL, mirror_transaction_id=NULL, mirror_create_payload=NULL, mirror_error=NULL WHERE task_key=?").run(task.key);
+        db.prepare("UPDATE task_plans SET mirror_event_id=NULL, mirror_account_id=NULL, mirror_transaction_id=NULL, mirror_create_payload=NULL, mirror_error=NULL WHERE task_key=? AND user_id=?").run(task.key, userId);
         return;
       }
       const transactionId = current.mirror_transaction_id || randomUUID();
-      db.prepare("UPDATE task_plans SET mirror_account_id=?, mirror_transaction_id=? WHERE task_key=?").run(account, transactionId, task.key);
+      db.prepare("UPDATE task_plans SET mirror_account_id=?, mirror_transaction_id=? WHERE task_key=? AND user_id=?").run(account, transactionId, task.key, userId);
       const start = new Date(current.scheduled_at);
       const payload = { subject: `✓ ${task.title}`, body: {contentType: "text", content: OUTLOOK_MIRROR_BODY},
         start: {dateTime: start.toISOString().replace(/Z$/, ""), timeZone:"UTC"},
@@ -684,16 +698,16 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       let eventId = current.mirror_event_id;
       if (!eventId) {
         const createPayload = current.mirror_create_payload || JSON.stringify({...payload, transactionId});
-        db.prepare("UPDATE task_plans SET mirror_create_payload=? WHERE task_key=?").run(createPayload, task.key);
+        db.prepare("UPDATE task_plans SET mirror_create_payload=? WHERE task_key=? AND user_id=?").run(createPayload, task.key, userId);
         const result = await microsoft.request("/me/events", {method:"POST", body:createPayload});
         eventId = result?.id;
-        if (eventId) db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=?").run(eventId, task.key);
+        if (eventId) db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=? AND user_id=?").run(eventId, task.key, userId);
       }
       if (!eventId) throw new Error("Nėra įvykio ID");
       await microsoft.request(`/me/events/${encodeURIComponent(eventId)}`, {method:"PATCH",body:JSON.stringify(payload)});
-      db.prepare("UPDATE task_plans SET mirror_event_id=?, mirror_error=NULL WHERE task_key=?").run(eventId, task.key);
+      db.prepare("UPDATE task_plans SET mirror_event_id=?, mirror_error=NULL WHERE task_key=? AND user_id=?").run(eventId, task.key, userId);
     } catch {
-      db.prepare("UPDATE task_plans SET mirror_error=? WHERE task_key=?").run("Vietinis planas išsaugotas, bet Outlook bloko sinchronizuoti nepavyko. Prijunk tą pačią paskyrą ir pakartok.", task.key);
+      db.prepare("UPDATE task_plans SET mirror_error=? WHERE task_key=? AND user_id=?").run("Vietinis planas išsaugotas, bet Outlook bloko sinchronizuoti nepavyko. Prijunk tą pačią paskyrą ir pakartok.", task.key, userId);
     }
   }
   async function create(input: Input) {
@@ -706,8 +720,8 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       duration_minutes: duration(input.duration_minutes ?? 30), project: text(input.project ?? (source === "local" ? "Asmeniniai" : source === "google" ? "Google Tasks" : "Microsoft To Do"), 200),
       priority: priority(input.priority ?? "normal"), tags: text(input.tags ?? "", 1000), energy: text(input.energy ?? "medium", 30) };
     if (source === "local") {
-      const result = db.prepare("INSERT INTO tasks(title, notes, due_at, duration_minutes, project, priority, tags, energy) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(values.title, values.notes, values.due_at, values.duration_minutes, values.project, values.priority, values.tags, values.energy);
+      const result = db.prepare("INSERT INTO tasks(user_id, title, notes, due_at, duration_minutes, project, priority, tags, energy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(userId, values.title, values.notes, values.due_at, values.duration_minutes, values.project, values.priority, values.tags, values.energy);
       return get({ id: Number(result.lastInsertRowid), source });
     }
     const provider = gateway(source), account = await provider.accountId();
@@ -729,7 +743,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     const result = await provider.request(path,{method:"POST",body:JSON.stringify(body)});
     requireAccount(account,source);
     const task = mapped(result, destination); cache(task); ensurePlan(task);
-    db.prepare("UPDATE task_plans SET duration_minutes=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=?").run(values.duration_minutes, values.project, values.tags, values.energy, source === "google" ? values.priority : null, task.key);
+    db.prepare("UPDATE task_plans SET duration_minutes=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=? AND user_id=?").run(values.duration_minutes, values.project, values.tags, values.energy, source === "google" ? values.priority : null, task.key, userId);
     return decorate(task);
   }
   async function update(input: Input) {
@@ -779,14 +793,14 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
         requireAccount(current.account_id!,current.source);
         cache(next);
       } else {
-        db.prepare("UPDATE tasks SET title=?, notes=?, due_at=?, duration_minutes=?, completed=?, project=?, priority=?, energy=?, tags=? WHERE id=?")
-          .run(next.title, next.notes, next.due_at, next.duration_minutes, next.completed, next.project, next.priority, next.energy, next.tags, Number(next.id));
+        db.prepare("UPDATE tasks SET title=?, notes=?, due_at=?, duration_minutes=?, completed=?, project=?, priority=?, energy=?, tags=? WHERE id=? AND user_id=?")
+          .run(next.title, next.notes, next.due_at, next.duration_minutes, next.completed, next.project, next.priority, next.energy, next.tags, Number(next.id), userId);
       }
       const extra = ensurePlan(current);
       const scheduledAt = next.completed ? null : next.scheduled_at;
       const mirror = scheduledAt ? (input.mirror_requested === undefined ? extra.mirror_requested : Number(input.mirror_requested)) : 0;
-      db.prepare("UPDATE task_plans SET scheduled_at=?, duration_minutes=?, schedule_version=schedule_version+1, legacy_schedule=?, mirror_requested=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=?")
-        .run(scheduledAt, next.duration_minutes, input.scheduled_at !== undefined ? 0 : extra.legacy_schedule, mirror, next.project, next.tags, next.energy, next.source === "google" ? next.priority : null, key);
+      db.prepare("UPDATE task_plans SET scheduled_at=?, duration_minutes=?, schedule_version=schedule_version+1, legacy_schedule=?, mirror_requested=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=? AND user_id=?")
+        .run(scheduledAt, next.duration_minutes, input.scheduled_at !== undefined ? 0 : extra.legacy_schedule, mirror, next.project, next.tags, next.energy, next.source === "google" ? next.priority : null, key, userId);
       await syncMirror(next);
       return get(input);
     });
@@ -815,13 +829,13 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     requireAccount(account,"google");
 
     const oldKey = current.key, expectedKey = remoteKey(account,destinationListId,taskId,"google");
-    if (db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=?").get(expectedKey) || db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(expectedKey)) {
+    if (db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=? AND user_id=?").get(expectedKey,userId) || db.prepare("SELECT 1 FROM task_plans WHERE task_key=? AND user_id=?").get(expectedKey,userId)) {
       throw new TaskError("Paskirties sąraše jau yra vietinių duomenų su šia užduoties tapatybe. Atnaujink duomenis.",409);
     }
     const pending: PendingGoogleMove = {setting_key:pendingMoveKey(oldKey),account_id:account,source_list_id:sourceListId,
       destination_list_id:destinationListId,old_task_id:taskId,old_key:oldKey,schedule_version:current.schedule_version,
       moved_id:null};
-    if (db.prepare("SELECT 1 FROM settings WHERE key=?").get(pending.setting_key)) throw new TaskError("Ankstesnis šios užduoties perkėlimas dar derinamas. Atnaujink duomenis.",409);
+    if (db.prepare("SELECT 1 FROM user_settings WHERE key=? AND user_id=?").get(pending.setting_key,userId)) throw new TaskError("Ankstesnis šios užduoties perkėlimas dar derinamas. Atnaujink duomenis.",409);
     writePendingMove(pending);
     const params = new URLSearchParams({destinationTasklist:destinationListId});
     const raw = await provider.request(`/lists/${encodeURIComponent(sourceListId)}/tasks/${encodeURIComponent(taskId)}/move?${params}`,{method:"POST"});
@@ -844,9 +858,9 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
 
     db.exec("BEGIN IMMEDIATE");
     try {
-      const cached = db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=? AND source='google' AND account_id=? AND list_id=?").get(oldKey,account,sourceListId);
+      const cached = db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=? AND user_id=? AND source='google' AND account_id=? AND list_id=?").get(oldKey,userId,account,sourceListId);
       if (!cached) throw new TaskError("Užduoties vietinė kopija pasikeitė. Atnaujink duomenis.",409);
-      if (newKey !== expectedKey && (db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=?").get(newKey) || db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(newKey))) {
+      if (newKey !== expectedKey && (db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=? AND user_id=?").get(newKey,userId) || db.prepare("SELECT 1 FROM task_plans WHERE task_key=? AND user_id=?").get(newKey,userId))) {
         throw new TaskError("Paskirties sąrašo duomenys pasikeitė. Atnaujink duomenis.",409);
       }
       applyMoveRows(pending,moved,current.schedule_version);
@@ -967,18 +981,18 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
             if (!current || current.mirror_orphaned_at!==orphanedAt || current.mirror_event_id!==eventSnapshot)
               throw new TaskError("Valymo įrašas pasikeitė. Atnaujink duomenis.",409);
             eventId=String(recovered.id);
-            db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=? AND mirror_orphaned_at=?").run(eventId,taskKey,orphanedAt);
+            db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=? AND user_id=? AND mirror_orphaned_at=?").run(eventId,taskKey,userId,orphanedAt);
           }
           try {await microsoft.request(`/me/events/${encodeURIComponent(eventId)}`,{method:"DELETE"});}
           catch(error) {if (!(error instanceof ProviderError && error.status===404)) throw error;}
           requireAccount(account);
         }
-        const removed=db.prepare("DELETE FROM task_plans WHERE task_key=? AND mirror_orphaned_at=?").run(taskKey,orphanedAt);
+        const removed=db.prepare("DELETE FROM task_plans WHERE task_key=? AND user_id=? AND mirror_orphaned_at=?").run(taskKey,userId,orphanedAt);
         if (removed.changes!==1 && plan(taskKey)) throw new TaskError("Valymo įrašas jau pasikeitė. Atnaujink duomenis.",409);
         return {ok:true};
       } catch(error) {
-        db.prepare("UPDATE task_plans SET mirror_error=? WHERE task_key=? AND mirror_orphaned_at=?")
-          .run("Outlook bloko pašalinti nepavyko. Patikrink paskyrą ir pakartok valymą.",taskKey,orphanedAt);
+        db.prepare("UPDATE task_plans SET mirror_error=? WHERE task_key=? AND user_id=? AND mirror_orphaned_at=?")
+          .run("Outlook bloko pašalinti nepavyko. Patikrink paskyrą ir pakartok valymą.",taskKey,userId,orphanedAt);
         throw error;
       }
     }));
@@ -988,19 +1002,19 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     return serial(reference(input), async () => {
       const task = get(input); const extra = ensurePlan(task);
       if (task.readonly_reason) throw new TaskError(task.readonly_reason,403);
-      db.prepare("UPDATE task_plans SET mirror_requested=0 WHERE task_key=?").run(task.key);
+      db.prepare("UPDATE task_plans SET mirror_requested=0 WHERE task_key=? AND user_id=?").run(task.key, userId);
       await syncMirror(task);
       if (plan(task.key)?.mirror_error) {
-        db.prepare("UPDATE task_plans SET mirror_requested=? WHERE task_key=?").run(extra.mirror_requested, task.key);
+        db.prepare("UPDATE task_plans SET mirror_requested=? WHERE task_key=? AND user_id=?").run(extra.mirror_requested, task.key, userId);
         throw new TaskError("Pirmiausia pakartok susieto Outlook bloko pašalinimą.", 409);
       }
       if (task.source !== "local") {
         requireAccount(task.account_id!,task.source);
         await gateway(task.source).request(`${task.source === "google" ? "/lists" : "/me/todo/lists"}/${encodeURIComponent(task.list_id!)}/tasks/${encodeURIComponent(String(task.id))}`, {method:"DELETE"});
         requireAccount(task.account_id!,task.source);
-        db.prepare("DELETE FROM remote_tasks WHERE task_key=?").run(task.key);
-      } else db.prepare("DELETE FROM tasks WHERE id=?").run(Number(task.id));
-      db.prepare("DELETE FROM task_plans WHERE task_key=?").run(task.key);
+        db.prepare("DELETE FROM remote_tasks WHERE task_key=? AND user_id=?").run(task.key, userId);
+      } else db.prepare("DELETE FROM tasks WHERE id=? AND user_id=?").run(Number(task.id), userId);
+      db.prepare("DELETE FROM task_plans WHERE task_key=? AND user_id=?").run(task.key, userId);
     });
   }
   // Prevent a slow read from replacing a just-written remote cache snapshot.

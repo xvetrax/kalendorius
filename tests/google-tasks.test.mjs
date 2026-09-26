@@ -6,11 +6,13 @@ import {tmpdir} from "node:os";
 import path from "node:path";
 import {createTaskService,migrateTaskPlanning} from "../lib/task-service.ts";
 
+const TEST_USER_ID = 1;
 function setup(t) {
   const dir=mkdtempSync(path.join(tmpdir(),"google-task-plans-")), file=path.join(dir,"test.db");
   let db=new DatabaseSync(file);
   db.exec(`CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-    CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,notes TEXT DEFAULT '',due_at TEXT,
+    CREATE TABLE user_settings(user_id INTEGER NOT NULL,key TEXT NOT NULL,value TEXT NOT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(user_id,key));
+    CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL DEFAULT ${TEST_USER_ID},title TEXT NOT NULL,notes TEXT DEFAULT '',due_at TEXT,
       duration_minutes INTEGER DEFAULT 30,completed INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       project TEXT DEFAULT 'Asmeniniai',priority TEXT DEFAULT 'normal',energy TEXT DEFAULT 'medium',tags TEXT DEFAULT '');`);
   migrateTaskPlanning(db);
@@ -50,10 +52,10 @@ function setup(t) {
       throw Error("unexpected method");
     }};
   const microsoft={connected:()=>false,cachedAccountId:()=>null,accountId:async()=>{throw Error("disconnected");},request:async()=>{throw Error("unexpected Microsoft call");}};
-  let service=createTaskService(db,microsoft,google);
+  let service=createTaskService(db,TEST_USER_ID,microsoft,google);
   t.after(()=>{db.close();rmSync(dir,{recursive:true,force:true});});
   return {get service(){return service;},get db(){return db;},google,state,lists,calls,
-    restart(){db.close();db=new DatabaseSync(file);migrateTaskPlanning(db);service=createTaskService(db,microsoft,google);return service;}};
+    restart(){db.close();db=new DatabaseSync(file);migrateTaskPlanning(db);service=createTaskService(db,TEST_USER_ID,microsoft,google);return service;}};
 }
 const ref=t=>({source:t.source,account_id:t.account_id,list_id:t.list_id,id:t.id,schedule_version:t.schedule_version});
 const start="2026-10-25T08:00:00.000Z";
@@ -215,12 +217,12 @@ test("Google list refresh reconciles a provider move whose confirmation request 
   f.state.failConfirmation=true;
   await assert.rejects(f.service.moveGoogle({...ref(task),destination_list_id:"list-b"}),/confirmation failed/);
   assert.ok(f.db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(task.key));
-  assert.equal(f.db.prepare("SELECT count(*) AS count FROM settings WHERE key LIKE 'task_move_pending:%'").get().count,1);
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM user_settings WHERE key LIKE 'task_move_pending:%'").get().count,1);
   f.restart();
   const result=await f.service.list(),moved=result.items.find(item=>item.list_id==="list-b");
   assert.ok(moved);assert.equal(moved.scheduled_at,start);assert.equal(moved.project,"Atkuriama");assert.equal(moved.mirror_event_id,"event-recover");
   assert.equal(f.db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(task.key),undefined);
-  assert.equal(f.db.prepare("SELECT count(*) AS count FROM settings WHERE key LIKE 'task_move_pending:%'").get().count,0);
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM user_settings WHERE key LIKE 'task_move_pending:%'").get().count,0);
   assert.ok(result.warnings.some(warning=>warning.includes("užbaigtas anksčiau nutrūkęs")));
 });
 
@@ -231,7 +233,7 @@ test("Google move without a returned ID never attaches a plan by matching task c
   f.restart();const result=await f.service.list(),destination=result.items.find(item=>item.id==="unknown-new-id");
   assert.ok(destination);assert.equal(destination.scheduled_at,null);
   assert.ok(f.db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(task.key));
-  assert.equal(f.db.prepare("SELECT count(*) AS count FROM settings WHERE key LIKE 'task_move_pending:%'").get().count,1);
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM user_settings WHERE key LIKE 'task_move_pending:%'").get().count,1);
   assert.ok(result.warnings.some(warning=>warning.includes("nepavyko automatiškai suderinti")));
 });
 
@@ -243,6 +245,6 @@ test("Google recovery with a known new ID never falls back to a foreign task usi
   f.restart();const result=await f.service.list(),foreign=result.items.find(item=>item.list_id==="list-b"&&item.id==="1");
   assert.ok(foreign);assert.equal(foreign.scheduled_at,null);
   assert.ok(f.db.prepare("SELECT 1 FROM task_plans WHERE task_key=?").get(task.key));
-  assert.equal(f.db.prepare("SELECT count(*) AS count FROM settings WHERE key LIKE 'task_move_pending:%'").get().count,1);
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM user_settings WHERE key LIKE 'task_move_pending:%'").get().count,1);
   assert.ok(result.warnings.some(warning=>warning.includes("nepavyko automatiškai suderinti")));
 });
