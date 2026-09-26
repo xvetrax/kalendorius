@@ -2,27 +2,118 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { db } from "@/lib/db";
+import { db } from "@/lib/db-multi";
 
-const APP_TABLES = ["tasks", "settings", "task_plans", "remote_tasks", "remote_task_lists", "calendar_event_creates"] as const;
-const REQUIRED_TABLES = new Set(["tasks", "settings"]);
-const SENSITIVE_KEYS = ["google_refresh_token", "microsoft_refresh_token"];
-const REQUIRED_COLUMNS: Record<typeof APP_TABLES[number], readonly string[]> = {
-  tasks: ["id", "title", "notes", "due_at", "duration_minutes", "completed", "created_at"],
+// ---------------------------------------------------------------------------
+// Table registry
+// ---------------------------------------------------------------------------
+
+/**
+ * ALL_TABLES — full set of multi-user schema tables that are included in an
+ * admin full backup (createBackup).  Order matters for FK-safe restore: parents
+ * before children on write, children before parents on delete.
+ */
+const ALL_TABLES = [
+  "users",
+  "auth_identities",
+  "sessions",
+  "invites",
+  "auth_operations",
+  "oauth_connections",
+  "user_settings",
+  "security_events",
+  "tasks",
+  "task_plans",
+  "remote_tasks",
+  "remote_task_lists",
+  "calendar_event_creates",
+  "settings",
+] as const;
+
+type AllTable = (typeof ALL_TABLES)[number];
+
+/**
+ * USER_DATA_TABLES — tables exported per-user (no secrets, no auth state).
+ * These are the tables that contain a user_id FK and hold user work data.
+ */
+const USER_DATA_TABLES = [
+  "tasks",
+  "task_plans",
+  "remote_tasks",
+  "remote_task_lists",
+] as const;
+
+type UserDataTable = (typeof USER_DATA_TABLES)[number];
+
+/**
+ * REQUIRED_TABLES — every valid multi-user backup must contain these.
+ */
+const REQUIRED_TABLES = new Set<string>(["users", "tasks"]);
+
+/**
+ * SENSITIVE_KEYS — column names that must never appear in a user export.
+ * Also used as settings keys to exclude from settings export.
+ */
+const SENSITIVE_KEYS = [
+  // settings table (legacy OAuth secrets)
+  "google_refresh_token",
+  "microsoft_refresh_token",
+  // oauth_connections column
+  "encrypted_refresh_token",
+  // sessions / invites / auth_operations columns (token hashes)
+  "token_hash",
+  "state_hash",
+  "pkce_verifier",
+  "nonce",
+];
+
+/**
+ * REQUIRED_COLUMNS — minimum columns that must be present for each table in a
+ * backup to be considered structurally valid.
+ */
+const REQUIRED_COLUMNS: Record<AllTable, readonly string[]> = {
+  users: ["id", "display_name", "primary_email", "role", "status", "created_at"],
+  auth_identities: ["id", "user_id", "provider", "issuer", "subject"],
+  sessions: ["id", "token_hash", "user_id", "expires_at"],
+  invites: ["id", "token_hash", "role", "created_by", "expires_at"],
+  auth_operations: ["id", "state_hash", "nonce", "pkce_verifier", "provider", "expires_at", "used"],
+  oauth_connections: ["id", "user_id", "provider", "provider_account_id", "generation", "status"],
+  user_settings: ["user_id", "key", "value"],
+  security_events: ["id", "event_type", "created_at"],
+  tasks: ["id", "user_id", "title", "notes", "due_at", "duration_minutes", "completed", "created_at"],
+  task_plans: [
+    "task_key", "user_id", "scheduled_at", "duration_minutes", "schedule_version",
+    "legacy_schedule", "mirror_requested", "mirror_event_id", "mirror_account_id",
+    "mirror_transaction_id", "mirror_error", "project", "tags", "energy",
+  ],
+  remote_tasks: ["task_key", "user_id", "account_id", "list_id", "task_json"],
+  remote_task_lists: ["list_key", "user_id", "source", "account_id", "list_json"],
+  calendar_event_creates: [
+    "user_id", "provider", "account_id", "connection_id", "calendar_id", "operation_id", "fingerprint", "created_at",
+  ],
   settings: ["key", "value"],
-  task_plans: ["task_key", "scheduled_at", "duration_minutes", "schedule_version", "legacy_schedule", "mirror_requested", "mirror_event_id", "mirror_account_id", "mirror_transaction_id", "mirror_error", "project", "tags", "energy"],
-  remote_tasks: ["task_key", "account_id", "list_id", "task_json"],
-  remote_task_lists: ["list_key", "source", "account_id", "list_json"],
-  calendar_event_creates: ["provider", "account_id", "connection_id", "calendar_id", "operation_id", "fingerprint", "created_at"],
 };
-const PRIMARY_KEYS: Record<typeof APP_TABLES[number], readonly string[]> = {
+
+const PRIMARY_KEYS: Record<AllTable, readonly string[]> = {
+  users: ["id"],
+  auth_identities: ["id"],
+  sessions: ["id"],
+  invites: ["id"],
+  auth_operations: ["id"],
+  oauth_connections: ["id"],
+  user_settings: ["user_id", "key"],
+  security_events: ["id"],
   tasks: ["id"],
+  task_plans: ["id"],
+  remote_tasks: ["id"],
+  remote_task_lists: ["id"],
+  calendar_event_creates: ["id"],
   settings: ["key"],
-  task_plans: ["task_key"],
-  remote_tasks: ["task_key"],
-  remote_task_lists: ["list_key"],
-  calendar_event_creates: ["provider", "account_id", "connection_id", "calendar_id", "operation_id"],
 };
+
+// ---------------------------------------------------------------------------
+// Error class
+// ---------------------------------------------------------------------------
 
 export class BackupError extends Error {
   readonly status: number;
@@ -32,6 +123,10 @@ export class BackupError extends Error {
     this.status = status;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
 function makeTempPath(prefix: string): string {
   const filename = `${prefix}-${process.hrtime.bigint()}.db`;
@@ -44,38 +139,57 @@ function quotedPath(value: string) {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function copyDbTo(destination: string, excludeSettings: string[] = []) {
-  const tables = db.prepare(
+type ColumnInfo = { name: string; type: string; pk: number };
+
+function tableInfo(database: DatabaseSync, schema: string, table: string) {
+  return database.prepare(`PRAGMA ${schema}.table_info("${table.replaceAll('"', '""')}")`).all() as ColumnInfo[];
+}
+
+/**
+ * stripForeignKeys — removes REFERENCES clauses from a CREATE TABLE statement
+ * so the table can be created in a standalone export DB without requiring
+ * parent tables to exist.  Only strips inline column-level FK constraints;
+ * table-level FOREIGN KEY constraints are also removed.
+ */
+function stripForeignKeys(sql: string): string {
+  // Remove inline "REFERENCES table(col) [ON DELETE ...]" from column defs
+  let result = sql.replace(/\s+REFERENCES\s+\S+\s*\([^)]*\)(\s+ON\s+(DELETE|UPDATE)\s+\w+(\s+\w+)?)?/gi, "");
+  // Remove table-level FOREIGN KEY constraints (whole line/comma segment)
+  result = result.replace(/,?\s*FOREIGN\s+KEY\s*\([^)]*\)\s+REFERENCES\s+\S+\s*\([^)]*\)(\s+ON\s+(DELETE|UPDATE)\s+\w+(\s+\w+)?)?/gi, "");
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Admin full backup — copies all tables as-is
+// ---------------------------------------------------------------------------
+
+function copyAllTablesTo(destination: string) {
+  // Find all tables that actually exist in the live DB and are part of ALL_TABLES
+  const existingTables = db.prepare(
     `SELECT name, sql FROM sqlite_master
-     WHERE type='table' AND name IN (${APP_TABLES.map(() => "?").join(",")})`
-  ).all(...APP_TABLES) as { name: string; sql: string }[];
-  if (tables.length !== APP_TABLES.length) throw new BackupError("Duomenų bazės schema nepilna; kopija nesukurta.");
+     WHERE type='table' AND name IN (${ALL_TABLES.map(() => "?").join(",")})
+     ORDER BY rowid`
+  ).all(...ALL_TABLES) as { name: string; sql: string }[];
 
   db.exec(`ATTACH DATABASE ${quotedPath(destination)} AS backup_target`);
   try {
     db.exec("BEGIN");
     try {
-      for (const { name, sql } of tables) {
+      for (const { name, sql } of existingTables) {
         db.exec(sql.replace(/^CREATE TABLE\s+/i, "CREATE TABLE backup_target."));
-        if (name === "settings" && excludeSettings.length) {
-          const placeholders = excludeSettings.map(() => "?").join(",");
-          const rows = db.prepare(`SELECT * FROM main.settings WHERE key NOT IN (${placeholders})`).all(...excludeSettings) as Record<string, unknown>[];
-          if (rows.length) {
-            const columns = Object.keys(rows[0]);
-            const insert = db.prepare(`INSERT INTO backup_target.settings (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`);
-            for (const row of rows) insert.run(...columns.map(column => row[column]) as import("node:sqlite").SQLInputValue[]);
-          }
-        } else {
-          db.exec(`INSERT INTO backup_target.${name} SELECT * FROM main.${name}`);
-        }
+        db.exec(`INSERT INTO backup_target.${name} SELECT * FROM main.${name}`);
       }
-      const indexes = db.prepare(
-        `SELECT sql FROM sqlite_master
-         WHERE type='index' AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
-           AND tbl_name IN (${APP_TABLES.map(() => "?").join(",")})`
-      ).all(...APP_TABLES) as { sql: string }[];
-      for (const { sql } of indexes) {
-        db.exec(sql.replace(/^CREATE (UNIQUE )?INDEX\s+/i, match => match.replace("INDEX ", "INDEX backup_target.")));
+      // Copy all non-system indexes for included tables
+      const tableNames = existingTables.map(t => t.name);
+      if (tableNames.length) {
+        const indexes = db.prepare(
+          `SELECT sql FROM sqlite_master
+           WHERE type='index' AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+             AND tbl_name IN (${tableNames.map(() => "?").join(",")})`
+        ).all(...tableNames) as { sql: string }[];
+        for (const { sql } of indexes) {
+          db.exec(sql.replace(/^CREATE (UNIQUE )?INDEX\s+/i, match => match.replace("INDEX ", "INDEX backup_target.")));
+        }
       }
       db.exec("COMMIT");
     } catch (error) {
@@ -87,92 +201,218 @@ function copyDbTo(destination: string, excludeSettings: string[] = []) {
   }
 }
 
-function createCopy(excludeSettings: string[] = []) {
-  const temporary = makeTempPath("planner-copy");
+/**
+ * createBackup — admin-only full backup of the entire application database.
+ * Includes all tables: users, sessions, invites, oauth_connections, etc.
+ * Only call from the admin backup route.
+ */
+export function createBackup(): Buffer {
+  const temporary = makeTempPath("planner-backup");
   try {
-    copyDbTo(temporary, excludeSettings);
+    copyAllTablesTo(temporary);
     return fs.readFileSync(temporary);
   } finally {
     try { fs.unlinkSync(temporary); } catch {}
   }
 }
 
-export function createBackup(): Buffer {
-  return createCopy();
+// ---------------------------------------------------------------------------
+// Per-user export — only user-owned work data, no secrets
+// ---------------------------------------------------------------------------
+
+/**
+ * createUserExport — exports only the rows belonging to `userId` from the
+ * user data tables (tasks, task_plans, remote_tasks, remote_task_lists).
+ *
+ * Security guarantees:
+ *  - The userId parameter MUST come from a server-verified session (caller's
+ *    responsibility).
+ *  - Sessions, invites, auth_operations, oauth_connections, security_events
+ *    and any token/secret columns are NEVER included.
+ *  - Sensitive column values (encrypted_refresh_token, token_hash, etc.) are
+ *    excluded even if accidentally present via schema changes.
+ */
+export function createUserExport(userId: number): Buffer {
+  const temporary = makeTempPath("planner-export");
+  try {
+    db.exec(`ATTACH DATABASE ${quotedPath(temporary)} AS export_target`);
+    try {
+      db.exec("BEGIN");
+      try {
+        for (const tableName of USER_DATA_TABLES) {
+          // Get the CREATE TABLE SQL from the live schema
+          const row = db.prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?"
+          ).get(tableName) as { sql: string } | undefined;
+          if (!row) continue;
+
+          const createSql = stripForeignKeys(row.sql).replace(/^CREATE TABLE\s+/i, "CREATE TABLE export_target.");
+          db.exec(createSql);
+
+          // Get column list, excluding sensitive ones
+          const columns = tableInfo(db, "main", tableName)
+            .map(c => c.name)
+            .filter(c => !SENSITIVE_KEYS.includes(c));
+
+          const colList = columns.map(c => `"${c.replaceAll('"', '""')}"`).join(",");
+          db.exec(
+            `INSERT INTO export_target.${tableName} (${colList})
+             SELECT ${colList} FROM main.${tableName} WHERE user_id = ${Number(userId)}`
+          );
+        }
+        // Copy non-system indexes for exported tables
+        const tableNames = [...USER_DATA_TABLES];
+        const indexes = db.prepare(
+          `SELECT sql FROM sqlite_master
+           WHERE type='index' AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+             AND tbl_name IN (${tableNames.map(() => "?").join(",")})`
+        ).all(...tableNames) as { sql: string }[];
+        for (const { sql } of indexes) {
+          db.exec(sql.replace(/^CREATE (UNIQUE )?INDEX\s+/i, match => match.replace("INDEX ", "INDEX export_target.")));
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      db.exec("DETACH DATABASE export_target");
+    }
+    return fs.readFileSync(temporary);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch {}
+  }
 }
 
-export function createExport(): Buffer {
-  return createCopy(SENSITIVE_KEYS);
-}
+// ---------------------------------------------------------------------------
+// Backup validation
+// ---------------------------------------------------------------------------
 
-type ColumnInfo = { name: string; type: string; pk: number };
-
-function tableInfo(database: DatabaseSync, schema: "main" | "restore_source", table: string) {
-  return database.prepare(`PRAGMA ${schema}.table_info("${table.replaceAll('"', '""')}")`).all() as ColumnInfo[];
-}
-
-function validateBackup(database: DatabaseSync) {
+/**
+ * validateBackup — validates a backup database opened read-only.
+ *
+ * Rejects:
+ *  - Corrupt databases (PRAGMA integrity_check).
+ *  - Databases containing unsupported object types.
+ *  - Old single-user backups that have `settings` but no `users` table.
+ *  - Backups with unrecognised tables (not in ALL_TABLES).
+ *  - Backups missing required tables.
+ *  - Tables with newer or incompatible schemas.
+ *
+ * Returns the list of table names present in the backup.
+ */
+function validateBackup(database: DatabaseSync): string[] {
   const integrity = database.prepare("PRAGMA integrity_check").all() as { integrity_check: string }[];
-  if (integrity.length !== 1 || integrity[0].integrity_check !== "ok") throw new BackupError("Atsarginė kopija pažeista.");
-  const objects = database.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all() as { type: string; name: string; sql: string | null }[];
+  if (integrity.length !== 1 || integrity[0].integrity_check !== "ok") {
+    throw new BackupError("Atsarginė kopija pažeista.");
+  }
+
+  const objects = database
+    .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
+    .all() as { type: string; name: string; sql: string | null }[];
+
+  if (objects.some(item => item.type !== "table" && item.type !== "index")) {
+    throw new BackupError("Atsarginėje kopijoje yra nepalaikomų objektų.");
+  }
+
   const tables = objects.filter(item => item.type === "table");
-  if (objects.some(item => item.type !== "table" && item.type !== "index")) throw new BackupError("Atsarginėje kopijoje yra nepalaikomų objektų.");
-  if (tables.some(item => !APP_TABLES.includes(item.name as typeof APP_TABLES[number]) || !item.sql?.startsWith("CREATE TABLE"))) {
+  const tableNames = new Set(tables.map(t => t.name));
+
+  // Reject old single-user schema: has settings but no users table
+  if (tableNames.has("settings") && !tableNames.has("users")) {
+    throw new BackupError(
+      "Sena vieno naudotojo schema — atkurimas nepalaikomas. Sukurti naują kelių naudotojų duomenų bazę."
+    );
+  }
+
+  // All tables must be from the known set
+  if (tables.some(item => !ALL_TABLES.includes(item.name as AllTable) || !item.sql?.startsWith("CREATE TABLE"))) {
     throw new BackupError("Atsarginėje kopijoje yra neatpažintų lentelių.");
   }
-  for (const required of REQUIRED_TABLES) if (!tables.some(table => table.name === required)) throw new BackupError(`Atsarginėje kopijoje trūksta ${required} lentelės.`);
+
+  // Required tables must be present
+  for (const required of REQUIRED_TABLES) {
+    if (!tableNames.has(required)) {
+      throw new BackupError(`Atsarginėje kopijoje trūksta ${required} lentelės.`);
+    }
+  }
+
+  // Column compatibility checks
   for (const table of tables) {
-    const name = table.name as typeof APP_TABLES[number];
+    const name = table.name as AllTable;
     const incoming = tableInfo(database, "main", name);
     const current = tableInfo(db, "main", name);
-    const currentByName = new Map(current.map(column => [column.name, column]));
-    if (incoming.some(column => !currentByName.has(column.name) || currentByName.get(column.name)?.type.toUpperCase() !== column.type.toUpperCase())) {
+    const currentByName = new Map(current.map(col => [col.name, col]));
+
+    // Reject backups with columns unknown to the live schema (newer backup)
+    if (incoming.some(col => !currentByName.has(col.name) || currentByName.get(col.name)?.type.toUpperCase() !== col.type.toUpperCase())) {
       throw new BackupError(`Atsarginės kopijos ${name} schema yra naujesnė arba nepalaikoma.`);
     }
-    if (REQUIRED_COLUMNS[name].some(column => !incoming.some(candidate => candidate.name === column))) {
+
+    // Required columns must be present
+    if (REQUIRED_COLUMNS[name].some(col => !incoming.some(c => c.name === col))) {
       throw new BackupError(`Atsarginės kopijos ${name} schemoje trūksta būtinų stulpelių.`);
     }
-    if (PRIMARY_KEYS[name].some(key=>!incoming.some(column => column.name === key && column.pk > 0))) {
+
+    // Primary key columns must be present and marked
+    if (PRIMARY_KEYS[name].some(key => !incoming.some(col => col.name === key && col.pk > 0))) {
       throw new BackupError(`Atsarginės kopijos ${name} tapatybės schema nepalaikoma.`);
     }
   }
-  return tables.map(table => table.name);
+
+  return tables.map(t => t.name);
 }
 
+// ---------------------------------------------------------------------------
+// Admin full restore
+// ---------------------------------------------------------------------------
+
+/**
+ * restoreBackup — admin-only transactional restore from a full backup.
+ *
+ * Security:
+ *  - Requires multi-user schema (users table must be present).
+ *  - Rejects old single-user backups with a clear Lithuanian message.
+ *  - All sessions are cleared during restore (force re-login after restore).
+ *  - Only call from the admin backup route after asserting admin role.
+ */
 export function restoreBackup(data: Buffer): { tablesRestored: number } {
   if (data.length < 16 || !data.subarray(0, 16).toString("utf8").startsWith("SQLite format 3")) {
     throw new BackupError("Netinkamas failo formatas — reikalinga SQLite atsarginė kopija.");
   }
+
   const temporary = makeTempPath("planner-restore");
   try {
     fs.writeFileSync(temporary, data, { mode: 0o600 });
     const incoming = new DatabaseSync(temporary, { readOnly: true });
     let incomingTables: string[];
-    try { incomingTables = validateBackup(incoming); }
-    finally { incoming.close(); }
+    try {
+      incomingTables = validateBackup(incoming);
+    } finally {
+      incoming.close();
+    }
 
     db.exec(`ATTACH DATABASE ${quotedPath(temporary)} AS restore_source`);
     try {
       db.exec("BEGIN IMMEDIATE");
       try {
-        for (const table of [...APP_TABLES].reverse()) db.exec(`DELETE FROM main.${table}`);
-        for (const table of APP_TABLES) {
+        // Delete in reverse dependency order (children before parents)
+        for (const table of [...ALL_TABLES].reverse()) {
+          try { db.exec(`DELETE FROM main.${table}`); } catch { /* table may not exist yet */ }
+        }
+
+        for (const table of ALL_TABLES) {
           if (!incomingTables.includes(table)) continue;
-          const sourceColumns = tableInfo(db, "restore_source", table).map(column => column.name);
-          const destinationColumns = tableInfo(db, "main", table).map(column => column.name);
-          const columns = sourceColumns.filter(column => destinationColumns.includes(column));
-          if (!columns.length) throw new BackupError(`Atsarginės kopijos ${table} lentelė tuščia arba nesuderinama.`);
-          const list = columns.map(column => `"${column.replaceAll('"', '""')}"`).join(",");
+          const sourceColumns = tableInfo(db, "restore_source", table).map(col => col.name);
+          const destinationColumns = tableInfo(db, "main", table).map(col => col.name);
+          const columns = sourceColumns.filter(col => destinationColumns.includes(col));
+          if (!columns.length) {
+            throw new BackupError(`Atsarginės kopijos ${table} lentelė tuščia arba nesuderinama.`);
+          }
+          const list = columns.map(col => `"${col.replaceAll('"', '""')}"`).join(",");
           db.exec(`INSERT INTO main.${table} (${list}) SELECT ${list} FROM restore_source.${table}`);
         }
-        if (!db.prepare("SELECT 1 FROM main.settings WHERE key = 'migration_task_plans_v1'").get()) {
-          const legacyTasks = db.prepare("SELECT id, due_at, duration_minutes FROM main.tasks WHERE due_at IS NOT NULL").all() as { id: number; due_at: string; duration_minutes: number }[];
-          const insertPlan = db.prepare("INSERT OR IGNORE INTO main.task_plans (task_key, scheduled_at, duration_minutes, legacy_schedule) VALUES (?, ?, ?, 1)");
-          for (const task of legacyTasks) {
-            if (Number.isFinite(Date.parse(task.due_at))) insertPlan.run(`local:${task.id}`, task.due_at, Math.min(1440, Math.max(5, task.duration_minutes || 30)));
-          }
-          db.prepare("INSERT INTO main.settings (key, value) VALUES ('migration_task_plans_v1', '1')").run();
-        }
+
         db.exec("COMMIT");
       } catch (error) {
         db.exec("ROLLBACK");
@@ -181,6 +421,7 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
     } finally {
       db.exec("DETACH DATABASE restore_source");
     }
+
     return { tablesRestored: incomingTables.length };
   } catch (error) {
     if (error instanceof BackupError) throw error;

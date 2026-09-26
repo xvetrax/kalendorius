@@ -1,17 +1,9 @@
-import { BackupError, createBackup, createExport, restoreBackup } from "@/lib/backup";
+import { BackupError, createBackup, createUserExport, restoreBackup } from "@/lib/backup";
 import { apiError, assertSameOrigin } from "@/lib/http";
-import { verifySessionToken, isAuthEnabled, SESSION_COOKIE } from "@/lib/session";
+import { requireUserContext } from "@/lib/db-multi";
 
 export const runtime = "nodejs";
 const MAX_BACKUP_BYTES = 100 * 1024 * 1024;
-
-function requireSession(request: Request): Response | null {
-  if (!isAuthEnabled()) return null;
-  const cookie = request.headers.get("cookie") ?? "";
-  const token = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`))?.[1];
-  if (verifySessionToken(token)) return null;
-  return Response.json({ error: "Neprisijungta." }, { status: 401 });
-}
 
 function backupError(error: unknown) {
   if (error instanceof BackupError) return Response.json({ error: error.message }, { status: error.status });
@@ -40,19 +32,46 @@ export async function readBodyWithinLimit(request: Request, maxBytes = MAX_BACKU
   return Buffer.concat(chunks, total);
 }
 
-export async function POST(request: Request) {
-  const authErr = requireSession(request);
-  if (authErr) return authErr;
+/**
+ * GET /api/backup         — admin-only full database backup download
+ * GET /api/backup?type=export — any authenticated user; exports only their data
+ */
+export async function GET(request: Request) {
+  let user;
+  try {
+    user = requireUserContext(request);
+  } catch (response) {
+    return response as Response;
+  }
+
   try {
     assertSameOrigin(request);
-    const body: unknown = await request.json();
-    if (!body || typeof body !== "object" || !("type" in body) || (body.type !== "full" && body.type !== "export")) {
-      return Response.json({ error: "Nurodyk kopijos tipą: full arba export." }, { status: 400 });
+
+    const url = new URL(request.url);
+    const type = url.searchParams.get("type");
+
+    if (type === "export") {
+      // Any authenticated user may export their own data
+      const data = createUserExport(user.id);
+      const now = new Date().toISOString().slice(0, 10);
+      const filename = `planner-export-${now}.db`;
+      return new Response(new Uint8Array(data), {
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+          "Cache-Control": "no-store",
+        },
+      });
     }
-    const isFullBackup = body.type === "full";
-    const data = isFullBackup ? createBackup() : createExport();
+
+    // Full backup — admin only
+    if (user.role !== "admin") {
+      return Response.json({ error: "Tik administratorius gali atsisiųsti pilną atsarginę kopiją." }, { status: 403 });
+    }
+
+    const data = createBackup();
     const now = new Date().toISOString().slice(0, 10);
-    const filename = isFullBackup ? `planner-backup-${now}.db` : `planner-export-${now}.db`;
+    const filename = `planner-backup-${now}.db`;
     return new Response(new Uint8Array(data), {
       headers: {
         "Content-Type": "application/octet-stream",
@@ -65,11 +84,24 @@ export async function POST(request: Request) {
   }
 }
 
-export async function PUT(request: Request) {
-  const authErr = requireSession(request);
-  if (authErr) return authErr;
+/**
+ * POST /api/backup — admin-only full restore (body: raw SQLite file bytes)
+ */
+export async function POST(request: Request) {
+  let user;
+  try {
+    user = requireUserContext(request);
+  } catch (response) {
+    return response as Response;
+  }
+
   try {
     assertSameOrigin(request);
+
+    if (user.role !== "admin") {
+      return Response.json({ error: "Tik administratorius gali atkurti atsarginę kopiją." }, { status: 403 });
+    }
+
     const data = await readBodyWithinLimit(request);
     if (!data.byteLength) return Response.json({ error: "Failas tuščias." }, { status: 400 });
     const result = restoreBackup(data);

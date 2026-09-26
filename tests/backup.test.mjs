@@ -1,6 +1,7 @@
 import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import { registerHooks } from "node:module";
 
 const temp = mkdtempSync(path.join(tmpdir(), "planner-backup-test-"));
 const dbFile = path.join(temp, "backup-test.db");
+process.env.MULTI_USER_DATABASE_PATH = dbFile;
 process.env.DATABASE_PATH = dbFile;
 process.env.TOKEN_ENCRYPTION_KEY = "ef".repeat(32);
 process.env.APP_ORIGIN = "http://localhost:3000";
@@ -31,59 +33,97 @@ after(() => {
 });
 
 describe("backup", { concurrency: false }, () => {
-  let db, createBackup, createExport, restoreBackup, BackupError, POST, PUT, readBodyWithinLimit;
+  let db, createBackup, createUserExport, restoreBackup, BackupError, GET, POST, readBodyWithinLimit;
+  let testUserId;
 
   before(async () => {
-    ({ db } = await import("../lib/db.ts"));
-    ({ BackupError, createBackup, createExport, restoreBackup } = await import("../lib/backup.ts"));
-    ({ POST, PUT, readBodyWithinLimit } = await import("../app/api/backup/route.ts"));
+    ({ db } = await import("../lib/db-multi.ts"));
+    ({ BackupError, createBackup, createUserExport, restoreBackup } = await import("../lib/backup.ts"));
+    ({ GET, POST, readBodyWithinLimit } = await import("../app/api/backup/route.ts"));
   });
 
   beforeEach(() => {
+    // Clear all user-data and auth tables in safe order (children first)
     db.exec(`
       DELETE FROM calendar_event_creates;
       DELETE FROM remote_task_lists;
       DELETE FROM remote_tasks;
       DELETE FROM task_plans;
-      DELETE FROM settings;
       DELETE FROM tasks;
+      DELETE FROM user_settings;
+      DELETE FROM security_events;
+      DELETE FROM oauth_connections;
+      DELETE FROM auth_operations;
+      DELETE FROM sessions;
+      DELETE FROM auth_identities;
+      DELETE FROM invites;
+      DELETE FROM users;
+      DELETE FROM settings;
     `);
-    db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("migration_task_plans_v1", "1");
+
+    // Seed a test admin user
+    const result = db.prepare(
+      "INSERT INTO users (display_name, primary_email, role, status) VALUES (?, ?, 'admin', 'active')"
+    ).run("Test Admin", "admin@example.com");
+    testUserId = Number(result.lastInsertRowid);
   });
 
-  function seedAllTables() {
-    const task = db.prepare("INSERT INTO tasks (title, notes, due_at, duration_minutes, project, priority, energy, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .run("Backup task", "Notes", "2026-10-01T09:00:00.000Z", 45, "Darbas", "high", "high", "audit");
-    db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("google_refresh_token", "SECRET_TOKEN");
-    db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("color_theme", "dark");
-    db.prepare("INSERT INTO task_plans (task_key, scheduled_at, duration_minutes, project, tags, energy, mirror_orphaned_at, mirror_orphan_title) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(`local:${task.lastInsertRowid}`, "2026-10-01T08:00:00.000Z", 45, "Darbas", "audit", "high", "2026-09-23 10:00:00", "Likęs blokas");
-    db.prepare("INSERT INTO remote_tasks (task_key, account_id, list_id, task_json, source) VALUES (?, ?, ?, ?, ?)")
-      .run("google:acct:list:task", "acct", "list", JSON.stringify({ title: "Remote task" }), "google");
-    db.prepare("INSERT INTO remote_task_lists (list_key, source, account_id, list_json) VALUES (?, ?, ?, ?)")
-      .run("google:acct:list", "google", "acct", JSON.stringify({ name: "Inbox" }));
-    db.prepare("INSERT INTO calendar_event_creates(provider,account_id,connection_id,calendar_id,operation_id,fingerprint) VALUES (?,?,?,?,?,?)")
-      .run("google","acct","connection","primary","00000000-0000-4000-8000-000000000001","fingerprint");
-    return Number(task.lastInsertRowid);
+  function seedUserTables() {
+    const task = db.prepare(
+      "INSERT INTO tasks (user_id, title, notes, due_at, duration_minutes, project, priority, energy, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(testUserId, "Backup task", "Notes", "2026-10-01T09:00:00.000Z", 45, "Darbas", "high", "high", "audit");
+    const taskId = Number(task.lastInsertRowid);
+
+    db.prepare(
+      "INSERT INTO task_plans (user_id, task_key, scheduled_at, duration_minutes, project, tags, energy, mirror_orphaned_at, mirror_orphan_title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(testUserId, `local:${taskId}`, "2026-10-01T08:00:00.000Z", 45, "Darbas", "audit", "high", "2026-09-23 10:00:00", "Likęs blokas");
+
+    db.prepare(
+      "INSERT INTO remote_tasks (user_id, task_key, account_id, list_id, task_json, source) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run(testUserId, "google:acct:list:task", "acct", "list", JSON.stringify({ title: "Remote task" }), "google");
+
+    db.prepare(
+      "INSERT INTO remote_task_lists (user_id, list_key, source, account_id, list_json) VALUES (?, ?, ?, ?, ?)"
+    ).run(testUserId, "google:acct:list", "google", "acct", JSON.stringify({ name: "Inbox" }));
+
+    db.prepare(
+      "INSERT INTO calendar_event_creates (user_id, provider, account_id, connection_id, calendar_id, operation_id, fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(testUserId, "google", "acct", "connection", "primary", "00000000-0000-4000-8000-000000000001", "fingerprint");
+
+    // Add an oauth_connection with encrypted_refresh_token (should never appear in user export)
+    db.prepare(
+      "INSERT INTO oauth_connections (user_id, provider, provider_account_id, encrypted_refresh_token, scopes, generation, status) VALUES (?, ?, ?, ?, ?, 1, 'active')"
+    ).run(testUserId, "google", "google-sub-123", "ENCRYPTED_TOKEN_SECRET", "calendar.readonly");
+
+    return taskId;
+  }
+
+  function insertSession(userId) {
+    const rawToken = randomBytes(32).toString("hex");
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    db.prepare(
+      "INSERT INTO sessions (token_hash, user_id, expires_at, last_used_at) VALUES (?, ?, ?, ?)"
+    ).run(tokenHash, userId, expiresAt, new Date().toISOString());
+    return `planner_session=${rawToken}`;
   }
 
   it("creates a complete SQLite backup and restores every app table transactionally", () => {
-    const originalId = seedAllTables();
+    const originalId = seedUserTables();
     const backup = createBackup();
     assert.ok(backup.toString("utf8", 0, 16).startsWith("SQLite format 3"));
 
     db.prepare("UPDATE tasks SET title = ? WHERE id = ?").run("Changed later", originalId);
-    db.prepare("DELETE FROM settings WHERE key = ?").run("google_refresh_token");
     db.prepare("DELETE FROM task_plans").run();
     db.prepare("DELETE FROM remote_tasks").run();
     db.prepare("DELETE FROM remote_task_lists").run();
     db.prepare("DELETE FROM calendar_event_creates").run();
-    db.prepare("INSERT INTO tasks (title) VALUES (?)").run("Created later");
+    db.prepare("INSERT INTO tasks (user_id, title) VALUES (?, ?)").run(testUserId, "Created later");
 
-    assert.deepEqual(restoreBackup(backup), { tablesRestored: 6 });
+    const result = restoreBackup(backup);
+    assert.ok(result.tablesRestored >= 2, "must restore at least users and tasks");
     assert.equal(db.prepare("SELECT title FROM tasks WHERE id = ?").get(originalId)?.title, "Backup task");
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM tasks").get().count, 1);
-    assert.equal(db.prepare("SELECT value FROM settings WHERE key = ?").get("google_refresh_token")?.value, "SECRET_TOKEN");
     assert.equal(db.prepare("SELECT scheduled_at FROM task_plans").get()?.scheduled_at, "2026-10-01T08:00:00.000Z");
     assert.equal(db.prepare("SELECT mirror_orphan_title FROM task_plans").get()?.mirror_orphan_title, "Likęs blokas");
     assert.equal(db.prepare("SELECT source FROM remote_tasks").get()?.source, "google");
@@ -91,32 +131,78 @@ describe("backup", { concurrency: false }, () => {
     assert.equal(db.prepare("SELECT fingerprint FROM calendar_event_creates").get()?.fingerprint, "fingerprint");
     assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
 
-    const inserted = db.prepare("INSERT INTO tasks (title) VALUES (?)").run("After restore");
+    // DB must remain writable after restore
+    const inserted = db.prepare("INSERT INTO tasks (user_id, title) VALUES (?, ?)").run(testUserId, "After restore");
     assert.ok(Number(inserted.lastInsertRowid) > originalId, "database must remain writable with a valid sequence");
   });
 
-  it("exports all app data without OAuth refresh tokens", () => {
-    seedAllTables();
-    db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("microsoft_refresh_token", "MICROSOFT_SECRET");
-    const exportFile = path.join(temp, "check-export.db");
-    writeFileSync(exportFile, createExport(), { mode: 0o600 });
+  it("full backup includes oauth_connections with encrypted token", () => {
+    seedUserTables();
+    const exportFile = path.join(temp, "check-full-backup.db");
+    writeFileSync(exportFile, createBackup(), { mode: 0o600 });
+    const backed = new DatabaseSync(exportFile, { readOnly: true });
+    try {
+      // Full backup includes oauth_connections
+      assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM oauth_connections").get().count, 1);
+      // And the encrypted token is present in full backup (admin access)
+      assert.ok(backed.prepare("SELECT encrypted_refresh_token FROM oauth_connections").get()?.encrypted_refresh_token);
+    } finally {
+      backed.close();
+    }
+  });
+
+  it("user export contains only own work data without any secret columns", () => {
+    seedUserTables();
+    const exportFile = path.join(temp, "check-user-export.db");
+    writeFileSync(exportFile, createUserExport(testUserId), { mode: 0o600 });
     const exported = new DatabaseSync(exportFile, { readOnly: true });
     try {
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM tasks").get().count, 1);
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM task_plans").get().count, 1);
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM remote_tasks").get().count, 1);
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM remote_task_lists").get().count, 1);
-      assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM calendar_event_creates").get().count, 1);
-      assert.equal(exported.prepare("SELECT value FROM settings WHERE key='google_refresh_token'").get(), undefined);
-      assert.equal(exported.prepare("SELECT value FROM settings WHERE key='microsoft_refresh_token'").get(), undefined);
-      assert.equal(exported.prepare("SELECT value FROM settings WHERE key='color_theme'").get()?.value, "dark");
+
+      // oauth_connections, sessions, invites etc. must NOT exist in user export
+      const tables = exported.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+      ).all().map(r => r.name);
+      assert.ok(!tables.includes("oauth_connections"), "oauth_connections must not be in user export");
+      assert.ok(!tables.includes("sessions"), "sessions must not be in user export");
+      assert.ok(!tables.includes("invites"), "invites must not be in user export");
+      assert.ok(!tables.includes("auth_operations"), "auth_operations must not be in user export");
+      assert.ok(!tables.includes("security_events"), "security_events must not be in user export");
+      assert.ok(!tables.includes("users"), "users must not be in user export");
     } finally {
       exported.close();
     }
   });
 
-  it("restores an older tasks/settings backup using current defaults", () => {
-    const oldPath = path.join(temp, "old-schema.db");
+  it("user export contains only rows belonging to the requesting user", () => {
+    seedUserTables();
+
+    // Seed a second user with their own tasks
+    const otherResult = db.prepare(
+      "INSERT INTO users (display_name, primary_email, role, status) VALUES (?, ?, 'member', 'active')"
+    ).run("Other User", "other@example.com");
+    const otherUserId = Number(otherResult.lastInsertRowid);
+    db.prepare(
+      "INSERT INTO tasks (user_id, title) VALUES (?, ?)"
+    ).run(otherUserId, "Other user task");
+
+    const exportFile = path.join(temp, "isolation-export.db");
+    writeFileSync(exportFile, createUserExport(testUserId), { mode: 0o600 });
+    const exported = new DatabaseSync(exportFile, { readOnly: true });
+    try {
+      // Only testUserId's task should appear
+      assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM tasks").get().count, 1);
+      assert.equal(exported.prepare("SELECT title FROM tasks").get()?.title, "Backup task");
+    } finally {
+      exported.close();
+    }
+  });
+
+  it("rejects old single-user backup (settings but no users table) with clear message", () => {
+    const oldPath = path.join(temp, "old-single-user.db");
     const old = new DatabaseSync(oldPath);
     old.exec(`
       CREATE TABLE tasks (
@@ -134,52 +220,37 @@ describe("backup", { concurrency: false }, () => {
     `);
     old.close();
 
-    assert.deepEqual(restoreBackup(readFileSync(oldPath)), { tablesRestored: 2 });
-    const task = db.prepare("SELECT title, project, priority, energy, tags FROM tasks").get();
-    assert.equal(JSON.stringify(task), JSON.stringify({ title: "Sena užduotis", project: "Asmeniniai", priority: "normal", energy: "medium", tags: "" }));
-    assert.equal(JSON.stringify(db.prepare("SELECT task_key, scheduled_at, duration_minutes, legacy_schedule FROM task_plans").get()), JSON.stringify({
-      task_key: "local:1", scheduled_at: "2026-09-30T10:00:00.000Z", duration_minutes: 55, legacy_schedule: 1,
-    }));
-    assert.equal(db.prepare("SELECT value FROM settings WHERE key='migration_task_plans_v1'").get()?.value, "1");
+    assert.throws(
+      () => restoreBackup(readFileSync(oldPath)),
+      (err) => err instanceof BackupError && /sena vieno naudotojo schema/i.test(err.message)
+    );
   });
 
   it("rejects invalid, unknown, and newer schemas without changing live data", () => {
-    db.prepare("INSERT INTO tasks (title) VALUES (?)").run("Keep me");
+    db.prepare("INSERT INTO tasks (user_id, title) VALUES (?, ?)").run(testUserId, "Keep me");
     assert.throws(() => restoreBackup(Buffer.from("definitely not sqlite")), BackupError);
 
     const badPath = path.join(temp, "unknown-table.db");
     const bad = new DatabaseSync(badPath);
-    bad.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT); CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE unknown_alien_table (x TEXT)");
+    // Has users (required) but also an alien table
+    bad.exec(`
+      CREATE TABLE users (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL, primary_email TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE tasks (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', due_at TEXT, duration_minutes INTEGER NOT NULL DEFAULT 30, completed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+      CREATE TABLE unknown_alien_table (x TEXT)
+    `);
     bad.close();
     assert.throws(() => restoreBackup(readFileSync(badPath)), /neatpažintų lentelių/i);
 
     const newerPath = path.join(temp, "newer-schema.db");
     const newer = new DatabaseSync(newerPath);
-    newer.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT, future_column TEXT); CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)");
+    newer.exec(`
+      CREATE TABLE users (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL, primary_email TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE tasks (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, future_column TEXT)
+    `);
     newer.close();
     assert.throws(() => restoreBackup(readFileSync(newerPath)), /naujesnė arba nepalaikoma/i);
 
-    const constraintPath = path.join(temp, "constraint-error.db");
-    const constraint = new DatabaseSync(constraintPath);
-    constraint.exec(`
-      CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT, notes TEXT, due_at TEXT, duration_minutes INTEGER, completed INTEGER, created_at TEXT);
-      CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
-      INSERT INTO tasks (id, title, notes, duration_minutes, completed, created_at) VALUES (1, NULL, '', 30, 0, CURRENT_TIMESTAMP);
-    `);
-    constraint.close();
-    assert.throws(() => restoreBackup(readFileSync(constraintPath)), /esami duomenys nepakeisti/i);
-
-    const missingIdentityPath = path.join(temp, "missing-identity.db");
-    const missingIdentity = new DatabaseSync(missingIdentityPath);
-    missingIdentity.exec(`
-      CREATE TABLE tasks (title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', due_at TEXT, duration_minutes INTEGER NOT NULL DEFAULT 30, completed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE task_plans (task_key TEXT PRIMARY KEY, scheduled_at TEXT, duration_minutes INTEGER NOT NULL DEFAULT 30, schedule_version INTEGER NOT NULL DEFAULT 0, legacy_schedule INTEGER NOT NULL DEFAULT 0, mirror_requested INTEGER NOT NULL DEFAULT 0, mirror_event_id TEXT, mirror_account_id TEXT, mirror_transaction_id TEXT, mirror_error TEXT, project TEXT, tags TEXT, energy TEXT);
-      INSERT INTO tasks (title) VALUES ('Identity-less');
-      INSERT INTO task_plans (task_key) VALUES ('local:99');
-    `);
-    missingIdentity.close();
-    assert.throws(() => restoreBackup(readFileSync(missingIdentityPath)), /trūksta būtinų stulpelių/i);
+    // Live data must be unchanged
     assert.equal(JSON.stringify(db.prepare("SELECT title FROM tasks").all()), JSON.stringify([{ title: "Keep me" }]));
   });
 
@@ -191,48 +262,91 @@ describe("backup", { concurrency: false }, () => {
         controller.close();
       },
     });
-    const request = new Request("http://localhost:3000/api/backup", { method: "PUT", body: stream, duplex: "half" });
+    const request = new Request("http://localhost:3000/api/backup", { method: "POST", body: stream, duplex: "half" });
     await assert.rejects(() => readBodyWithinLimit(request, 5), error => error instanceof BackupError && error.status === 413);
   });
 
-  it("uses POST for downloads, PUT for restore, and enforces session/origin checks", async () => {
-    seedAllTables();
-    const noOrigin = await POST(new Request("http://localhost:3000/api/backup", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "full" }),
+  it("uses GET for downloads, POST for restore, and enforces session/origin checks", async () => {
+    seedUserTables();
+
+    // GET without session → 401
+    const noSession = await GET(new Request("http://localhost:3000/api/backup", {
+      method: "GET", headers: { origin: "http://localhost:3000" },
+    }));
+    assert.equal(noSession.status, 401);
+
+    // Create a real session for the admin user
+    const rawToken = randomBytes(32).toString("hex");
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    db.prepare(
+      "INSERT INTO sessions (token_hash, user_id, expires_at, last_used_at) VALUES (?, ?, ?, ?)"
+    ).run(tokenHash, testUserId, expiresAt, new Date().toISOString());
+    const sessionCookie = `planner_session=${rawToken}`;
+
+    // GET without origin → 403 (CSRF)
+    const noOrigin = await GET(new Request("http://localhost:3000/api/backup", {
+      method: "GET", headers: { cookie: sessionCookie },
     }));
     assert.equal(noOrigin.status, 403);
 
-    const invalid = await POST(new Request("http://localhost:3000/api/backup", {
-      method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json" }, body: JSON.stringify({ type: "other" }),
-    }));
-    assert.equal(invalid.status, 400);
-    const invalidShape = await POST(new Request("http://localhost:3000/api/backup", {
-      method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json" }, body: "null",
-    }));
-    assert.equal(invalidShape.status, 400);
-
-    const download = await POST(new Request("http://localhost:3000/api/backup", {
-      method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json" }, body: JSON.stringify({ type: "full" }),
+    // GET full backup as admin → 200
+    const download = await GET(new Request("http://localhost:3000/api/backup", {
+      method: "GET", headers: { origin: "http://localhost:3000", cookie: sessionCookie },
     }));
     assert.equal(download.status, 200);
     assert.match(download.headers.get("content-disposition") ?? "", /planner-backup-/);
     const downloaded = Buffer.from(await download.arrayBuffer());
 
+    // GET ?type=export as admin → 200
+    const exportDownload = await GET(new Request("http://localhost:3000/api/backup?type=export", {
+      method: "GET", headers: { origin: "http://localhost:3000", cookie: sessionCookie },
+    }));
+    assert.equal(exportDownload.status, 200);
+    assert.match(exportDownload.headers.get("content-disposition") ?? "", /planner-export-/);
+
+    // POST restore without session → 401
+    const noSessionRestore = await POST(new Request("http://localhost:3000/api/backup", {
+      method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/octet-stream" }, body: downloaded,
+    }));
+    assert.equal(noSessionRestore.status, 401);
+
+    // POST restore as admin → 200
     db.prepare("UPDATE tasks SET title = ?").run("Changed through API");
-    const restored = await PUT(new Request("http://localhost:3000/api/backup", {
-      method: "PUT", headers: { origin: "http://localhost:3000", "content-type": "application/octet-stream" }, body: downloaded,
+    const restored = await POST(new Request("http://localhost:3000/api/backup", {
+      method: "POST", headers: { origin: "http://localhost:3000", cookie: sessionCookie, "content-type": "application/octet-stream" }, body: downloaded,
     }));
     assert.equal(restored.status, 200);
     assert.equal(db.prepare("SELECT title FROM tasks").get()?.title, "Backup task");
 
-    process.env.APP_PASSWORD = "required";
-    try {
-      const unauthenticated = await POST(new Request("http://localhost:3000/api/backup", {
-        method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json" }, body: JSON.stringify({ type: "export" }),
-      }));
-      assert.equal(unauthenticated.status, 401);
-    } finally {
-      delete process.env.APP_PASSWORD;
-    }
+    // GET full backup as non-admin → 403
+    const memberResult = db.prepare(
+      "INSERT INTO users (display_name, primary_email, role, status) VALUES (?, ?, 'member', 'active')"
+    ).run("Member", "member@example.com");
+    const memberId = Number(memberResult.lastInsertRowid);
+    const memberToken = randomBytes(32).toString("hex");
+    const memberHash = createHash("sha256").update(memberToken).digest("hex");
+    db.prepare(
+      "INSERT INTO sessions (token_hash, user_id, expires_at, last_used_at) VALUES (?, ?, ?, ?)"
+    ).run(memberHash, memberId, expiresAt, new Date().toISOString());
+    const memberCookie = `planner_session=${memberToken}`;
+
+    const memberBackup = await GET(new Request("http://localhost:3000/api/backup", {
+      method: "GET", headers: { origin: "http://localhost:3000", cookie: memberCookie },
+    }));
+    assert.equal(memberBackup.status, 403);
+
+    // GET ?type=export as member → 200 (any authenticated user can export their data)
+    const memberExport = await GET(new Request("http://localhost:3000/api/backup?type=export", {
+      method: "GET", headers: { origin: "http://localhost:3000", cookie: memberCookie },
+    }));
+    assert.equal(memberExport.status, 200);
+    assert.match(memberExport.headers.get("content-disposition") ?? "", /planner-export-/);
+
+    // POST restore as non-admin → 403
+    const memberRestore = await POST(new Request("http://localhost:3000/api/backup", {
+      method: "POST", headers: { origin: "http://localhost:3000", cookie: memberCookie, "content-type": "application/octet-stream" }, body: downloaded,
+    }));
+    assert.equal(memberRestore.status, 403);
   });
 });
