@@ -176,7 +176,19 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P1 — Docker priėmimas.** Realiai sukurtas ir paleistas image; patikrinta sveikata, versija, neprivilegijuotas procesas ir duomenų tomo išlikimas.
 - [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
 
-### H. Įdiegiama PWA programėlė
+### H. Kelios Google ir Microsoft paskyros — prioritetas
+
+Detalus saugios schemos migracijos, kelių OAuth jungčių, visų kalendorių agregavimo, checkbox matomumo, spalvų, užduočių ir gyvų paskyrų patikros planas aprašytas [MULTI_ACCOUNT_PLAN.md](MULTI_ACCOUNT_PLAN.md).
+
+- [ ] **MA-1:** išplėsti OAuth, kalendorių pasirinkimų ir Outlook blokų duomenų modelį išsaugant dabartines jungtis.
+- [ ] **MA-2/3:** įgyvendinti saugų kelių paskyrų pridėjimą, leidimų atnaujinimą, atjungimą ir aiškų nustatymų ekraną.
+- [ ] **MA-4/5:** agreguoti visų paskyrų kalendorius, išsaugoti kiekvieno checkbox būseną ir visur taikyti nuoseklias spalvas bei tekstinę kilmę.
+- [ ] **MA-6/7:** visas įvykių ir užduočių mutacijas bei Outlook blokus pririšti prie konkrečios jungties.
+- [ ] **MA-8:** pilna automatinė, Docker, backup / restore ir kontroliuojama gyvų Google bei Microsoft paskyrų patikra.
+
+Šis etapas vykdomas prieš PWA. Antra tos pačios rūšies paskyra produkcijoje nejungiama, kol nebaigta OAuth expand migracija ir jungčiai priskirta skaitymo eiga.
+
+### I. Įdiegiama PWA programėlė — po kelių paskyrų
 
 Detalus įdiegimo, saugaus podėlio, ryšio būsenos, Web Push, platformų patikros ir white-label paruošimo planas aprašytas [PWA_PLAN.md](PWA_PLAN.md).
 

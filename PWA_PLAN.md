@@ -1,6 +1,6 @@
 # „Dienos planas“ PWA įgyvendinimo planas
 
-Atnaujinta: 2026-09-27. Būsena: planas paruoštas, įgyvendinimas nepradėtas.
+Atnaujinta: 2026-09-27. Būsena: planas paruoštas, įgyvendinimas nepradėtas. Pagal produkto prioritetą PWA pradedama tik užbaigus [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
 
 ## Tikslas
 
