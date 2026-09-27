@@ -14,7 +14,7 @@
  */
 
 import { createHash, timingSafeEqual } from "node:crypto";
-import { db, createSession, SESSION_COOKIE } from "@/lib/db-multi";
+import { db, createSession, SESSION_COOKIE, isSetupAllowed, bootstrapFirstAdmin } from "@/lib/db-multi";
 import { addIdentity } from "@/lib/user-service";
 import { verifyMicrosoftIdToken } from "@/lib/oidc";
 import { appOrigin } from "@/lib/http";
@@ -353,11 +353,32 @@ export async function GET(request: Request): Promise<Response> {
   `).get(issuer, subject) as { user_id: number } | undefined;
 
   if (!identity) {
+    // Auto-bootstrap first admin: if no users exist and SETUP_TOKEN is configured,
+    // the first successful OAuth login creates the admin account automatically.
+    if (isSetupAllowed()) {
+      try {
+        const { userId } = bootstrapFirstAdmin(issuer, subject, name || email, email);
+        const { rawToken } = createSession(userId);
+        logSecurityEvent("login_success", { userId, ipHint: ip, details: { provider: "microsoft", bootstrap: "auto" } });
+        const secure = origin.startsWith("https://");
+        return new Response(null, {
+          status: 302,
+          headers: [
+            ["Location", `${origin}/`],
+            ["Set-Cookie", sessionCookieHeader(rawToken, origin)],
+            ["Set-Cookie", `oauth_state_ms=; Path=/api/auth/microsoft-oidc/callback; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`],
+          ],
+        });
+      } catch (err) {
+        logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "microsoft", reason: "bootstrap_failed", error: String(err).slice(0, 200) } });
+      }
+    }
+
     logSecurityEvent("login_failure", {
       ipHint: ip,
       details: { provider: "microsoft", reason: "no_identity", issuer },
     });
-    return clearStateCookie(Response.redirect(`${origin}/?error=no-invite`, 302), origin);
+    return clearStateCookie(`${origin}/?error=no-invite`, origin);
   }
 
   // Verify user is active
