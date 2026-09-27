@@ -21,7 +21,7 @@ export async function GET(request: Request) {
   const clearStateCookie = `google_connect_state=; Path=/api/google/callback; Max-Age=0; HttpOnly; SameSite=Lax${isSecure ? "; Secure" : ""}`;
 
   if (!stateParam) {
-    return Response.redirect(oauthResultUrl(request.url, "google", "error"));
+    return Response.redirect(oauthResultUrl(request.url, "google", "error").href);
   }
 
   // Fix 1: verify state is bound to this browser's cookie (CSRF protection)
@@ -29,12 +29,12 @@ export async function GET(request: Request) {
   const cookieState =
     cookieHeader.match(/(?:^|;)\s*google_connect_state=([^;]+)/)?.[1] ?? null;
   if (!cookieState) {
-    return Response.redirect(oauthResultUrl(request.url, "google", "error"));
+    return Response.redirect(oauthResultUrl(request.url, "google", "error").href);
   }
   const cs = Buffer.from(cookieState);
   const qs = Buffer.from(stateParam);
   if (cs.length !== qs.length || !timingSafeEqual(cs, qs)) {
-    return Response.redirect(oauthResultUrl(request.url, "google", "error"));
+    return Response.redirect(oauthResultUrl(request.url, "google", "error").href);
   }
 
   // Look up the auth_operation by state hash (never trust the raw state)
@@ -51,17 +51,17 @@ export async function GET(request: Request) {
     | undefined;
 
   if (!op || op.used !== 0 || new Date(op.expires_at) <= new Date()) {
-    return redirectWithClear(oauthResultUrl(request.url, "google", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
   }
 
   // Extract user_id from nonce (format: "uid:<userId>:<random>")
   const nonceMatch = op.nonce.match(/^uid:(\d+):/);
   if (!nonceMatch) {
-    return redirectWithClear(oauthResultUrl(request.url, "google", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
   }
   const userId = parseInt(nonceMatch[1], 10);
   if (!Number.isFinite(userId) || userId <= 0) {
-    return redirectWithClear(oauthResultUrl(request.url, "google", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
   }
 
   // Fix 2: cross-check current session — the browser completing the callback must
@@ -76,7 +76,7 @@ export async function GET(request: Request) {
       )
       .get(tokenHash) as { user_id: number } | undefined;
     if (!currentSession || currentSession.user_id !== userId) {
-      return redirectWithClear(oauthResultUrl(request.url, "google", "error"), clearStateCookie);
+      return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
     }
   }
 
@@ -86,7 +86,7 @@ export async function GET(request: Request) {
     .run(op.id);
   if (markResult.changes === 0) {
     // Another request beat us — replay attempt
-    return redirectWithClear(oauthResultUrl(request.url, "google", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
   }
 
   // Handle user-denied access
@@ -95,13 +95,13 @@ export async function GET(request: Request) {
       // Was already connected — treat as tasks permission denied
     }
     return redirectWithClear(
-      oauthResultUrl(request.url, "google", "tasks-permission-required"),
+      oauthResultUrl(request.url, "google", "tasks-permission-required").href,
       clearStateCookie,
     );
   }
 
   if (!code) {
-    return redirectWithClear(oauthResultUrl(request.url, "google", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
   }
 
   try {
@@ -111,10 +111,10 @@ export async function GET(request: Request) {
         request.url,
         "google",
         result.tasksConnected ? "connected" : "tasks-permission-required",
-      ),
+      ).href,
       clearStateCookie,
     );
   } catch {
-    return redirectWithClear(oauthResultUrl(request.url, "google", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
   }
 }

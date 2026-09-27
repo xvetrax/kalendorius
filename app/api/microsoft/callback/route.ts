@@ -20,7 +20,7 @@ export async function GET(request: Request) {
   const clearStateCookie = `microsoft_connect_state=; Path=/api/microsoft/callback; Max-Age=0; HttpOnly; SameSite=Lax${isSecure ? "; Secure" : ""}`;
 
   if (!stateParam) {
-    return Response.redirect(oauthResultUrl(request.url, "microsoft", "error"));
+    return Response.redirect(oauthResultUrl(request.url, "microsoft", "error").href);
   }
 
   // Fix 1: verify state is bound to this browser's cookie (CSRF protection)
@@ -28,12 +28,12 @@ export async function GET(request: Request) {
   const cookieState =
     cookieHeader.match(/(?:^|;)\s*microsoft_connect_state=([^;]+)/)?.[1] ?? null;
   if (!cookieState) {
-    return Response.redirect(oauthResultUrl(request.url, "microsoft", "error"));
+    return Response.redirect(oauthResultUrl(request.url, "microsoft", "error").href);
   }
   const cs = Buffer.from(cookieState);
   const qs = Buffer.from(stateParam);
   if (cs.length !== qs.length || !timingSafeEqual(cs, qs)) {
-    return Response.redirect(oauthResultUrl(request.url, "microsoft", "error"));
+    return Response.redirect(oauthResultUrl(request.url, "microsoft", "error").href);
   }
 
   // Look up the auth_operation by state hash
@@ -50,17 +50,17 @@ export async function GET(request: Request) {
     | undefined;
 
   if (!op || op.used !== 0 || new Date(op.expires_at) <= new Date()) {
-    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error").href, clearStateCookie);
   }
 
   // Extract user_id from nonce (format: "uid:<userId>:<random>")
   const nonceMatch = op.nonce.match(/^uid:(\d+):/);
   if (!nonceMatch) {
-    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error").href, clearStateCookie);
   }
   const userId = parseInt(nonceMatch[1], 10);
   if (!Number.isFinite(userId) || userId <= 0) {
-    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error").href, clearStateCookie);
   }
 
   // Fix 2: cross-check current session — the browser completing the callback must
@@ -75,7 +75,7 @@ export async function GET(request: Request) {
       )
       .get(tokenHash) as { user_id: number } | undefined;
     if (!currentSession || currentSession.user_id !== userId) {
-      return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error"), clearStateCookie);
+      return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error").href, clearStateCookie);
     }
   }
 
@@ -85,17 +85,17 @@ export async function GET(request: Request) {
     .run(op.id);
   if (markResult.changes === 0) {
     // Another request beat us — replay attempt
-    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error").href, clearStateCookie);
   }
 
   if (!code) {
-    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error").href, clearStateCookie);
   }
 
   try {
     await exchangeMicrosoftCode(code, op.pkce_verifier, userId);
-    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "connected"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "connected").href, clearStateCookie);
   } catch {
-    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error"), clearStateCookie);
+    return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error").href, clearStateCookie);
   }
 }
