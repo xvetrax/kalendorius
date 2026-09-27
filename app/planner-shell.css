@@ -93,6 +93,8 @@ button svg{flex-shrink:0}
 .columns>section{background:var(--soft);padding:10px;border-radius:12px}
 .columns section>h3{color:var(--muted);font-size:.67rem}.columns section>h3 b{background:var(--surface);color:var(--ink)}
 .columns article{background:var(--surface);border-color:var(--line);padding:12px 8px;box-shadow:none}
+.boardTaskCard{cursor:pointer;transition:border-color .15s ease,background-color .15s ease}
+.boardTaskCard:hover{border-color:var(--accent-text);background:var(--accent-soft)}
 .boardTaskTitle{border:0;background:transparent;color:var(--ink);font-weight:650;font-size:.8rem;text-align:left;padding:0 7px;cursor:pointer}
 .columns article.done .boardTaskTitle{text-decoration:line-through}
 .columns article>p,.columns article>footer{color:var(--muted);overflow-wrap:anywhere}.columns article>footer{flex-wrap:wrap;gap:5px}
