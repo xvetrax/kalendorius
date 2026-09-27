@@ -264,10 +264,15 @@ export async function GET(request: Request): Promise<Response> {
     });
     logSecurityEvent("login_success", { userId, ipHint: ip, details: { provider: "google" } });
 
-    const resp = Response.redirect(`${origin}/`, 302);
-    resp.headers.set("Set-Cookie", sessionCookieHeader(rawToken, origin));
-    clearStateCookie(resp, origin);
-    return resp;
+    const secure = origin.startsWith("https://");
+    return new Response(null, {
+      status: 302,
+      headers: [
+        ["Location", `${origin}/`],
+        ["Set-Cookie", sessionCookieHeader(rawToken, origin)],
+        ["Set-Cookie", `oauth_state_google=; Path=/api/auth/google-oidc/callback; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`],
+      ],
+    });
   }
 
   // --- Identity linking: adding Google to an existing session ---
@@ -344,10 +349,15 @@ export async function GET(request: Request): Promise<Response> {
 
   logSecurityEvent("login_success", { userId: user.id, ipHint: ip, details: { provider: "google" } });
 
-  const resp = Response.redirect(`${origin}/`, 302);
-  resp.headers.set("Set-Cookie", sessionCookieHeader(rawToken, origin));
-  clearStateCookie(resp, origin);
-  return resp;
+  const secure = origin.startsWith("https://");
+  return new Response(null, {
+    status: 302,
+    headers: [
+      ["Location", `${origin}/`],
+      ["Set-Cookie", sessionCookieHeader(rawToken, origin)],
+      ["Set-Cookie", `oauth_state_google=; Path=/api/auth/google-oidc/callback; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`],
+    ],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -366,13 +376,22 @@ function sessionCookieHeader(rawToken: string, origin: string): string {
   ].join("; ");
 }
 
-function clearStateCookie(resp: Response, origin: string): Response {
+function clearStateCookie(respOrLocation: Response | string, origin: string): Response {
+  const location =
+    typeof respOrLocation === "string"
+      ? respOrLocation
+      : (respOrLocation.headers.get("Location") ?? "/");
   const secure = origin.startsWith("https://");
-  resp.headers.append(
-    "Set-Cookie",
-    `oauth_state_google=; Path=/api/auth/google-oidc/callback; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`,
-  );
-  return resp;
+  return new Response(null, {
+    status: 302,
+    headers: [
+      ["Location", location],
+      [
+        "Set-Cookie",
+        `oauth_state_google=; Path=/api/auth/google-oidc/callback; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`,
+      ],
+    ],
+  });
 }
 
 function parseCookieValue(cookieHeader: string, name: string): string | null {
