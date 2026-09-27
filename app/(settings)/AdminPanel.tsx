@@ -5,9 +5,7 @@
  * Features:
  *   - User list: name, email, role, status, identities, session count
  *   - Action buttons: disable/enable, promote/demote role
- *   - "Pakviesti" button — creates invite, shows shareable URL
- *   - Recovery invite per user
- *   - Active invites table with expiry and used status
+ *   - Public registration happens directly through Google or Microsoft OIDC.
  *
  * Security:
  *   - All mutations POST/PATCH/DELETE with Origin header (CSRF).
@@ -31,46 +29,18 @@ interface UserEntry {
   identities: Array<{ provider: string; email: string | null }>;
 }
 
-interface InviteEntry {
-  id: number;
-  recipientEmail: string | null;
-  role: string;
-  createdByName: string | null;
-  expiresAt: string;
-  usedAt: string | null;
-  active: boolean;
-  isRecovery: boolean;
-}
-
-interface NewInviteResult {
-  inviteUrl: string;
-  expiresAt: string;
-  recipientEmail: string | null;
-}
-
 export function AdminPanel({ currentUserId }: { currentUserId: number }) {
   const [users, setUsers] = useState<UserEntry[]>([]);
-  const [invites, setInvites] = useState<InviteEntry[]>([]);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
-  const [newInvite, setNewInvite] = useState<NewInviteResult | null>(null);
-  const [recipientEmail, setRecipientEmail] = useState("");
-  const [showInviteForm, setShowInviteForm] = useState(false);
 
   const loadAll = useCallback(async () => {
     try {
-      const [usersRes, invitesRes] = await Promise.all([
-        fetch("/api/admin/users"),
-        fetch("/api/admin/invites"),
-      ]);
+      const usersRes = await fetch("/api/admin/users");
       if (usersRes.ok) {
         const data = await usersRes.json() as { users: UserEntry[] };
         setUsers(data.users);
-      }
-      if (invitesRes.ok) {
-        const data = await invitesRes.json() as { invites: InviteEntry[] };
-        setInvites(data.invites);
       }
     } catch {
       setLoadError("Nepavyko įkelti naudotojų sąrašo.");
@@ -105,147 +75,20 @@ export function AdminPanel({ currentUserId }: { currentUserId: number }) {
     } finally { setBusy(null); }
   }
 
-  async function createInvite() {
-    setBusy("invite");
-    try {
-      const res = await fetch("/api/admin/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Origin": window.location.origin },
-        body: JSON.stringify({ role: "member", recipientEmail: recipientEmail.trim() || undefined }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setNewInvite({
-          inviteUrl: data.inviteUrl,
-          expiresAt: data.expiresAt,
-          recipientEmail: data.recipientEmail,
-        });
-        setShowInviteForm(false);
-        setRecipientEmail("");
-        await loadAll();
-      } else {
-        flash(data.error ?? "Nepavyko sukurti kvietimo.", false);
-      }
-    } catch {
-      flash("Tinklo klaida.", false);
-    } finally { setBusy(null); }
-  }
-
-  async function createRecovery(userId: number) {
-    const key = `recovery-${userId}`;
-    setBusy(key);
-    try {
-      const res = await fetch("/api/admin/invites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Origin": window.location.origin },
-        body: JSON.stringify({ targetUserId: userId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setNewInvite({
-          inviteUrl: data.recoveryUrl,
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-          recipientEmail: null,
-        });
-        flash("Atkūrimo nuoroda sukurta.");
-      } else {
-        flash(data.error ?? "Nepavyko sukurti atkūrimo nuorodos.", false);
-      }
-    } catch {
-      flash("Tinklo klaida.", false);
-    } finally { setBusy(null); }
-  }
-
   if (loadError) {
     return <p style={{ color: "#a42d43", fontSize: ".8rem" }}>{loadError}</p>;
   }
 
   return (
     <section style={{ display: "grid", gap: 18 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div>
         <h3 style={{ margin: 0, fontSize: ".85rem", textTransform: "uppercase", letterSpacing: ".07em", color: "#8792a1" }}>
           Naudotojai
         </h3>
-        <button
-          type="button"
-          className="newButton"
-          style={{ fontSize: ".75rem", padding: "7px 12px" }}
-          disabled={busy !== null}
-          onClick={() => { setShowInviteForm(!showInviteForm); setNewInvite(null); }}
-        >
-          Pakviesti
-        </button>
+        <p style={{ margin: "6px 0 0", color: "#8792a1", fontSize: ".75rem" }}>
+          Nauji žmonės patys susikuria paskyrą prisijungę su Google arba Microsoft.
+        </p>
       </div>
-
-      {/* Invite form */}
-      {showInviteForm && (
-        <div style={{ background: "#f4f2fc", borderRadius: 10, padding: 14, display: "grid", gap: 10 }}>
-          <label style={{ fontSize: ".75rem", fontWeight: 700, color: "#5f6977", display: "grid", gap: 6 }}>
-            Gavėjo el. paštas (neprivaloma)
-            <input
-              type="email"
-              value={recipientEmail}
-              onChange={(e) => setRecipientEmail(e.target.value)}
-              placeholder="draugas@example.com"
-              style={{ border: "1px solid #dce1e8", borderRadius: 8, padding: "9px 11px", fontSize: ".85rem", outline: 0 }}
-            />
-          </label>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              className="newButton"
-              style={{ fontSize: ".78rem" }}
-              disabled={busy === "invite"}
-              onClick={createInvite}
-            >
-              {busy === "invite" ? "Kuriama…" : "Sukurti kvietimą"}
-            </button>
-            <button
-              type="button"
-              className="ghostButton"
-              style={{ fontSize: ".78rem" }}
-              onClick={() => { setShowInviteForm(false); setRecipientEmail(""); }}
-            >
-              Atšaukti
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* New invite URL */}
-      {newInvite && (
-        <div style={{ background: "#e8f8ef", borderRadius: 10, padding: 14, display: "grid", gap: 8 }}>
-          <p style={{ margin: 0, fontSize: ".78rem", fontWeight: 700, color: "#1a6b35" }}>
-            Kvietimo nuoroda sukurta — perduok ją tiesiogiai:
-          </p>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input
-              readOnly
-              value={newInvite.inviteUrl}
-              style={{ flex: 1, border: "1px solid #b8e6cc", borderRadius: 7, padding: "7px 10px", fontSize: ".75rem", background: "#fff", color: "#1a6b35" }}
-              onFocus={(e) => e.target.select()}
-            />
-            <button
-              type="button"
-              className="ghostButton"
-              style={{ fontSize: ".72rem", whiteSpace: "nowrap" }}
-              onClick={() => navigator.clipboard?.writeText(newInvite.inviteUrl).catch(() => {})}
-            >
-              Kopijuoti
-            </button>
-          </div>
-          <small style={{ color: "#1a6b35", fontSize: ".7rem" }}>
-            Galioja iki {new Date(newInvite.expiresAt).toLocaleString("lt-LT")}
-          </small>
-          <button
-            type="button"
-            style={{ background: "transparent", border: "none", color: "#8792a1", fontSize: ".7rem", cursor: "pointer", textAlign: "left", padding: 0 }}
-            onClick={() => setNewInvite(null)}
-          >
-            Uždaryti
-          </button>
-        </div>
-      )}
 
       {/* Flash message */}
       {msg && (
@@ -313,72 +156,12 @@ export function AdminPanel({ currentUserId }: { currentUserId: number }) {
                     {user.status === "active" ? "Išjungti" : "Įjungti"}
                   </button>
                 )}
-                {/* Recovery invite */}
-                <button
-                  type="button"
-                  className="ghostButton"
-                  style={{ fontSize: ".7rem", padding: "5px 9px" }}
-                  disabled={busy !== null}
-                  onClick={() => { setNewInvite(null); createRecovery(user.id); }}
-                >
-                  {busy === `recovery-${user.id}` ? "Kuriama…" : "Atkūrimo nuoroda"}
-                </button>
               </div>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Invites table */}
-      {invites.length > 0 && (
-        <div>
-          <h3 style={{ margin: "0 0 10px", fontSize: ".85rem", textTransform: "uppercase", letterSpacing: ".07em", color: "#8792a1" }}>
-            Kvietimai
-          </h3>
-          <div style={{ display: "grid", gap: 6 }}>
-            {invites.map((inv) => (
-              <div
-                key={inv.id}
-                style={{
-                  border: "1px solid #e7eaf0",
-                  borderRadius: 9,
-                  padding: "9px 12px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 10,
-                  opacity: inv.active ? 1 : 0.5,
-                  fontSize: ".75rem",
-                }}
-              >
-                <div style={{ minWidth: 0 }}>
-                  <strong style={{ fontSize: ".78rem" }}>
-                    {inv.isRecovery ? "Paskyros atkūrimas" : "Kvietimas"}
-                    {inv.recipientEmail && !inv.isRecovery && ` — ${inv.recipientEmail}`}
-                  </strong>
-                  <small style={{ display: "block", color: "#8792a1" }}>
-                    Sukūrė: {inv.createdByName ?? inv.id} ·{" "}
-                    Galioja iki: {new Date(inv.expiresAt).toLocaleString("lt-LT")}
-                  </small>
-                </div>
-                <span
-                  style={{
-                    fontSize: ".68rem",
-                    fontWeight: 700,
-                    padding: "2px 7px",
-                    borderRadius: 5,
-                    background: inv.usedAt ? "#e8f8ef" : inv.active ? "#f0edff" : "#fafbfc",
-                    color: inv.usedAt ? "#1a6b35" : inv.active ? "#6247d8" : "#8792a1",
-                    flexShrink: 0,
-                  }}
-                >
-                  {inv.usedAt ? "Panaudotas" : inv.active ? "Aktyvus" : "Pasibaigė"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </section>
   );
 }

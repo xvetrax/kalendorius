@@ -22,7 +22,8 @@ services:
     environment:
       - NODE_ENV=production
       # APP_ORIGIN turi atitikti viešą URL (pvz. https://planner.example.com)
-      # APP_PASSWORD — prisijungimo slaptažodis (openssl rand -base64 24)
+      # PUBLIC_SIGNUP — true leidžia naujam žmogui pačiam susikurti paskyrą per OIDC
+      # INITIAL_ADMIN_EMAIL — pirmojo administratoriaus Google / Microsoft adresas
       # TOKEN_ENCRYPTION_KEY — 64 hex simboliai (openssl rand -hex 32)
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]

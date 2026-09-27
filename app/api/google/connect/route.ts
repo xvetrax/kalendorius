@@ -38,23 +38,12 @@ export async function GET(request: Request) {
       sessionId = session?.id ?? null;
     }
 
+    if (sessionId === null) throw new Error("Active session row not found");
     db.prepare(`
       INSERT INTO auth_operations
         (state_hash, nonce, pkce_verifier, provider, session_id, callback_path, expires_at, used)
       VALUES (?, ?, ?, 'google', ?, '/api/google/callback', ?, 0)
     `).run(stateHash, randomBytes(16).toString("hex"), verifier, sessionId, expiresAt);
-
-    // Also store user_id in the operation for direct lookup in callback
-    // auth_operations has no user_id column — we embed it in nonce field (safe: server-only)
-    // Actually, we store it separately via a lightweight approach: include it in a signed state.
-    // The cleanest approach: store user_id in the operation row via a custom column approach.
-    // Since auth_operations has session_id which maps to user_id, the callback can join.
-    // If there's no session (edge case), we use an alternative.
-    // We'll add the user_id as the nonce prefix to recover it in the callback without a join:
-    // Format: "uid:<userId>:<random_nonce>"
-    db.prepare(`
-      UPDATE auth_operations SET nonce = ? WHERE state_hash = ?
-    `).run(`uid:${user.id}:${randomBytes(16).toString("hex")}`, stateHash);
 
     // Existing connection may have a login_hint
     const { getConnection } = await import("@/lib/oauth-service");

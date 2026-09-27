@@ -163,6 +163,10 @@ export default function Planner() {
     if (result === "error") setToast(`${provider} prisijungti nepavyko. Bandyk dar kartą.`);
     if (result === "not-configured") setToast(`${provider} OAuth dar nesukonfigūruotas serveryje.`);
     if (result) window.history.replaceState({}, "", window.location.pathname);
+    const linked = params.get("linked"); const errorParam = params.get("error");
+    if (linked) { const lp = linked === "microsoft" ? "Microsoft" : "Google"; setToast(`${lp} tapatybė sėkmingai susieta.`); setSettingsOpen(true); window.history.replaceState({}, "", window.location.pathname); }
+    if (errorParam === "identity-conflict") { setToast("Ši paskyra jau susieta su kitu naudotoju."); setSettingsOpen(true); window.history.replaceState({}, "", window.location.pathname); }
+    if (errorParam === "identity-link-failed") { setToast("Tapatybės susiejimas nepavyko. Bandyk dar kartą."); window.history.replaceState({}, "", window.location.pathname); }
   }, []);
   useEffect(() => {
     if(!running||!focusEndsAt)return;

@@ -42,25 +42,19 @@ export async function GET(request: Request) {
 
   const op = db
     .prepare(`
-      SELECT id, pkce_verifier, nonce, used, expires_at
+      SELECT id, pkce_verifier, session_id, used, expires_at
       FROM auth_operations
       WHERE state_hash = ? AND provider = 'google'
     `)
     .get(stateHash) as
-    | { id: number; pkce_verifier: string; nonce: string; used: number; expires_at: string }
+    | { id: number; pkce_verifier: string; session_id: number | null; used: number; expires_at: string }
     | undefined;
 
   if (!op || op.used !== 0 || new Date(op.expires_at) <= new Date()) {
     return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
   }
 
-  // Extract user_id from nonce (format: "uid:<userId>:<random>")
-  const nonceMatch = op.nonce.match(/^uid:(\d+):/);
-  if (!nonceMatch) {
-    return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
-  }
-  const userId = parseInt(nonceMatch[1], 10);
-  if (!Number.isFinite(userId) || userId <= 0) {
+  if (op.session_id === null) {
     return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
   }
 
@@ -68,17 +62,19 @@ export async function GET(request: Request) {
   // belong to the same user who initiated the connect flow.
   const rawSessionToken =
     cookieHeader.match(/(?:^|;)\s*planner_session=([^;]+)/)?.[1] ?? null;
-  if (rawSessionToken) {
-    const tokenHash = createHash("sha256").update(rawSessionToken).digest("hex");
-    const currentSession = db
-      .prepare(
-        `SELECT user_id FROM sessions WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP`,
-      )
-      .get(tokenHash) as { user_id: number } | undefined;
-    if (!currentSession || currentSession.user_id !== userId) {
-      return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
-    }
+  if (!rawSessionToken) {
+    return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
   }
+  const tokenHash = createHash("sha256").update(rawSessionToken).digest("hex");
+  const currentSession = db
+    .prepare(
+      `SELECT id, user_id FROM sessions WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP`,
+    )
+    .get(tokenHash) as { id: number; user_id: number } | undefined;
+  if (!currentSession || currentSession.id !== op.session_id) {
+    return redirectWithClear(oauthResultUrl(request.url, "google", "error").href, clearStateCookie);
+  }
+  const userId = currentSession.user_id;
 
   // Mark operation as used atomically before doing anything else (prevent replay)
   const markResult = db

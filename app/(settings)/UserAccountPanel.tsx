@@ -118,26 +118,36 @@ export function UserAccountPanel() {
       </div>
 
       {/* Linked identities */}
-      {identities.length > 0 && (
-        <div>
-          <p style={{ margin: "0 0 6px", fontSize: ".72rem", fontWeight: 700, color: "#8792a1", textTransform: "uppercase", letterSpacing: ".06em" }}>
-            Susietos tapatybės
-          </p>
-          {identities.map((id, i) => (
-            <div key={i} className="connection" style={{ padding: "5px 0" }}>
-              <b className={id.provider === "google" ? "multi" : "blue"} style={{ width: 24, height: 24, fontSize: ".65rem" }}>
-                {id.provider === "google" ? "G" : "M"}
-              </b>
-              <div>
-                <strong style={{ fontSize: ".78rem" }}>
-                  {id.provider === "google" ? "Google" : "Microsoft"}
-                </strong>
-                {id.email && <small>{id.email}</small>}
-              </div>
+      <div>
+        <p style={{ margin: "0 0 6px", fontSize: ".72rem", fontWeight: 700, color: "#8792a1", textTransform: "uppercase", letterSpacing: ".06em" }}>
+          Susietos tapatybės
+        </p>
+        {identities.map((id, i) => (
+          <div key={i} className="connection" style={{ padding: "5px 0" }}>
+            <b className={id.provider === "google" ? "multi" : "blue"} style={{ width: 24, height: 24, fontSize: ".65rem" }}>
+              {id.provider === "google" ? "G" : "M"}
+            </b>
+            <div>
+              <strong style={{ fontSize: ".78rem" }}>
+                {id.provider === "google" ? "Google" : "Microsoft"}
+              </strong>
+              {id.email && <small>{id.email}</small>}
             </div>
-          ))}
+          </div>
+        ))}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+          {!identities.some((id) => id.provider === "google") && (
+            <a href="/api/auth/google-oidc/authorize" style={{ fontSize: ".75rem", color: "#6247d8", fontWeight: 700, textDecoration: "none" }}>
+              + Susieti Google paskyrą
+            </a>
+          )}
+          {!identities.some((id) => id.provider === "microsoft") && (
+            <a href="/api/auth/microsoft-oidc/authorize" style={{ fontSize: ".75rem", color: "#0078d4", fontWeight: 700, textDecoration: "none" }}>
+              + Susieti Microsoft paskyrą
+            </a>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Calendar / Tasks connection links */}
       <div>

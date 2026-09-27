@@ -1,5 +1,4 @@
-import { SESSION_COOKIE } from "@/lib/session";
-import { db, SESSION_COOKIE as MULTI_SESSION_COOKIE, getUserFromSession, revokeSession, revokeAllUserSessions } from "@/lib/db-multi";
+import { db, SESSION_COOKIE, revokeSession, revokeAllUserSessions } from "@/lib/db-multi";
 import { createHash } from "node:crypto";
 import { assertSameOrigin } from "@/lib/http";
 
@@ -34,7 +33,7 @@ export async function POST(request: Request) {
 
   // Resolve current session from cookie
   const cookieHeader = request.headers.get("cookie") ?? "";
-  const rawToken = parseCookieValue(cookieHeader, MULTI_SESSION_COOKIE);
+  const rawToken = parseCookieValue(cookieHeader, SESSION_COOKIE);
 
   if (rawToken) {
     const tokenHash = sha256Hex(rawToken);
@@ -76,15 +75,11 @@ export async function POST(request: Request) {
     }
   }
 
-  // Clear both the legacy single-user cookie and the new multi-user session cookie
+  // Clear the DB-backed multi-user session cookie.
   const resp = Response.json({ ok: true });
   resp.headers.append(
     "Set-Cookie",
     `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`,
-  );
-  resp.headers.append(
-    "Set-Cookie",
-    `${MULTI_SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`,
   );
   return resp;
 }

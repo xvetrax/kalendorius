@@ -15,8 +15,7 @@
  *     oauth_connections.encrypted_refresh_token, never in settings.
  *  4. Session raw tokens live only in HttpOnly cookies.
  *     token_hash = SHA-256(raw_token) is what gets stored in `sessions`.
- *  5. Invite and recovery raw tokens are delivered out-of-band.
- *     token_hash = SHA-256(raw_token) is what gets stored in `invites`.
+ *  5. New verified OIDC identities create isolated accounts when public signup is enabled.
  *  6. assertSameOrigin() is called on ALL mutating API routes.
  *  7. Admin role lets an admin manage users; it does NOT grant access to
  *     other users' tasks, calendar data, or OAuth tokens.
@@ -73,22 +72,6 @@ export interface SessionRow {
 }
 
 // ---------------------------------------------------------------------------
-// Invites
-// ---------------------------------------------------------------------------
-
-/** Row from `invites`. */
-export interface InviteRow {
-  id:              number;
-  token_hash:      string;         // SHA-256(raw invite token) hex
-  recipient_email: string | null;  // hint only; not enforced during use
-  role:            UserRole;
-  created_by:      number;         // users.id of the admin who created it
-  expires_at:      string;         // ISO-8601
-  used_at:         string | null;
-  used_by:         number | null;  // users.id of who consumed it
-}
-
-// ---------------------------------------------------------------------------
 // Auth operations (short-lived OIDC / PKCE flows)
 // ---------------------------------------------------------------------------
 
@@ -99,7 +82,6 @@ export interface AuthOperationRow {
   nonce:         string;           // OIDC nonce verified in id_token
   pkce_verifier: string;           // stored server-side; never sent to client
   provider:      'google' | 'microsoft';
-  invite_id:     number | null;    // set when initiated via an invite link
   session_id:    number | null;    // set when initiated by a logged-in user
   callback_path: string;           // e.g. '/api/google/callback'
   expires_at:    string;           // ISO-8601; short-lived (≤10 min)
@@ -137,11 +119,7 @@ export type SecurityEventType =
   | 'logout'
   | 'logout_all'
   | 'session_expired'
-  | 'invite_created'
-  | 'invite_used'
-  | 'invite_expired'
-  | 'account_recovery_created'
-  | 'account_recovery_used'
+  | 'account_created'
   | 'oauth_connected'
   | 'oauth_disconnected'
   | 'oauth_token_refresh_error'
@@ -171,13 +149,7 @@ export interface SecurityEventRow {
  * Setting keys that remain GLOBAL (stored in the `settings` table or env vars).
  * These have exactly one value for the entire deployment.
  */
-export const GLOBAL_SETTING_KEYS = [
-  /**
-   * Written once after first-admin bootstrap; checked on startup to block
-   * repeated setup even if SETUP_TOKEN env var is still present.
-   */
-  'SETUP_TOKEN_USED',
-] as const;
+export const GLOBAL_SETTING_KEYS = [] as const;
 
 export type GlobalSettingKey = typeof GLOBAL_SETTING_KEYS[number];
 
@@ -281,31 +253,3 @@ export interface OAuthConnectionContext {
   /** Granted scopes (space-separated) */
   scopes:              string;
 }
-
-// ---------------------------------------------------------------------------
-// First-admin bootstrap contract (H1)
-// ---------------------------------------------------------------------------
-
-/**
- * isSetupAllowed — returns true only when:
- *  1. The `users` table is empty (no admin exists yet).
- *  2. The global setting SETUP_TOKEN_USED has NOT been written.
- *  3. process.env.SETUP_TOKEN is set and non-empty.
- *
- * Once a first admin is created, SETUP_TOKEN_USED is written atomically
- * and this function returns false for all future calls — even if the env
- * var is still present.
- */
-export declare function isSetupAllowed(
-  db: import('node:sqlite').DatabaseSync
-): boolean;
-
-/**
- * claimSetupToken — timing-safe comparison of the provided token against
- * process.env.SETUP_TOKEN.  Returns true only if they match AND setup is
- * still allowed.  Never logs the raw token.
- */
-export declare function claimSetupToken(
-  db:       import('node:sqlite').DatabaseSync,
-  provided: string
-): boolean;

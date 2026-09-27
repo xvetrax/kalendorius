@@ -21,7 +21,8 @@ test.describe("task CRUD", () => {
     const body = await res.json();
     expect(body).toHaveProperty("version");
     expect(body.checks.DATABASE_PATH).toContain("kalendorius-playwright-");
-    expect(body.checks.APP_PASSWORD).toContain("auth disabled");
+    expect(body.checks.authentication).toBe("Google / Microsoft OIDC");
+    expect(body.checks.PUBLIC_SIGNUP).toBe("enabled");
     expect(body.checks.google).toBe("not configured");
     expect(body.checks.microsoft).toBe("not configured");
   });

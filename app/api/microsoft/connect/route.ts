@@ -36,11 +36,12 @@ export async function GET(request: Request) {
       sessionId = session?.id ?? null;
     }
 
+    if (sessionId === null) throw new Error("Active session row not found");
     db.prepare(`
       INSERT INTO auth_operations
         (state_hash, nonce, pkce_verifier, provider, session_id, callback_path, expires_at, used)
       VALUES (?, ?, ?, 'microsoft', ?, '/api/microsoft/callback', ?, 0)
-    `).run(stateHash, `uid:${user.id}:${randomBytes(16).toString("hex")}`, verifier, sessionId, expiresAt);
+    `).run(stateHash, randomBytes(16).toString("hex"), verifier, sessionId, expiresAt);
 
     // Existing connection may have a login_hint
     const { getConnection } = await import("@/lib/oauth-service");

@@ -17,7 +17,6 @@ const ALL_TABLES = [
   "users",
   "auth_identities",
   "sessions",
-  "invites",
   "auth_operations",
   "oauth_connections",
   "user_settings",
@@ -60,7 +59,7 @@ const SENSITIVE_KEYS = [
   "microsoft_refresh_token",
   // oauth_connections column
   "encrypted_refresh_token",
-  // sessions / invites / auth_operations columns (token hashes)
+  // sessions / auth_operations columns (token hashes)
   "token_hash",
   "state_hash",
   "pkce_verifier",
@@ -75,7 +74,6 @@ const REQUIRED_COLUMNS: Record<AllTable, readonly string[]> = {
   users: ["id", "display_name", "primary_email", "role", "status", "created_at"],
   auth_identities: ["id", "user_id", "provider", "issuer", "subject"],
   sessions: ["id", "token_hash", "user_id", "expires_at"],
-  invites: ["id", "token_hash", "role", "created_by", "expires_at"],
   auth_operations: ["id", "state_hash", "nonce", "pkce_verifier", "provider", "expires_at", "used"],
   oauth_connections: ["id", "user_id", "provider", "provider_account_id", "generation", "status"],
   user_settings: ["user_id", "key", "value"],
@@ -98,7 +96,6 @@ const PRIMARY_KEYS: Record<AllTable, readonly string[]> = {
   users: ["id"],
   auth_identities: ["id"],
   sessions: ["id"],
-  invites: ["id"],
   auth_operations: ["id"],
   oauth_connections: ["id"],
   user_settings: ["user_id", "key"],
@@ -203,7 +200,7 @@ function copyAllTablesTo(destination: string) {
 
 /**
  * createBackup — admin-only full backup of the entire application database.
- * Includes all tables: users, sessions, invites, oauth_connections, etc.
+ * Includes all tables: users, sessions, oauth_connections, etc.
  * Only call from the admin backup route.
  */
 export function createBackup(): Buffer {
@@ -227,7 +224,7 @@ export function createBackup(): Buffer {
  * Security guarantees:
  *  - The userId parameter MUST come from a server-verified session (caller's
  *    responsibility).
- *  - Sessions, invites, auth_operations, oauth_connections, security_events
+ *  - Sessions, auth_operations, oauth_connections, security_events
  *    and any token/secret columns are NEVER included.
  *  - Sensitive column values (encrypted_refresh_token, token_hash, etc.) are
  *    excluded even if accidentally present via schema changes.

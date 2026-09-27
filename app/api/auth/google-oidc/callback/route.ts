@@ -14,8 +14,8 @@
  */
 
 import { createHash, timingSafeEqual } from "node:crypto";
-import { db, createSession, SESSION_COOKIE, isSetupAllowed, bootstrapFirstAdmin } from "@/lib/db-multi";
-import { consumeInvite, markInviteUsed, addIdentity } from "@/lib/user-service";
+import { db, createSession, SESSION_COOKIE } from "@/lib/db-multi";
+import { addIdentity, findOrCreateOidcUser, isPublicSignupEnabled } from "@/lib/user-service";
 import { verifyGoogleIdToken } from "@/lib/oidc";
 import { appOrigin } from "@/lib/http";
 
@@ -96,14 +96,13 @@ export async function GET(request: Request): Promise<Response> {
 
   // Look up auth_operation by state hash
   const op = db.prepare(`
-    SELECT id, nonce, pkce_verifier, invite_id, session_id, expires_at, used
+    SELECT id, nonce, pkce_verifier, session_id, expires_at, used
     FROM auth_operations
     WHERE state_hash = ? AND provider = 'google'
   `).get(stateHash) as {
     id: number;
     nonce: string;
     pkce_verifier: string;
-    invite_id: number | null;
     session_id: number | null;
     expires_at: string;
     used: number;
@@ -191,90 +190,6 @@ export async function GET(request: Request): Promise<Response> {
   // id_token verified — NEVER store it; work only with claims from here
   const { issuer, subject, email, name } = claims;
 
-  // --- Invite flow: new user registration ---
-  if (op.invite_id !== null) {
-    // Re-validate invite (it may have been used or expired between authorize and callback)
-    let invite: { id: number; role: "admin" | "member" };
-    try {
-      const raw = db.prepare(`
-        SELECT id, role, used_at, expires_at FROM invites WHERE id = ?
-      `).get(op.invite_id) as { id: number; role: "admin" | "member"; used_at: string | null; expires_at: string } | undefined;
-      if (!raw) throw new Error("invite_not_found");
-      if (raw.used_at !== null) throw new Error("invite_already_used");
-      if (new Date(raw.expires_at) <= new Date()) throw new Error("invite_expired");
-      invite = { id: raw.id, role: raw.role };
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : "unknown";
-      logSecurityEvent("login_failure", {
-        ipHint: ip,
-        details: { provider: "google", reason: `invite_invalid: ${reason}`, subject },
-      });
-      return clearStateCookie(Response.redirect(`${origin}/?error=invite-invalid`, 302), origin);
-    }
-
-    // Fix 3: Atomic invite consumption — claim invite FIRST to prevent race conditions
-    let userId: number;
-    try {
-      db.exec("BEGIN");
-
-      // FIRST: atomically claim the invite (prevents double-use race)
-      const inviteClaimResult = db.prepare(`
-        UPDATE invites SET used_at = ?, used_by = 0 WHERE id = ? AND used_at IS NULL
-      `).run(nowIso(), invite.id);
-      if (inviteClaimResult.changes !== 1) {
-        db.exec("ROLLBACK");
-        logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "invite_race", invite_id: invite.id } });
-        return clearStateCookie(Response.redirect(`${origin}/?error=invite-invalid`, 302), origin);
-      }
-
-      // THEN create user + identity
-      const userResult = db.prepare(`
-        INSERT INTO users (display_name, primary_email, role, status, created_at, last_login_at)
-        VALUES (?, ?, ?, 'active', ?, ?)
-      `).run(name || email, email, invite.role, nowIso(), nowIso());
-      userId = Number(userResult.lastInsertRowid);
-
-      db.prepare(`
-        INSERT INTO auth_identities (user_id, provider, issuer, subject, display_email)
-        VALUES (?, 'google', ?, ?, ?)
-      `).run(userId, issuer, subject, email || null);
-
-      // Update invite used_by with actual userId (was set to 0 above for atomicity)
-      db.prepare(`UPDATE invites SET used_by = ? WHERE id = ?`).run(userId, invite.id);
-
-      // Update last_login_at for users table
-      db.prepare(`UPDATE users SET last_login_at = ? WHERE id = ?`).run(nowIso(), userId);
-
-      db.exec("COMMIT");
-    } catch (err) {
-      db.exec("ROLLBACK");
-      logSecurityEvent("login_failure", {
-        ipHint: ip,
-        details: { provider: "google", reason: "user_create_error", error: String(err).slice(0, 200) },
-      });
-      return clearStateCookie(Response.redirect(`${origin}/?error=auth-failed`, 302), origin);
-    }
-
-    const { rawToken } = createSession(userId);
-
-    logSecurityEvent("invite_used", {
-      userId,
-      ipHint: ip,
-      details: { provider: "google", invite_id: invite.id },
-    });
-    logSecurityEvent("login_success", { userId, ipHint: ip, details: { provider: "google" } });
-
-    const secure = origin.startsWith("https://");
-    return new Response(null, {
-      status: 302,
-      headers: [
-        ["Location", `${origin}/`],
-        ["Set-Cookie", sessionCookieHeader(rawToken, origin)],
-        ["Set-Cookie", `oauth_state_google=; Path=/api/auth/google-oidc/callback; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`],
-      ],
-    });
-  }
-
   // --- Identity linking: adding Google to an existing session ---
   if (op.session_id !== null) {
     // Fix 2: Verify the CURRENT request's session cookie belongs to the same session
@@ -304,7 +219,7 @@ export async function GET(request: Request): Promise<Response> {
       });
       const errorSlug =
         reason === "identity_linked_to_different_user" ? "identity-conflict" : "identity-link-failed";
-      return clearStateCookie(Response.redirect(`${origin}/settings?error=${errorSlug}`, 302), origin);
+      return clearStateCookie(Response.redirect(`${origin}/?error=${errorSlug}`, 302), origin);
     }
 
     logSecurityEvent("identity_linked", {
@@ -313,41 +228,27 @@ export async function GET(request: Request): Promise<Response> {
       details: { provider: "google" },
     });
 
-    return clearStateCookie(Response.redirect(`${origin}/settings?linked=google`, 302), origin);
+    return clearStateCookie(Response.redirect(`${origin}/?linked=google`, 302), origin);
   }
 
   // --- Returning user login ---
-  const identity = db.prepare(`
+  let identity = db.prepare(`
     SELECT user_id FROM auth_identities WHERE issuer = ? AND subject = ?
   `).get(issuer, subject) as { user_id: number } | undefined;
 
   if (!identity) {
-    // Auto-bootstrap first admin: if no users exist and SETUP_TOKEN is configured,
-    // the first successful OAuth login creates the admin account automatically.
-    if (isSetupAllowed()) {
-      try {
-        const { userId } = bootstrapFirstAdmin(issuer, subject, name || email, email);
-        const { rawToken } = createSession(userId);
-        logSecurityEvent("login_success", { userId, ipHint: ip, details: { provider: "google", bootstrap: "auto" } });
-        const secure = origin.startsWith("https://");
-        return new Response(null, {
-          status: 302,
-          headers: [
-            ["Location", `${origin}/`],
-            ["Set-Cookie", sessionCookieHeader(rawToken, origin)],
-            ["Set-Cookie", `oauth_state_google=; Path=/api/auth/google-oidc/callback; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`],
-          ],
-        });
-      } catch (err) {
-        logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "bootstrap_failed", error: String(err).slice(0, 200) } });
-      }
+    if (!isPublicSignupEnabled()) {
+      logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "signup_disabled", issuer } });
+      return clearStateCookie(`${origin}/login?error=signup-disabled`, origin);
     }
-
-    logSecurityEvent("login_failure", {
-      ipHint: ip,
-      details: { provider: "google", reason: "no_identity", issuer },
-    });
-    return clearStateCookie(`${origin}/?error=no-invite`, origin);
+    try {
+      const created = findOrCreateOidcUser({ provider: "google", issuer, subject, displayName: name || email, email });
+      identity = { user_id: created.userId };
+      if (created.created) logSecurityEvent("account_created", { userId: created.userId, ipHint: ip, details: { provider: "google", role: created.role } });
+    } catch (err) {
+      logSecurityEvent("login_failure", { ipHint: ip, details: { provider: "google", reason: "user_create_error", error: String(err).slice(0, 200) } });
+      return clearStateCookie(`${origin}/login?error=auth-failed`, origin);
+    }
   }
 
   // Verify user is active

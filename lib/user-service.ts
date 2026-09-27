@@ -4,12 +4,11 @@
  * Security constraints (non-negotiable):
  *  - Admin role lets admin manage users but NOT access other users' tasks,
  *    calendar data, or OAuth tokens.
- *  - Invite and recovery tokens stored as SHA-256 hash; raw token never logged.
- *  - timingSafeEqual for all token comparisons.
  *  - Every mutating function verifies the acting admin's identity via adminId.
+ *  - Public registration creates a member from a verified OIDC issuer+subject.
+ *  - Accounts are never merged automatically by matching email.
  */
 
-import { randomBytes, createHash } from "node:crypto";
 import { db } from "@/lib/db-multi";
 
 // ---------------------------------------------------------------------------
@@ -41,31 +40,12 @@ export interface AuthIdentityRow {
   display_email: string | null;
 }
 
-export interface InviteRow {
-  id: number;
-  token_hash: string;
-  recipient_email: string | null;
-  role: "admin" | "member";
-  created_by: number;
-  expires_at: string;
-  used_at: string | null;
-  used_by: number | null;
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function sha256Hex(input: string): string {
-  return createHash("sha256").update(input, "utf8").digest("hex");
-}
-
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function expiryIso(hours: number): string {
-  return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 }
 
 function countAdmins(): number {
@@ -84,71 +64,66 @@ function requireAdminExists(adminId: number): void {
 }
 
 // ---------------------------------------------------------------------------
-// Invite management
-// ---------------------------------------------------------------------------
-
-/**
- * createInvite — generates a one-time invite token (stored as SHA-256 hash).
- * Raw token is returned for out-of-band delivery; never persisted in plaintext.
- */
-export function createInvite(
-  createdBy: number,
-  role: "member",
-  recipientEmail?: string,
-  expiresInHours = 72,
-): { id: number; rawToken: string; expiresAt: string } {
-  requireAdminExists(createdBy);
-
-  const rawToken = randomBytes(32).toString("hex");
-  const tokenHash = sha256Hex(rawToken);
-  const expiresAt = expiryIso(expiresInHours);
-
-  const result = db.prepare(`
-    INSERT INTO invites (token_hash, recipient_email, role, created_by, expires_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(tokenHash, recipientEmail ?? null, role, createdBy, expiresAt);
-
-  return { id: Number(result.lastInsertRowid), rawToken, expiresAt };
-}
-
-/**
- * consumeInvite — validates hash, expiry, not-used. Returns the invite row.
- * Does NOT mark it used — call markInviteUsed after the user is created.
- */
-export function consumeInvite(rawToken: string): InviteRow {
-  const tokenHash = sha256Hex(rawToken);
-
-  const invite = db.prepare(`
-    SELECT id, token_hash, recipient_email, role, created_by, expires_at, used_at, used_by
-    FROM invites
-    WHERE token_hash = ?
-  `).get(tokenHash) as InviteRow | undefined;
-
-  if (!invite) throw new Error("invite_not_found");
-  if (invite.used_at !== null) throw new Error("invite_already_used");
-  if (new Date(invite.expires_at) <= new Date()) throw new Error("invite_expired");
-
-  return invite;
-}
-
-/**
- * markInviteUsed — atomically marks the invite as consumed by the new user.
- */
-export function markInviteUsed(inviteId: number, userId: number): void {
-  const result = db.prepare(`
-    UPDATE invites
-    SET used_at = ?, used_by = ?
-    WHERE id = ? AND used_at IS NULL
-  `).run(nowIso(), userId, inviteId);
-
-  if (result.changes === 0) {
-    throw new Error("invite_already_used_or_not_found");
-  }
-}
-
-// ---------------------------------------------------------------------------
 // User management
 // ---------------------------------------------------------------------------
+
+export function isPublicSignupEnabled(): boolean {
+  return process.env.PUBLIC_SIGNUP !== "false";
+}
+
+/**
+ * findOrCreateOidcUser — resolves a verified OIDC identity or creates a new
+ * isolated account.  Email is display metadata only and is never used to merge
+ * identities.  The configured INITIAL_ADMIN_EMAIL can claim the first admin
+ * role even if members registered earlier; without it, the first account is
+ * admin for a convenient private bootstrap.
+ */
+export function findOrCreateOidcUser(input: {
+  provider: "google" | "microsoft";
+  issuer: string;
+  subject: string;
+  displayName: string;
+  email: string;
+}): { userId: number; role: "admin" | "member"; created: boolean } {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = db.prepare(`
+      SELECT u.id, u.role
+      FROM auth_identities ai
+      JOIN users u ON u.id = ai.user_id
+      WHERE ai.issuer = ? AND ai.subject = ?
+    `).get(input.issuer, input.subject) as { id: number; role: "admin" | "member" } | undefined;
+    if (existing) {
+      db.exec("COMMIT");
+      return { userId: existing.id, role: existing.role, created: false };
+    }
+
+    const userCount = (db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number }).count;
+    const adminCount = countAdmins();
+    const initialAdminEmail = process.env.INITIAL_ADMIN_EMAIL?.trim().toLocaleLowerCase("en-US") ?? "";
+    const normalizedEmail = input.email.trim().toLocaleLowerCase("en-US");
+    const role: "admin" | "member" = adminCount === 0 && (
+      initialAdminEmail ? normalizedEmail === initialAdminEmail : userCount === 0
+    ) ? "admin" : "member";
+
+    const userResult = db.prepare(`
+      INSERT INTO users (display_name, primary_email, role, status, created_at, last_login_at)
+      VALUES (?, ?, ?, 'active', ?, ?)
+    `).run(input.displayName || input.email, input.email, role, nowIso(), nowIso());
+    const userId = Number(userResult.lastInsertRowid);
+
+    db.prepare(`
+      INSERT INTO auth_identities (user_id, provider, issuer, subject, display_email)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(userId, input.provider, input.issuer, input.subject, input.email || null);
+
+    db.exec("COMMIT");
+    return { userId, role, created: true };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
 
 /**
  * listUsers — returns all users (admin view). Does NOT include OAuth tokens.
@@ -275,42 +250,4 @@ export function addIdentity(
     INSERT INTO auth_identities (user_id, provider, issuer, subject, display_email)
     VALUES (?, ?, ?, ?, ?)
   `).run(userId, provider, issuer, subject, email ?? null);
-}
-
-// ---------------------------------------------------------------------------
-// Account recovery
-// ---------------------------------------------------------------------------
-
-/**
- * createRecoveryInvite — admin-generated one-time recovery token for a specific user.
- * Stored as SHA-256 hash; raw token delivered out-of-band.
- * Uses the invites table with a special sentinel recipient_email prefix.
- * The raw token is returned for out-of-band delivery and never logged.
- */
-export function createRecoveryInvite(
-  adminId: number,
-  targetUserId: number,
-): { rawToken: string } {
-  requireAdminExists(adminId);
-
-  // Verify target user exists
-  const target = db
-    .prepare("SELECT id, role, primary_email FROM users WHERE id = ?")
-    .get(targetUserId) as { id: number; role: string; primary_email: string } | undefined;
-  if (!target) throw new Error(`User ${targetUserId} not found`);
-
-  const rawToken = randomBytes(32).toString("hex");
-  const tokenHash = sha256Hex(rawToken);
-  const expiresAt = expiryIso(24); // 24-hour window for account recovery
-
-  // Store as invite with recipient_email encoding the target user id
-  // Convention: recipient_email = "recovery::<userId>::<email>" to distinguish from normal invites
-  const recipientMarker = `recovery::${targetUserId}::${target.primary_email}`;
-
-  db.prepare(`
-    INSERT INTO invites (token_hash, recipient_email, role, created_by, expires_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(tokenHash, recipientMarker, target.role as "admin" | "member", adminId, expiresAt);
-
-  return { rawToken };
 }

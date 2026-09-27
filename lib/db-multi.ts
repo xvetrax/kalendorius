@@ -7,15 +7,15 @@
  *  3. OAuth refresh tokens stored AES-256-GCM encrypted, never in settings.
  *  4. Session tokens stored as SHA-256 hash in DB; raw token only in HttpOnly cookie.
  *  5. assertSameOrigin() on ALL mutating routes.
- *  6. timingSafeEqual for all token/password comparisons.
+ *  6. New verified OIDC identities create their own member account automatically.
  *  7. Admin role does NOT access other users' tasks, calendar data, or OAuth tokens.
  *  8. OIDC login scope: openid+email+profile only.
  *  9. No automatic account merging by email.
- * 10. Invite and recovery tokens stored as SHA-256 hash; raw token never logged.
+ * 10. The first account is admin; later accounts are members unless an existing admin promotes them.
  */
 
 import { DatabaseSync } from "node:sqlite";
-import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -37,6 +37,13 @@ if (!isBuild && dbPath !== ":memory:") {
 const globalDb = globalThis as typeof globalThis & { plannerMultiDb?: DatabaseSync };
 export const db = globalDb.plannerMultiDb ?? new DatabaseSync(dbPath);
 if (process.env.NODE_ENV !== "production") globalDb.plannerMultiDb = db;
+
+const existingTaskColumns = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
+if (existingTaskColumns.length > 0 && !existingTaskColumns.some((column) => column.name === "user_id")) {
+  throw new Error(
+    "Rasta sena vieno naudotojo DB schema. Duomenys testiniai: sustabdyk programą, pašalink DATABASE_PATH failą ir paleisk iš naujo.",
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Schema — applied in dependency order
@@ -84,26 +91,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
   CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at) WHERE revoked_at IS NULL;
 
-  CREATE TABLE IF NOT EXISTS invites (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    token_hash      TEXT    NOT NULL UNIQUE,
-    recipient_email TEXT,
-    role            TEXT    NOT NULL DEFAULT 'member' CHECK(role IN ('admin', 'member')),
-    created_by      INTEGER NOT NULL REFERENCES users(id),
-    expires_at      TEXT    NOT NULL,
-    used_at         TEXT,
-    used_by         INTEGER REFERENCES users(id)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_invites_used ON invites(used_at) WHERE used_at IS NULL;
-
   CREATE TABLE IF NOT EXISTS auth_operations (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     state_hash    TEXT    NOT NULL UNIQUE,
     nonce         TEXT    NOT NULL,
     pkce_verifier TEXT    NOT NULL,
     provider      TEXT    NOT NULL CHECK(provider IN ('google', 'microsoft')),
-    invite_id     INTEGER REFERENCES invites(id),
     session_id    INTEGER REFERENCES sessions(id),
     callback_path TEXT    NOT NULL,
     expires_at    TEXT    NOT NULL,
@@ -152,8 +145,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_security_events_type    ON security_events(event_type);
   CREATE INDEX IF NOT EXISTS idx_security_events_created ON security_events(created_at);
 
-  DROP TABLE IF EXISTS tasks;
-  CREATE TABLE tasks (
+  CREATE TABLE IF NOT EXISTS tasks (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title            TEXT    NOT NULL,
@@ -172,8 +164,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_tasks_due_at  ON tasks(user_id, due_at);
   CREATE INDEX IF NOT EXISTS idx_tasks_open    ON tasks(user_id, completed) WHERE completed = 0;
 
-  DROP TABLE IF EXISTS task_plans;
-  CREATE TABLE task_plans (
+  CREATE TABLE IF NOT EXISTS task_plans (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id               INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     task_key              TEXT    NOT NULL,
@@ -200,8 +191,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_task_plans_mirror ON task_plans(user_id, mirror_orphaned_at)
     WHERE mirror_orphaned_at IS NOT NULL;
 
-  DROP TABLE IF EXISTS remote_tasks;
-  CREATE TABLE remote_tasks (
+  CREATE TABLE IF NOT EXISTS remote_tasks (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     task_key   TEXT    NOT NULL,
@@ -215,8 +205,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_remote_tasks_user    ON remote_tasks(user_id);
   CREATE INDEX IF NOT EXISTS idx_remote_tasks_account ON remote_tasks(user_id, account_id, source);
 
-  DROP TABLE IF EXISTS remote_task_lists;
-  CREATE TABLE remote_task_lists (
+  CREATE TABLE IF NOT EXISTS remote_task_lists (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     list_key   TEXT    NOT NULL,
@@ -229,8 +218,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_remote_task_lists_user    ON remote_task_lists(user_id);
   CREATE INDEX IF NOT EXISTS idx_remote_task_lists_account ON remote_task_lists(user_id, source, account_id);
 
-  DROP TABLE IF EXISTS calendar_event_creates;
-  CREATE TABLE calendar_event_creates (
+  CREATE TABLE IF NOT EXISTS calendar_event_creates (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     provider      TEXT    NOT NULL,
@@ -245,8 +233,7 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_calendar_event_creates_user ON calendar_event_creates(user_id);
 
-  DROP TABLE IF EXISTS settings;
-  CREATE TABLE settings (
+  CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -274,71 +261,6 @@ function nowIso(): string {
 
 function expiryIso(durationMs: number): string {
   return new Date(Date.now() + durationMs).toISOString();
-}
-
-// ---------------------------------------------------------------------------
-// First-admin bootstrap
-// ---------------------------------------------------------------------------
-
-/**
- * bootstrapFirstAdmin — creates the first admin user + their auth_identity
- * in a single transaction. Throws if the users table is not empty.
- *
- * Security: only works when users table is empty; SETUP_TOKEN_USED is written
- * atomically in the same transaction to prevent concurrent race.
- */
-export function bootstrapFirstAdmin(
-  oidcIssuer: string,
-  oidcSubject: string,
-  displayName: string,
-  email: string,
-): { userId: number } {
-  const existing = db
-    .prepare("SELECT COUNT(*) AS cnt FROM users")
-    .get() as { cnt: number };
-  if (existing.cnt > 0) {
-    throw new Error("bootstrapFirstAdmin: users table is not empty");
-  }
-
-  const setupUsed = db
-    .prepare("SELECT value FROM settings WHERE key = 'SETUP_TOKEN_USED'")
-    .get() as { value: string } | undefined;
-  if (setupUsed) {
-    throw new Error("bootstrapFirstAdmin: SETUP_TOKEN_USED already set");
-  }
-
-  db.exec("BEGIN");
-  try {
-    const insertUser = db.prepare(`
-      INSERT INTO users (display_name, primary_email, role, status, created_at)
-      VALUES (?, ?, 'admin', 'active', ?)
-    `);
-    const userResult = insertUser.run(displayName, email, nowIso());
-    const userId = Number(userResult.lastInsertRowid);
-
-    db.prepare(`
-      INSERT INTO auth_identities (user_id, provider, issuer, subject, display_email)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(
-      userId,
-      oidcIssuer.includes("google") ? "google" : "microsoft",
-      oidcIssuer,
-      oidcSubject,
-      email,
-    );
-
-    db.prepare(`
-      INSERT INTO settings (key, value, updated_at)
-      VALUES ('SETUP_TOKEN_USED', 'yes', ?)
-      ON CONFLICT(key) DO UPDATE SET value = 'yes', updated_at = excluded.updated_at
-    `).run(nowIso());
-
-    db.exec("COMMIT");
-    return { userId };
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -465,68 +387,4 @@ function parseCookieValue(cookieHeader: string, name: string): string | null {
     if (k?.trim() === name) return rest.join("=").trim() || null;
   }
   return null;
-}
-
-// ---------------------------------------------------------------------------
-// Setup helpers (used by the first-admin setup route)
-// ---------------------------------------------------------------------------
-
-/**
- * isSetupAllowed — returns true only when:
- *  1. The users table is empty.
- *  2. SETUP_TOKEN_USED has NOT been written.
- *  3. process.env.SETUP_TOKEN is set and non-empty.
- */
-export function isSetupAllowed(): boolean {
-  const envToken = process.env.SETUP_TOKEN;
-  if (!envToken) return false;
-
-  const setupUsed = db
-    .prepare("SELECT value FROM settings WHERE key = 'SETUP_TOKEN_USED'")
-    .get() as { value: string } | undefined;
-  if (setupUsed) return false;
-
-  const count = db.prepare("SELECT COUNT(*) AS cnt FROM users").get() as { cnt: number };
-  return count.cnt === 0;
-}
-
-/**
- * claimSetupToken — timing-safe comparison of the provided token against
- * process.env.SETUP_TOKEN. Returns true only if they match AND setup is
- * still allowed. Never logs the raw token.
- */
-export function claimSetupToken(provided: string): boolean {
-  if (!isSetupAllowed()) return false;
-  const expected = process.env.SETUP_TOKEN ?? "";
-  if (!expected) return false;
-
-  const eBuf = Buffer.from(expected, "utf8");
-  const pBuf = Buffer.from(provided, "utf8");
-
-  // Constant-time compare; must be same length for timingSafeEqual
-  if (eBuf.length !== pBuf.length) {
-    // Still run a dummy comparison to prevent timing oracle on length
-    timingSafeEqual(eBuf, eBuf);
-    return false;
-  }
-  return timingSafeEqual(eBuf, pBuf);
-}
-
-// ---------------------------------------------------------------------------
-// Global settings helpers (SETUP_TOKEN_USED only)
-// ---------------------------------------------------------------------------
-
-export function globalSetting(key: string): string | undefined {
-  return (
-    db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
-      | { value: string }
-      | undefined
-  )?.value;
-}
-
-export function saveGlobalSetting(key: string, value: string): void {
-  db.prepare(`
-    INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-  `).run(key, value, nowIso());
 }

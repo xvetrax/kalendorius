@@ -129,7 +129,7 @@ test("provider errors, ETag conflicts and account changes preserve all local dat
   assert.equal((await patch(current,{enabled:true,at:"2026-10-25T08:30:00Z"})).status,409);assert.deepEqual(rows(),before);
   intercept=async(url,init,next)=>url.includes("/tasks/shared-id") ? Response.json({error:"Offline"},{status:503}) : next(url,init);
   assert.equal((await read()).status,502);assert.equal((await patch(current,{enabled:false})).status,502);assert.deepEqual(rows(),before);
-  intercept=async(url,init,next)=>{const result=await next(url,init);if(url.includes("/tasks/shared-id")){saveSetting("microsoft_account_id","switched");saveSetting("microsoft_connection_generation","switched");}return result;};
+  intercept=async(url,init,next)=>{const result=await next(url,init);if(url.includes("/tasks/shared-id")){multiDb.prepare("UPDATE oauth_connections SET provider_account_id = 'switched-account', generation = generation + 1 WHERE user_id = ? AND provider = 'microsoft'").run(testUserId);}return result;};
   assert.notEqual((await patch(current,{enabled:false})).status,200);assert.deepEqual(rows(),before);assert.equal(upstream.writes("microsoft").length,0);
 });
 

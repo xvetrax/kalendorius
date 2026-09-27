@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -13,7 +14,19 @@ const port = reservation.address().port;
 await new Promise((resolve) => reservation.close(resolve));
 const origin = `http://127.0.0.1:${port}`;
 const databasePath = path.join(temp, "planner.db");
-const env = { ...process.env, NODE_ENV: "production", PORT: String(port), HOSTNAME: "127.0.0.1", APP_ORIGIN: origin, DATABASE_PATH: path.relative(process.cwd(), databasePath) };
+process.env.DATABASE_PATH = databasePath;
+process.env.MULTI_USER_DATABASE_PATH = databasePath;
+const { db, createSession, SESSION_COOKIE } = await import(pathToFileURL(path.resolve("lib/db-multi.ts")).href);
+const user = db.prepare("INSERT INTO users (display_name, primary_email, role, status) VALUES (?, ?, 'admin', 'active')").run("Smoke Admin", "smoke@example.test");
+const { rawToken } = createSession(Number(user.lastInsertRowid));
+const sessionCookie = `${SESSION_COOKIE}=${rawToken}`;
+const nativeFetch = globalThis.fetch;
+globalThis.fetch = (input, init = {}) => {
+  const headers = new Headers(init.headers);
+  headers.set("Cookie", sessionCookie);
+  return nativeFetch(input, { ...init, headers });
+};
+const env = { ...process.env, NODE_ENV: "production", PORT: String(port), HOSTNAME: "127.0.0.1", APP_ORIGIN: origin, DATABASE_PATH: databasePath, MULTI_USER_DATABASE_PATH: databasePath };
 // No live provider calls or credentials are needed for this regression check.
 for (const provider of ["GOOGLE", "MICROSOFT"]) {
   for (const suffix of ["CLIENT_ID", "CLIENT_SECRET", "REDIRECT_URI"]) env[`${provider}_${suffix}`] = "";

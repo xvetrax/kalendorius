@@ -1,12 +1,12 @@
 # „Dienos planas“ — kelias iki kasdien naudojamo produkto
 
-Atnaujinta: 2026-09-26. Būsena: **asmeninio produkto tikslas aktyvus; kelių naudotojų plėtra suplanuota atskirai**.
+Atnaujinta: 2026-09-27. Būsena: **kelių naudotojų versija įgyvendinama ir tikrinama `feature/multi-user` šakoje**.
 
 ## Tikslas ir darbo principas
 
-Vieno naudotojo, nemokama, savarankiškai talpinama planavimo programėlė lietuvių kalba. Viename lange — Google ir Outlook kalendoriai, Google Tasks, Microsoft To Do ir vietinės užduotys. Pagrindinis scenarijus: sukurti užduotį, nutempti ją į antradienio 10:00 langelį, perkelti į trečiadienį, prailginti iki 60 min., užbaigti tiesiai kalendoriuje ir matyti teisingą būseną šaltinyje.
+Kelių naudotojų, nemokama, savarankiškai talpinama planavimo programėlė lietuvių kalba. Kiekvienas žmogus prisijungia per Google arba Microsoft, gauna izoliuotą darbo erdvę ir joje savarankiškai prijungia norimus kalendorius bei užduočių šaltinius. Pagrindinis scenarijus: sukurti užduotį, nutempti ją į antradienio 10:00 langelį, perkelti į trečiadienį, prailginti iki 60 min., užbaigti tiesiai kalendoriuje ir matyti teisingą būseną šaltinyje.
 
-Pasirinktas kitas produkto plėtros tikslas — viena bendra instancija su atskiromis pakviestų naudotojų paskyromis ir izoliuotais OAuth ryšiais. Švari naujos DB architektūra, darbų seka ir priėmimo scenarijai aprašyti [MULTI_USER_PLAN.md](MULTI_USER_PLAN.md).
+Viena bendra instancija naudoja viešą savitarnos registraciją: nežinoma patvirtinta OIDC tapatybė automatiškai sukuria naują paskyrą, todėl administratorius nesiunčia kvietimų. Prisijungimo tapatybė ir Calendar / Tasks OAuth leidimai lieka atskiri. Dabartinė būsena, darbų seka ir priėmimo scenarijai aprašyti [MULTI_USER_PLAN.md](MULTI_USER_PLAN.md). Žemiau esantys 2026-09-22 `APP_PASSWORD` įrašai yra ankstesnės vieno naudotojo versijos istorija ir neaprašo dabartinės autentifikacijos.
 
 Užduoties terminas ir suplanuotas darbo laikas yra atskiri duomenys. Planavimo veiksmas nekeičia termino ir nesukuria išorinio įvykio. Pasirenkamas Outlook blokas visada `showAs: free`. Vietinės užduotys matomos ir prijungus išorines paskyras.
 

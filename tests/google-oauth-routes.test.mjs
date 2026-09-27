@@ -151,3 +151,24 @@ test("invalid OAuth state cannot change permission state or expose provider erro
   const conn=getConnection(testUserId,"google");
   assert.equal(conn.scopes,calendar);
 });
+
+test("Calendar and Tasks callback requires the same active app session",async()=>{
+  const resp=await connect.GET(connectReq());
+  const auth=new URL(resp.headers.get("location"));
+  const state=auth.searchParams.get("state");
+  const stateCookie=(resp.headers.get("set-cookie")||"").match(/google_connect_state=([^;]+)/)?.[1]||"";
+  let providerCalled=false;
+  globalThis.fetch=async()=>{providerCalled=true;throw Error("Must not reach provider");};
+
+  const result=await callback.GET(new Request(
+    "http://localhost:3000/api/google/callback?"+new URLSearchParams({state,code:"synthetic"}),
+    {headers:{Cookie:`google_connect_state=${stateCookie}`}},
+  ));
+
+  assert.equal(oauthResult(result),"error");
+  assert.equal(providerCalled,false);
+  const operation=multiDb.prepare("SELECT used FROM auth_operations WHERE state_hash = ?").get(
+    (await import("node:crypto")).createHash("sha256").update(state).digest("hex"),
+  );
+  assert.equal(operation.used,0,"failed session binding must not consume the operation");
+});

@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const standaloneServer = path.join(projectRoot, ".next", "standalone", "server.js");
@@ -25,13 +26,26 @@ async function freePort() {
 
 const port = await freePort();
 const runDirectory = mkdtempSync(path.join(tmpdir(), "kalendorius-playwright-"));
+const databasePath = path.join(runDirectory, "planner.db");
+const baseURL = `http://127.0.0.1:${port}`;
+process.env.DATABASE_PATH = databasePath;
+process.env.MULTI_USER_DATABASE_PATH = databasePath;
+const { db, createSession, SESSION_COOKIE } = await import(pathToFileURL(path.join(projectRoot, "lib", "db-multi.ts")).href);
+const user = db.prepare("INSERT INTO users (display_name, primary_email, role, status) VALUES (?, ?, 'admin', 'active')").run("E2E Admin", "e2e@example.test");
+const { rawToken } = createSession(Number(user.lastInsertRowid));
+const storageStatePath = path.join(runDirectory, "storage-state.json");
+writeFileSync(storageStatePath, JSON.stringify({
+  cookies: [{ name: SESSION_COOKIE, value: rawToken, domain: "127.0.0.1", path: "/", expires: Math.floor(Date.now() / 1000) + 604800, httpOnly: true, secure: false, sameSite: "Lax" }],
+  origins: [],
+}));
 const child = spawn(process.execPath, [path.join(projectRoot, "node_modules", "@playwright", "test", "cli.js"), "test", ...process.argv.slice(2)], {
   cwd: projectRoot,
   stdio: "inherit",
   env: {
     ...process.env,
-    PLAYWRIGHT_BASE_URL: `http://127.0.0.1:${port}`,
-    PLAYWRIGHT_DATABASE_PATH: path.join(runDirectory, "planner.db"),
+    PLAYWRIGHT_BASE_URL: baseURL,
+    PLAYWRIGHT_DATABASE_PATH: databasePath,
+    PLAYWRIGHT_STORAGE_STATE: storageStatePath,
   },
 });
 

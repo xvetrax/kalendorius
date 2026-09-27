@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { verifySessionToken, isAuthEnabled, SESSION_COOKIE } from "@/lib/session";
+import { getUserFromSession, SESSION_COOKIE } from "@/lib/db-multi";
 
 export function proxy(request: NextRequest) {
-  if (!isAuthEnabled()) return NextResponse.next();
-
   const { pathname } = request.nextUrl;
 
   // Public paths that don't require auth
@@ -13,7 +11,7 @@ export function proxy(request: NextRequest) {
   }
 
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (verifySessionToken(token)) return NextResponse.next();
+  if (token && getUserFromSession(token)) return NextResponse.next();
 
   // API routes → 401 JSON
   if (pathname.startsWith("/api/")) {

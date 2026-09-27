@@ -123,6 +123,7 @@ function googleClaims({ sub, aud, nonce, exp, iss } = {}) {
     iat: nowSec,
     nonce: nonce ?? "test-nonce-value",
     email: "user@example.com",
+    email_verified: true,
     name: "Test User",
   };
 }
@@ -661,4 +662,3 @@ test(
     assert.ok(threw, "Token signed by unknown key must be rejected");
   }),
 );
-

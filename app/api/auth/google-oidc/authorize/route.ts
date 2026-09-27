@@ -4,20 +4,15 @@
  * Entry point for Google OIDC login. No auth required.
  * Generates state, nonce, PKCE; stores auth_operation in DB; redirects to Google.
  *
- * Query params:
- *   ?invite=<raw-token>    — invite flow (new user)
- *   ?recovery=<raw-token>  — account recovery flow
- *
  * Security:
  *   - state stored only as SHA-256 hash (state_hash) in DB; raw value in redirect only.
  *   - nonce stored in DB; verified in callback against id_token claim.
  *   - PKCE verifier stored in DB server-side; challenge sent to provider.
- *   - invite validated (not consumed) here; consumed atomically in callback.
+ *   - A valid existing session turns this into an explicit identity-link flow.
  */
 
 import { randomBytes, createHash } from "node:crypto";
-import { db, requireUserContext, SESSION_COOKIE } from "@/lib/db-multi";
-import { consumeInvite } from "@/lib/user-service";
+import { db, SESSION_COOKIE } from "@/lib/db-multi";
 import { appOrigin } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -38,38 +33,6 @@ export async function GET(request: Request): Promise<Response> {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   if (!clientId) {
     return Response.json({ error: "Google OIDC not configured." }, { status: 503 });
-  }
-
-  const url = new URL(request.url);
-  const inviteToken = url.searchParams.get("invite") ?? undefined;
-  const recoveryToken = url.searchParams.get("recovery") ?? undefined;
-
-  let inviteId: number | null = null;
-
-  // Validate invite token if present (do NOT mark used yet)
-  if (inviteToken) {
-    try {
-      const invite = consumeInvite(inviteToken);
-      inviteId = invite.id;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "unknown";
-      const errorParam = msg === "invite_expired" ? "invite-expired" : "invite-invalid";
-      const origin = appOrigin(request.url);
-      return Response.redirect(`${origin}/?error=${errorParam}`, 302);
-    }
-  }
-
-  // For recovery flow, validate the recovery token similarly
-  if (recoveryToken && !inviteToken) {
-    try {
-      const invite = consumeInvite(recoveryToken);
-      inviteId = invite.id;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "unknown";
-      const errorParam = msg === "invite_expired" ? "recovery-expired" : "recovery-invalid";
-      const origin = appOrigin(request.url);
-      return Response.redirect(`${origin}/?error=${errorParam}`, 302);
-    }
   }
 
   // If a user is already logged in, record session_id for identity linking
@@ -102,9 +65,9 @@ export async function GET(request: Request): Promise<Response> {
 
   // Store auth_operation
   db.prepare(`
-    INSERT INTO auth_operations (state_hash, nonce, pkce_verifier, provider, invite_id, session_id, callback_path, expires_at, used)
-    VALUES (?, ?, ?, 'google', ?, ?, '/api/auth/google-oidc/callback', ?, 0)
-  `).run(stateHash, nonce, pkceVerifier, inviteId, sessionId, nowPlus(10));
+    INSERT INTO auth_operations (state_hash, nonce, pkce_verifier, provider, session_id, callback_path, expires_at, used)
+    VALUES (?, ?, ?, 'google', ?, '/api/auth/google-oidc/callback', ?, 0)
+  `).run(stateHash, nonce, pkceVerifier, sessionId, nowPlus(10));
 
   // Build redirect URI
   const origin = appOrigin(request.url);

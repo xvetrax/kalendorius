@@ -2,8 +2,8 @@
  * tests/multi-user-isolation.test.mjs — H7 Security isolation tests
  *
  * Tests: DB isolation, API isolation, cross-user ID probing, missing auth,
- * OAuth connection isolation, invite flow, session revocation,
- * last-admin protection, setup endpoint lock-down.
+ * OAuth connection isolation, public account creation, session revocation,
+ * and last-admin protection.
  *
  * Pattern: ESM, node:test + node:assert, same as existing test suite.
  */
@@ -26,8 +26,6 @@ process.env.DATABASE_PATH = dbFile;
 process.env.MULTI_USER_DATABASE_PATH = dbFile;
 process.env.TOKEN_ENCRYPTION_KEY = "ef".repeat(32);
 process.env.APP_ORIGIN = "http://localhost:3000";
-// Provide a SETUP_TOKEN so isSetupAllowed() can work in tests
-process.env.SETUP_TOKEN = "super-secret-setup-token-for-tests";
 for (const provider of ["GOOGLE", "MICROSOFT"]) {
   process.env[`${provider}_CLIENT_ID`] = "synthetic-client";
   process.env[`${provider}_CLIENT_SECRET`] = "synthetic-secret";
@@ -59,17 +57,13 @@ const {
   getUserFromSession,
   revokeSession,
   revokeAllUserSessions,
-  isSetupAllowed,
-  claimSetupToken,
-  bootstrapFirstAdmin,
   SESSION_COOKIE,
 } = await import("../lib/db-multi.ts");
 
 const {
-  createInvite,
-  consumeInvite,
-  markInviteUsed,
   disableUser,
+  findOrCreateOidcUser,
+  isPublicSignupEnabled,
   setUserRole,
   listUsers,
 } = await import("../lib/user-service.ts");
@@ -313,63 +307,21 @@ test("OAuth isolation: deleteConnection only deletes for the specified user", ()
 });
 
 // ---------------------------------------------------------------------------
-// Test: (f) Invite flow — single use, cannot be reused
+// Test: (f) Public OIDC registration — identity is stable and email never merges accounts
 // ---------------------------------------------------------------------------
 
-test("Invite flow: invite can be consumed once then is rejected", () => {
-  // Need an admin user to create invite
-  const adminId = insertUser("Admin For Invite", "admin.invite@test.example", "admin");
+test("Public OIDC registration creates one account per verified issuer and subject", () => {
+  const email = "same-address@test.example";
+  const google = findOrCreateOidcUser({ provider: "google", issuer: "https://accounts.google.com", subject: "public-google", displayName: "Public Google", email });
+  const googleAgain = findOrCreateOidcUser({ provider: "google", issuer: "https://accounts.google.com", subject: "public-google", displayName: "Changed", email });
+  const microsoft = findOrCreateOidcUser({ provider: "microsoft", issuer: "https://login.microsoftonline.com/tenant/v2.0", subject: "public-ms", displayName: "Public Microsoft", email });
 
-  const { id: inviteId, rawToken } = createInvite(adminId, "member", "friend@test.example", 72);
-  assert.ok(inviteId > 0, "Invite ID should be positive");
-  assert.ok(rawToken.length >= 32, "Raw token should be at least 32 chars");
-
-  // Consume invite — should succeed
-  const invite = consumeInvite(rawToken);
-  assert.equal(invite.id, inviteId);
-  assert.equal(invite.used_at, null, "Not yet marked used");
-
-  // Create new user from invite
-  const newUserId = insertUser("New Member", "newmember@test.example", "member");
-  markInviteUsed(inviteId, newUserId);
-
-  // Second use must throw
-  let threw = false;
-  try {
-    consumeInvite(rawToken);
-  } catch (e) {
-    threw = true;
-    assert.match(e.message, /invite_already_used/, "Error must indicate invite already used");
-  }
-  assert.ok(threw, "Second consumeInvite must throw");
-});
-
-test("Invite flow: non-existent token is rejected", () => {
-  let threw = false;
-  try {
-    consumeInvite("0000000000000000000000000000000000000000000000000000000000000000");
-  } catch (e) {
-    threw = true;
-    assert.match(e.message, /invite_not_found/);
-  }
-  assert.ok(threw, "Non-existent invite token must throw invite_not_found");
-});
-
-test("Invite flow: expired invite is rejected", () => {
-  const adminId = insertUser("Admin Expired", "admin.expired@test.example", "admin");
-  const { id: inviteId, rawToken } = createInvite(adminId, "member", undefined, 72);
-
-  // Manually expire it
-  db.prepare("UPDATE invites SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(inviteId);
-
-  let threw = false;
-  try {
-    consumeInvite(rawToken);
-  } catch (e) {
-    threw = true;
-    assert.match(e.message, /invite_expired/);
-  }
-  assert.ok(threw, "Expired invite must throw");
+  assert.equal(google.created, true);
+  assert.equal(googleAgain.created, false);
+  assert.equal(googleAgain.userId, google.userId);
+  assert.equal(microsoft.created, true);
+  assert.notEqual(microsoft.userId, google.userId, "matching email must not merge identities");
+  assert.equal(isPublicSignupEnabled(), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -504,75 +456,6 @@ test("Last admin protection: second admin can be disabled when two admins exist"
     threw = true;
   }
   assert.equal(threw, false, "Should be able to disable second admin when two admins exist");
-});
-
-// ---------------------------------------------------------------------------
-// Test: (i) Setup endpoint disabled after first admin created
-// ---------------------------------------------------------------------------
-
-test("isSetupAllowed: returns true when users table is empty and SETUP_TOKEN is set", () => {
-  // The DB might already have users from other tests — check the actual state
-  const count = db.prepare("SELECT COUNT(*) AS cnt FROM users").get().cnt;
-  const setupUsed = db
-    .prepare("SELECT value FROM settings WHERE key = 'SETUP_TOKEN_USED'")
-    .get();
-
-  if (count === 0 && !setupUsed && process.env.SETUP_TOKEN) {
-    assert.equal(isSetupAllowed(), true, "Setup should be allowed with empty DB");
-  } else {
-    // DB already has users from prior tests — setup should NOT be allowed
-    assert.equal(isSetupAllowed(), false, "Setup should not be allowed when users exist");
-  }
-});
-
-test("isSetupAllowed: returns false when SETUP_TOKEN env is unset", () => {
-  const saved = process.env.SETUP_TOKEN;
-  delete process.env.SETUP_TOKEN;
-  try {
-    assert.equal(isSetupAllowed(), false);
-  } finally {
-    process.env.SETUP_TOKEN = saved;
-  }
-});
-
-test("bootstrapFirstAdmin / isSetupAllowed: after bootstrap, setup is no longer allowed", () => {
-  // Use fresh in-memory path by checking behavior — bootstrapFirstAdmin checks internally
-  // We test with the real DB; if users exist the function throws
-  const count = db.prepare("SELECT COUNT(*) AS cnt FROM users").get().cnt;
-
-  if (count === 0) {
-    // Can only run this sub-test when DB is pristine; if so, do bootstrap
-    const { userId } = bootstrapFirstAdmin(
-      "https://accounts.google.com",
-      "sub-bootstrap-test",
-      "Bootstrap Admin",
-      "bootstrap@test.example",
-    );
-    assert.ok(userId > 0, "Admin user should be created");
-    assert.equal(isSetupAllowed(), false, "Setup must not be allowed after bootstrap");
-  } else {
-    // DB already has users — bootstrapFirstAdmin should throw
-    let threw = false;
-    try {
-      bootstrapFirstAdmin(
-        "https://accounts.google.com",
-        "sub-should-fail",
-        "Duplicate Admin",
-        "dup@test.example",
-      );
-    } catch (e) {
-      threw = true;
-      assert.match(e.message, /not empty|SETUP_TOKEN_USED/);
-    }
-    assert.ok(threw, "bootstrapFirstAdmin must throw when users already exist");
-    assert.equal(isSetupAllowed(), false, "Setup must remain disallowed");
-  }
-});
-
-test("claimSetupToken: wrong token returns false", () => {
-  const result = claimSetupToken("definitely-wrong-token");
-  // Will be false either because users exist or because token doesn't match
-  assert.equal(result, false, "Wrong setup token must return false");
 });
 
 // ---------------------------------------------------------------------------

@@ -25,8 +25,6 @@ const hooks=registerHooks({resolve(specifier,context,next){
 }});
 const originalFetch=globalThis.fetch;
 const {upstream}=await import("./fixtures/tasks-upstream.mjs");
-// Legacy db is still imported to satisfy the close() call in after()
-const {db:legacyDb}=await import("../lib/db.ts");
 const {encrypt}=await import("../lib/secrets.ts");
 // Multi-user db: routes use this for tasks/plans; we also bootstrap a test session here
 const {db:multiDb,createSession}=await import("../lib/db-multi.ts");
@@ -69,7 +67,7 @@ function connect() {
   `).run(testUserId, encrypt("google-refresh"), `${taskScope} https://www.googleapis.com/auth/calendar`);
 }
 beforeEach(()=>{upstream.reset();connect();});
-after(()=>{globalThis.fetch=originalFetch;legacyDb.close();multiDb.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
+after(()=>{globalThis.fetch=originalFetch;multiDb.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 
 const url="http://localhost:3000/api/tasks";
 const request=(method,body,origin="http://localhost:3000")=>new Request(url,{method,headers:{Origin:origin,"Content-Type":"application/json",Cookie:sessionCookie},body:body === undefined ? undefined : JSON.stringify(body)});

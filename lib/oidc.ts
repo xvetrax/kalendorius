@@ -224,6 +224,9 @@ export async function verifyGoogleIdToken(
   if (!sub) {
     throw Object.assign(new Error("Google id_token missing sub claim"), { status: 401 });
   }
+  if (!email || payload.email_verified !== true) {
+    throw Object.assign(new Error("Google id_token email is not verified"), { status: 401 });
+  }
 
   return {
     issuer: GOOGLE_ISSUER,

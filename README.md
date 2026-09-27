@@ -1,6 +1,6 @@
 # Dienos planas
 
-Nemokama, vieno naudotojo, savarankiškai talpinama „Morgen“ alternatyva. Vienoje darbo erdvėje sujungiami „Outlook Calendar“, „Google Calendar“, „Microsoft To Do“, „Google Tasks“ ir vietinės užduotys.
+Nemokama, kelių naudotojų, savarankiškai talpinama „Morgen“ alternatyva. Kiekvienas žmogus prisijungia per Google arba Microsoft, gauna atskirą darbo erdvę ir joje jungia savo „Outlook Calendar“, „Google Calendar“, „Microsoft To Do“ bei „Google Tasks“ paskyras.
 
 ## Ką jau moka
 
@@ -31,20 +31,23 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 - veikti vietoje arba viename neprivilegijuotame „Docker“ konteineryje su išliekančiu duomenų tomu;
 - užšifruoti „Google“ ir „Microsoft“ atnaujinimo žetonus prieš išsaugant SQLite bazėje;
 - aiškiai rodyti abiejų integracijų būseną ir saugiai pašalinti vietoje saugomus OAuth žetonus mygtuku „Atjungti“;
-- apsaugoti programėlę pasirenkamu slaptažodžiu, duomenis keičiančias API užklausas tos pačios kilmės patikra, o OAuth callback — PKCE ir vienkartine serverio operacija;
+- kurti atskiras paskyras pirmo Google arba Microsoft OIDC prisijungimo metu, saugoti atšaukiamas DB sesijas ir izoliuoti kiekvieno naudotojo duomenis;
+- duomenis keičiančias API užklausas saugoti tos pačios kilmės patikra, o OAuth callback — PKCE ir vienkartine serverio operacija;
 - kurti kalendoriaus įvykius su patvariu operacijos ID: neaiškaus Google ar Microsoft atsakymo pakartojimas neturi sukurti antro įvykio.
 
 ## Paleidimas
 
-1. „Microsoft Entra admin center“ užregistruok aplikaciją ir pridėk Web redirect URI `http://localhost:3000/api/microsoft/callback`.
+1. „Microsoft Entra admin center“ užregistruok aplikaciją ir pridėk abu Web redirect URI: `http://localhost:3000/api/auth/microsoft-oidc/callback` prisijungimui ir `http://localhost:3000/api/microsoft/callback` kalendoriaus bei užduočių ryšiui.
 2. Pridėk delegated leidimus: `User.Read`, `Calendars.ReadWrite`, `Tasks.ReadWrite` ir `offline_access`; sukurk Client Secret.
-3. Nukopijuok `.env.example` į `.env`, įrašyk Microsoft Client ID, Client Secret ir 64 simbolių šifravimo raktą (`openssl rand -hex 32`).
-4. Jei nori ir Google, „Google Cloud Console“ tame pačiame projekte įjunk Calendar API ir Tasks API, sukurk Web OAuth klientą ir redirect URI `http://localhost:3000/api/google/callback`.
+3. Nukopijuok `.env.example` į `.env`, įrašyk Microsoft Client ID, Client Secret, `INITIAL_ADMIN_EMAIL` ir 64 simbolių šifravimo raktą (`openssl rand -hex 32`).
+4. Jei nori Google, „Google Cloud Console“ tame pačiame projekte įjunk Calendar API ir Tasks API, sukurk Web OAuth klientą ir registruok abu URI: `http://localhost:3000/api/auth/google-oidc/callback` prisijungimui ir `http://localhost:3000/api/google/callback` integracijai.
 5. Vietiniam darbui paleisk `npm ci`, tada `npm run dev`. Produkcinei kopijai naudok `npm run build && npm start`.
 6. „Docker“ paleidimui naudok `docker compose up --build`.
 7. Atidaryk `http://localhost:3000`.
 
-`APP_ORIGIN`, `GOOGLE_REDIRECT_URI` ir `MICROSOFT_REDIRECT_URI` turi naudoti tą pačią kilmę bei tikslius callback kelius. HTTP leidžiamas tik `localhost` / `127.0.0.1`; viešam adresui naudok HTTPS. Programa visur naudoja 3000 prievadą, nebent tą pačią alternatyvą nuosekliai pakeiti visuose trijuose kintamuosiuose ir Docker portų susiejime.
+`APP_ORIGIN`, integracijų redirect URI ir abu OIDC callback URI turi naudoti tą pačią kilmę. HTTP leidžiamas tik `localhost` / `127.0.0.1`; viešam adresui naudok HTTPS. `PUBLIC_SIGNUP=true` leidžia bet kam, turinčiam Google arba Microsoft paskyrą, susikurti savo izoliuotą erdvę. Nustačius `false`, naujų paskyrų kūrimas sustabdomas, o esami naudotojai prisijungia toliau. Jei `INITIAL_ADMIN_EMAIL` nenustatytas, pirmoji sukurta paskyra tampa administratoriaus paskyra.
+
+Prisijungimas į programėlę ir kalendorių leidimai yra du atskiri žingsniai. Google ar Microsoft mygtukas prisijungimo puslapyje sukuria programėlės paskyrą, prašydamas tik tapatybės teisių. Prisijungęs žmogus nustatymuose pats pasirenka „Prijungti Google“ arba „Prijungti Microsoft“ ir suteikia Calendar / Tasks teises. Administratoriui nereikia kurti ar siųsti kvietimo nuorodų.
 
 ## Patikrinimas
 
@@ -61,7 +64,7 @@ npm run test:e2e
 npm start
 ```
 
-`npm test` apima automatinius regresinius testus, įskaitant tikrą SQLite migraciją ir plano išlikimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą ir nepasiekiamą naršyklės saugyklą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-09-25 pilnas ciklas baigtas su 264/264 Node testais ir 37/37 Playwright scenarijais.
+`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-09-27 pilnas ciklas baigtas su 292/292 Node testais ir 44/44 Playwright scenarijais.
 
 `test:smoke` paleidžia tik lokalią produkcinę kopiją su laikina DB ir neprijungtomis integracijomis. Tikrina CSS / JS / favicon, OAuth klaidas, CSRF, atjungimo API bei užduoties sukūrimą, planavimą, perkėlimą, trukmę, išplanavimą ir užbaigimą. Tikrina, kad terminas nekinta ir pasenusi plano versija atmetama. Užbaigęs pašalina savo testinę DB.
 
@@ -73,7 +76,7 @@ npm start
 
 ## Atsarginės kopijos ir atkūrimas
 
-Atverk **Nustatymai → Duomenys**. **Pilna kopija** išsaugo visas šešias programos lenteles: vietines užduotis, planus, tiekėjų talpyklą, nustatymus, kalendoriaus kūrimo operacijų registrą ir užšifruotus OAuth atnaujinimo žetonus. Failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju atjunk ir iš naujo prijunk paskyras. **Eksportuoti (be žetonų)** sukuria perkėlimui tinkamą SQLite failą be Google ir Microsoft atnaujinimo žetonų.
+Atverk **Nustatymai → Duomenys**. Administratoriaus **Pilna kopija** išsaugo visą kelių naudotojų DB: paskyras, savininkams priskirtas užduotis ir planus, tiekėjų talpyklą, sesijų būseną, kalendoriaus kūrimo operacijų registrą bei užšifruotus OAuth atnaujinimo žetonus. Failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju naudotojai turi iš naujo prijungti paskyras. Paprasto naudotojo **Eksportuoti (be žetonų)** įtraukia tik jo darbo duomenis, be Google / Microsoft žetonų ir kitų naudotojų eilučių.
 
 **Atkurti iš kopijos** priima iki 100 MB SQLite failą. Prieš pakeisdama duomenis programa patikrina failo vientisumą, lenteles ir stulpelius, tada vienoje transakcijoje pakeičia visų programos lentelių duomenis. Klaidinga ar naujesnės nepalaikomos schemos kopija esamų duomenų nekeičia. Po sėkmingo atkūrimo puslapis persikrauna. Prieš programos atnaujinimą parsisiųsk pilną kopiją.
 
@@ -162,4 +165,4 @@ Patikra atliekama su izoliuotomis imitacinėmis API. Tai negarantuoja atominio �
 - užbaigti fizinio telefono, klaviatūros ir jutiklinio valdymo prieinamumo auditą;
 - pridėti senų užbaigtų kalendoriaus kūrimo operacijų registro valymo politiką.
 
-Ši versija skirta vienam naudotojui. Vietoje programėlės slaptažodis neprivalomas; viešam ar nuotoliniam diegimui nustatyk `APP_PASSWORD`, naudok HTTPS ir ribok prieigą prie serverio. Integracijos prijungimas savaime nėra programėlės prieigos apsauga.
+Viešam diegimui naudok HTTPS ir prieš pirmą paleidimą nustatyk `INITIAL_ADMIN_EMAIL`. Administratoriaus rolė leidžia valdyti naudotojų būseną bei roles, tačiau nesuteikia prieigos prie jų užduočių, kalendorių ar OAuth žetonų.

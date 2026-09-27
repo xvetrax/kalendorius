@@ -14,7 +14,6 @@ process.env.MULTI_USER_DATABASE_PATH = dbFile;
 process.env.DATABASE_PATH = dbFile;
 process.env.TOKEN_ENCRYPTION_KEY = "ef".repeat(32);
 process.env.APP_ORIGIN = "http://localhost:3000";
-delete process.env.APP_PASSWORD;
 
 const hooks = registerHooks({
   resolve(specifier, context, next) {
@@ -56,7 +55,6 @@ describe("backup", { concurrency: false }, () => {
       DELETE FROM auth_operations;
       DELETE FROM sessions;
       DELETE FROM auth_identities;
-      DELETE FROM invites;
       DELETE FROM users;
       DELETE FROM settings;
     `);
@@ -162,13 +160,12 @@ describe("backup", { concurrency: false }, () => {
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM remote_tasks").get().count, 1);
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM remote_task_lists").get().count, 1);
 
-      // oauth_connections, sessions, invites etc. must NOT exist in user export
+      // Authentication and integration-secret tables must NOT exist in user export
       const tables = exported.prepare(
         "SELECT name FROM sqlite_master WHERE type='table'"
       ).all().map(r => r.name);
       assert.ok(!tables.includes("oauth_connections"), "oauth_connections must not be in user export");
       assert.ok(!tables.includes("sessions"), "sessions must not be in user export");
-      assert.ok(!tables.includes("invites"), "invites must not be in user export");
       assert.ok(!tables.includes("auth_operations"), "auth_operations must not be in user export");
       assert.ok(!tables.includes("security_events"), "security_events must not be in user export");
       assert.ok(!tables.includes("users"), "users must not be in user export");

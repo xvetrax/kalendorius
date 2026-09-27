@@ -1,113 +1,28 @@
 "use client";
-import { useState, useRef, useEffect, Suspense } from "react";
+import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-
-// ---------------------------------------------------------------------------
-// Setup form — first-admin bootstrap
-// ---------------------------------------------------------------------------
-
-function SetupForm() {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const tokenRef = useRef<HTMLInputElement>(null);
-
-  async function submit(provider: "google" | "microsoft") {
-    const setupToken = tokenRef.current?.value ?? "";
-    if (!setupToken.trim()) { setError("Įvesk sąrankos kodą."); return; }
-    setBusy(true); setError("");
-    try {
-      const res = await fetch("/api/auth/setup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Origin": window.location.origin },
-        body: JSON.stringify({ setupToken, provider }),
-      });
-      if (res.redirected) { window.location.href = res.url; return; }
-      if (res.ok) {
-        // Some environments don't follow 302 automatically in fetch
-        const data = await res.json().catch(() => ({}));
-        if (typeof data.redirectUrl === "string") { window.location.href = data.redirectUrl; return; }
-        window.location.href = provider === "google"
-          ? `/api/auth/google-oidc/authorize?invite=${encodeURIComponent(setupToken)}`
-          : `/api/auth/microsoft-oidc/authorize?invite=${encodeURIComponent(setupToken)}`;
-        return;
-      }
-      const data = await res.json().catch(() => ({}));
-      setError(data.error ?? "Sąranka nepavyko. Patikrink kodą.");
-    } catch {
-      setError("Tinklo klaida. Bandyk dar kartą.");
-    } finally { setBusy(false); }
-  }
-
-  return (
-    <div className="loginBox">
-      <h1 className="loginTitle">Pirmojo administratoriaus sąranka</h1>
-      <p style={{ textAlign: "center", fontSize: ".82rem", color: "#69758a", margin: "0 0 22px" }}>
-        Naudotojų sąrašas tuščias. Įvesk sąrankos kodą ir pasirink, kuria paskyra prisijungsi.
-      </p>
-      <div className="loginForm">
-        <label className="loginLabel">
-          Sąrankos kodas
-          <input
-            ref={tokenRef}
-            type="password"
-            autoFocus
-            autoComplete="off"
-            className="loginInput"
-            placeholder="SETUP_TOKEN reikšmė"
-            disabled={busy}
-          />
-        </label>
-        {error && <p className="loginError" role="alert">{error}</p>}
-        <button
-          type="button"
-          className="loginBtn"
-          disabled={busy}
-          onClick={() => submit("google")}
-          style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}
-        >
-          <GoogleIcon /> {busy ? "Jungiamasi…" : "Prisijungti su Google"}
-        </button>
-        <button
-          type="button"
-          className="loginBtn"
-          disabled={busy}
-          onClick={() => submit("microsoft")}
-          style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, background: "#0078d4" }}
-        >
-          <MicrosoftIcon /> {busy ? "Jungiamasi…" : "Prisijungti su Microsoft"}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Login form — OIDC provider choice
 // ---------------------------------------------------------------------------
 
-function LoginForm({ invite }: { invite: string | null }) {
+function LoginForm() {
   return (
     <div className="loginBox">
       <h1 className="loginTitle">Dienos planas</h1>
-      {invite && (
-        <p style={{ textAlign: "center", fontSize: ".82rem", color: "#69758a", margin: "0 0 22px" }}>
-          Tave pakvietė — pasirink, kuria paskyra prisijungsi.
-        </p>
-      )}
+      <p style={{ textAlign: "center", fontSize: ".82rem", color: "#69758a", margin: "0 0 22px" }}>
+        Prisijunk arba susikurk savo darbo erdvę pasirinkta paskyra.
+      </p>
       <div className="loginForm" style={{ gap: 12 }}>
         <a
-          href={invite
-            ? `/api/auth/google-oidc/authorize?invite=${encodeURIComponent(invite)}`
-            : "/api/auth/google-oidc/authorize"}
+          href="/api/auth/google-oidc/authorize"
           className="loginBtn"
           style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, textDecoration: "none", textAlign: "center" }}
         >
           <GoogleIcon /> Prisijungti su Google
         </a>
         <a
-          href={invite
-            ? `/api/auth/microsoft-oidc/authorize?invite=${encodeURIComponent(invite)}`
-            : "/api/auth/microsoft-oidc/authorize"}
+          href="/api/auth/microsoft-oidc/authorize"
           className="loginBtn"
           style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, textDecoration: "none", textAlign: "center", background: "#0078d4" }}
         >
@@ -148,26 +63,28 @@ function MicrosoftIcon() {
 // Page shell — checks setup status server-side equivalent via API
 // ---------------------------------------------------------------------------
 
-type Mode = "loading" | "setup" | "login";
+const LOGIN_ERRORS: Record<string, string> = {
+  "signup-disabled": "Naujų paskyrų registracija šiuo metu sustabdyta.",
+  "auth-failed": "Prisijungti nepavyko. Bandyk dar kartą.",
+  "auth-invalid": "Netinkama autentifikacijos užklausa.",
+  "auth-expired": "Autentifikacijos sesija baigėsi. Bandyk iš naujo.",
+  "login-cancelled": "Prisijungimas atšauktas.",
+  "account-disabled": "Paskyra išjungta. Susisiek su administratoriumi.",
+};
 
 function LoginPageInner() {
   const params = useSearchParams();
-  const invite = params.get("invite");
-  const [mode, setMode] = useState<Mode>("loading");
-
-  useEffect(() => {
-    setMode("login");
-  }, []);
+  const errorKey = params.get("error") ?? "";
+  const errorMsg = LOGIN_ERRORS[errorKey] ?? "";
 
   return (
     <div className="loginWrap">
-      {mode === "loading" && (
-        <div className="loginBox" style={{ textAlign: "center", color: "#8792a1", fontSize: ".85rem" }}>
-          Kraunama…
+      {errorMsg && (
+        <div style={{ maxWidth: 360, margin: "0 auto 12px", padding: "10px 14px", background: "#fff0f2", borderRadius: 10, color: "#a42d43", fontSize: ".8rem", textAlign: "center" }}>
+          {errorMsg}
         </div>
       )}
-      {mode === "setup" && <SetupForm />}
-      {mode === "login" && <LoginForm invite={invite} />}
+      <LoginForm />
     </div>
   );
 }

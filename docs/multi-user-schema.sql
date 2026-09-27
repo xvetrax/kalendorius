@@ -62,24 +62,6 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user_id   ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires   ON sessions(expires_at) WHERE revoked_at IS NULL;
 
 -- ---------------------------------------------------------------------------
--- Invites (admin-generated one-time links; token stored as hash)
--- token_hash = SHA-256(raw_token) hex.  Raw token is delivered out-of-band.
--- ---------------------------------------------------------------------------
-
-CREATE TABLE IF NOT EXISTS invites (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  token_hash      TEXT    NOT NULL UNIQUE,      -- SHA-256(raw invite token) hex
-  recipient_email TEXT,                         -- optional hint shown to invitee; not enforced
-  role            TEXT    NOT NULL DEFAULT 'member' CHECK(role IN ('admin', 'member')),
-  created_by      INTEGER NOT NULL REFERENCES users(id),
-  expires_at      TEXT    NOT NULL,             -- ISO-8601
-  used_at         TEXT,                         -- NULL = not yet used
-  used_by         INTEGER REFERENCES users(id) -- set atomically when invite is consumed
-);
-
-CREATE INDEX IF NOT EXISTS idx_invites_used ON invites(used_at) WHERE used_at IS NULL;
-
--- ---------------------------------------------------------------------------
 -- Auth operations (short-lived OIDC / OAuth flows)
 -- state_hash = SHA-256(state) hex, so the raw state parameter is never stored.
 -- Supports both initial login and identity-linking from an existing session.
@@ -91,7 +73,6 @@ CREATE TABLE IF NOT EXISTS auth_operations (
   nonce         TEXT    NOT NULL,               -- OIDC nonce (stored in DB, verified in id_token)
   pkce_verifier TEXT    NOT NULL,               -- PKCE code_verifier (stored in DB only)
   provider      TEXT    NOT NULL CHECK(provider IN ('google', 'microsoft')),
-  invite_id     INTEGER REFERENCES invites(id), -- set when flow was initiated via an invite link
   session_id    INTEGER REFERENCES sessions(id),-- set when flow was initiated by a logged-in user
   callback_path TEXT    NOT NULL,               -- e.g. '/api/google/callback'
   expires_at    TEXT    NOT NULL,               -- ISO-8601; operation must complete before this
@@ -159,16 +140,11 @@ CREATE INDEX IF NOT EXISTS idx_security_events_created ON security_events(create
 
 -- ---------------------------------------------------------------------------
 -- User-owned task data
--- The existing single-user tables are dropped and recreated with user_id.
--- task_plans and remote_* tables also gain user_id for strict ownership.
+-- A legacy single-user DB is rejected before this DDL runs. Existing multi-user
+-- tables are preserved and created only when absent.
 -- ---------------------------------------------------------------------------
 
--- Drop old single-user tables (only executed on a clean DB; migration path is
--- a separate reset command documented in ops docs).
--- On a fresh DB these do not exist, so IF EXISTS guards are sufficient.
-
-DROP TABLE IF EXISTS tasks;
-CREATE TABLE tasks (
+CREATE TABLE IF NOT EXISTS tasks (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title            TEXT    NOT NULL,
@@ -189,8 +165,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_open    ON tasks(user_id, completed) WHERE 
 
 -- ---------------------------------------------------------------------------
 
-DROP TABLE IF EXISTS task_plans;
-CREATE TABLE task_plans (
+CREATE TABLE IF NOT EXISTS task_plans (
   -- Composite PK because the same remote task_key can belong to different users.
   id                   INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -220,8 +195,7 @@ CREATE INDEX IF NOT EXISTS idx_task_plans_mirror  ON task_plans(user_id, mirror_
 
 -- ---------------------------------------------------------------------------
 
-DROP TABLE IF EXISTS remote_tasks;
-CREATE TABLE remote_tasks (
+CREATE TABLE IF NOT EXISTS remote_tasks (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   task_key  TEXT    NOT NULL,                   -- '<provider>:<account>:<list>:<id>'
@@ -237,8 +211,7 @@ CREATE INDEX IF NOT EXISTS idx_remote_tasks_account ON remote_tasks(user_id, acc
 
 -- ---------------------------------------------------------------------------
 
-DROP TABLE IF EXISTS remote_task_lists;
-CREATE TABLE remote_task_lists (
+CREATE TABLE IF NOT EXISTS remote_task_lists (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   list_key  TEXT    NOT NULL,                   -- '<provider>:<account>:<list_id>'
@@ -253,8 +226,7 @@ CREATE INDEX IF NOT EXISTS idx_remote_task_lists_account ON remote_task_lists(us
 
 -- ---------------------------------------------------------------------------
 
-DROP TABLE IF EXISTS calendar_event_creates;
-CREATE TABLE calendar_event_creates (
+CREATE TABLE IF NOT EXISTS calendar_event_creates (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   provider      TEXT    NOT NULL,
@@ -271,20 +243,13 @@ CREATE TABLE calendar_event_creates (
 CREATE INDEX IF NOT EXISTS idx_calendar_event_creates_user ON calendar_event_creates(user_id);
 
 -- ---------------------------------------------------------------------------
--- Global/deployment state (NOT user data)
--- The old single-user `settings` table is retired.  The only persistent
--- global key remaining is SETUP_TOKEN_USED, written once after first-admin
--- bootstrap and checked on every startup to block repeated setup.
--- All other deployment configuration lives in environment variables.
+-- Legacy global/deployment state kept for backward-compatible non-user keys.
+-- Authentication bootstrap is configured with PUBLIC_SIGNUP and
+-- INITIAL_ADMIN_EMAIL environment variables.
 -- ---------------------------------------------------------------------------
 
-DROP TABLE IF EXISTS settings;
-CREATE TABLE settings (
+CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
--- Only allowed global keys:
---   SETUP_TOKEN_USED      TEXT 'yes'  -- written once; blocks repeated admin setup
---   (add new global keys here with a comment explaining why they are global)
