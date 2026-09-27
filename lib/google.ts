@@ -18,7 +18,7 @@ export type { OAuthConnectionRow };
 const calendarScope = "https://www.googleapis.com/auth/calendar";
 const tasksScope = "https://www.googleapis.com/auth/tasks";
 /** Scopes requested for Calendar+Tasks data access (NOT OIDC login) */
-export const GOOGLE_OAUTH_SCOPES = `${calendarScope} ${tasksScope} offline_access`;
+export const GOOGLE_OAUTH_SCOPES = `${calendarScope} ${tasksScope}`;
 
 export type GoogleTasksStatus =
   | "disconnected"
