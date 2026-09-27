@@ -1,0 +1,47 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-0.1.0}
+    image: kalendorius:${APP_VERSION:-0.1.0}
+    container_name: kalendorius-app
+    restart: unless-stopped
+    init: true
+    ports:
+      # Tailscale Funnel veikia tame pačiame serveryje ir jungiasi per localhost.
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - planner_data:/app/data
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ:-Europe/Vilnius}
+      APP_ORIGIN: ${APP_ORIGIN:?Nustatyk viešą HTTPS adresą}
+      PUBLIC_SIGNUP: ${PUBLIC_SIGNUP:-true}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:?Nustatyk administratoriaus el. paštą}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Nustatyk 64 hex simbolių raktą}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Nustatyk Google OAuth Client ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?Nustatyk Google OAuth Client Secret}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:?Nustatyk Google integracijos callback URL}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:?Nustatyk Microsoft Client ID}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:?Nustatyk Microsoft Client Secret}
+      MICROSOFT_TENANT: ${MICROSOFT_TENANT:-common}
+      MICROSOFT_REDIRECT_URI: ${MICROSOFT_REDIRECT_URI:?Nustatyk Microsoft integracijos callback URL}
+      DATABASE_PATH: /app/data/planner.db
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  planner_data:
+    name: kalendorius-data
