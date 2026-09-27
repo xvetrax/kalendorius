@@ -156,17 +156,7 @@ function LoginPageInner() {
   const [mode, setMode] = useState<Mode>("loading");
 
   useEffect(() => {
-    // Check if first-admin setup is required
-    fetch("/api/auth/setup", { method: "GET" })
-      .then(async (res) => {
-        if (res.status === 200) {
-          const data = await res.json().catch(() => ({}));
-          setMode(data.available ? "setup" : "login");
-        } else {
-          setMode("login");
-        }
-      })
-      .catch(() => setMode("login"));
+    setMode("login");
   }, []);
 
   return (
