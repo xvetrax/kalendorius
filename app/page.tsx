@@ -27,6 +27,7 @@ type IntegrationStatus = { connected: boolean; configured: boolean; account: str
 
 const hours = Array.from({ length: 24 }, (_, i) => i);
 const dayNames = ["Pr", "An", "Tr", "Kt", "Pn", "Št", "Sk"];
+const calendarModes = ["day", "workweek", "week", "month"] as const satisfies readonly Mode[];
 const projects = ["Asmeniniai", "Darbas", "Mokymasis"];
 const timeZones=calendarTimeZones();
 const TaskActions = createContext<{ report:(error:unknown)=>void; edit: (task: Task) => void; complete: (task: Task) => void; resize: (task: Task, minutes: number) => Promise<void>; move: (task:Task, date:Date | null) => Promise<void>; setDragHint: (hint: {day: string; minute: number; height: number} | null) => void }>({ report:()=>{}, edit: () => {}, complete: () => {}, resize: async () => {}, move:async () => {}, setDragHint:()=>{} });
@@ -97,9 +98,18 @@ export default function Planner() {
 
   const panelOpen=view==="calendar" && (isMobile ? mobilePanelOpen : !collapsed);
   function changeView(next:View) {setView(next);setMobilePanelOpen(false);}
+  function changeMode(next:Mode) {
+    setMode(next);
+    try {localStorage.setItem("calendar-mode",next);} catch {}
+  }
   useEffect(()=>{
     const query=window.matchMedia("(max-width: 760px)");
-    setIsMobile(query.matches);if(query.matches)setMode("day");
+    setIsMobile(query.matches);
+    try {
+      const saved=localStorage.getItem("calendar-mode");
+      if(calendarModes.some(value=>value===saved))setMode(saved as Mode);
+      else if(query.matches)setMode("day");
+    } catch {if(query.matches)setMode("day");}
     const update=()=>{setIsMobile(query.matches);setMobilePanelOpen(false);};
     query.addEventListener("change",update);
     const shortcut=(event:KeyboardEvent)=>{
@@ -307,7 +317,7 @@ export default function Planner() {
       </header>
       {toast && <button role="status" className="toast" onClick={() => setToast("")}>{toast}<span>×</span></button>}
       {view === "calendar" && !clock && <div className="loading" role="status" aria-label="Kraunamas kalendorius"><i/><i/><i/></div>}
-      {view === "calendar" && clock && <Calendar mode={mode} setMode={setMode} anchor={anchor} setAnchor={setAnchor} days={days} monthDays={monthDays} events={calendarEvents} tasks={calendarTasks} loading={loading} move={move} onDrop={dropTask} onCreate={setEventDate} dragHint={dragHint}/>}
+      {view === "calendar" && clock && <Calendar mode={mode} setMode={changeMode} anchor={anchor} setAnchor={setAnchor} days={days} monthDays={monthDays} events={calendarEvents} tasks={calendarTasks} loading={loading} move={move} onDrop={dropTask} onCreate={setEventDate} dragHint={dragHint}/>}
       {view === "tasks" && <TaskBoard tasks={tasks.filter((task) => `${task.title} ${task.notes || ""}`.toLowerCase().includes(search.toLowerCase()))} onDone={(task) => { void patchTask(task, { completed: !task.completed }).catch(report); }} onFocus={startFocus} onAdd={() => setTaskModal(true)}/>} 
       {view === "focus" && <Focus
         task={focusTask || openTasks[0]} tasks={openTasks} seconds={seconds} running={running} startedAt={focusStartedAt}
@@ -366,7 +376,7 @@ function TaskCard({task,onDone,onFocus}:{task:Task;onDone:()=>void;onFocus:()=>v
 
 function Calendar({ mode, setMode, anchor, setAnchor, days, monthDays, events, tasks, loading, move, onDrop, onCreate, dragHint }: { mode: Mode; setMode: (m: Mode) => void; anchor: Date; setAnchor: (d: Date) => void; days: Date[]; monthDays: Date[]; events: CalEvent[]; tasks: Task[]; loading: boolean; move: (n: number) => void; onDrop: (e: DragEvent<HTMLDivElement>, d: Date) => void; onCreate: (d: Date) => void; dragHint: {day: string; minute: number; height: number} | null }) {
   const title = mode === "day" ? anchor.toLocaleDateString("lt-LT",{month:"long",day:"numeric"}) : mode === "month" ? anchor.toLocaleDateString("lt-LT", { month: "long", year: "numeric" }) : `${days[0].toLocaleDateString("lt-LT", { month: "short", day: "numeric" })} – ${days.at(-1)!.toLocaleDateString("lt-LT", { month: "short", day: "numeric", year: "numeric" })}`;
-  return <div className="calendarView"><div className="calendarToolbar"><div><button onClick={() => setAnchor(new Date())}>Šiandien</button><button aria-label="Ankstesnis laikotarpis" onClick={() => move(-1)}>‹</button><button aria-label="Kitas laikotarpis" onClick={() => move(1)}>›</button><h2>{title}</h2></div><div className="modeTabs">{(["day", "workweek", "week", "month"] as Mode[]).map((item) => <button className={mode === item ? "active" : ""} aria-pressed={mode===item} onClick={() => setMode(item)} key={item}>{({ day: "Diena", workweek: "Darbo savaitė", week: "Savaitė", month: "Mėnuo" })[item]}</button>)}</div></div>{loading ? <div className="loading"><i/><i/><i/></div> : mode === "month" ? <Month days={monthDays} anchor={anchor} events={events} tasks={tasks} onCreate={onCreate}/> : <TimeGrid days={days} events={events} tasks={tasks} onDrop={onDrop} onCreate={onCreate} dragHint={dragHint}/>}</div>;
+  return <div className="calendarView"><div className="calendarToolbar"><div><button onClick={() => setAnchor(new Date())}>Šiandien</button><button aria-label="Ankstesnis laikotarpis" onClick={() => move(-1)}>‹</button><button aria-label="Kitas laikotarpis" onClick={() => move(1)}>›</button><h2>{title}</h2></div><div className="modeTabs">{calendarModes.map((item) => <button className={mode === item ? "active" : ""} aria-pressed={mode===item} onClick={() => setMode(item)} key={item}>{({ day: "Diena", workweek: "Darbo savaitė", week: "Savaitė", month: "Mėnuo" })[item]}</button>)}</div></div>{loading ? <div className="loading"><i/><i/><i/></div> : mode === "month" ? <Month days={monthDays} anchor={anchor} events={events} tasks={tasks} onCreate={onCreate}/> : <TimeGrid days={days} events={events} tasks={tasks} onDrop={onDrop} onCreate={onCreate} dragHint={dragHint}/>}</div>;
 }
 function TimeGrid({ days, events, tasks, onDrop, onCreate, dragHint }: { days: Date[]; events: CalEvent[]; tasks: Task[]; onDrop: (e: DragEvent<HTMLDivElement>, d: Date) => void; onCreate: (d: Date) => void; dragHint: {day: string; minute: number; height: number} | null }) {
   const grid = useRef<HTMLDivElement>(null);
