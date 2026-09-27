@@ -27,7 +27,7 @@ Prisijungimo tapatybė suteikia tik prieigą prie programėlės. Prisijungęs ž
 
 ## Likę patikrinimai ir darbai
 
-- [ ] Pilnas `typecheck`, Node testų, produkcinio build, smoke ir Playwright ciklas po viešos registracijos pakeitimo.
+- [x] Pilnas `typecheck`, 292 Node testų, produkcinio build, trijų smoke rinkinių ir 44 Playwright scenarijų ciklas po viešos registracijos pakeitimo.
 - [ ] Dviejų atskirų Playwright naršyklės kontekstų scenarijus, įrodantis UI ir API duomenų izoliaciją.
 - [ ] Gyvas Google bei Microsoft OIDC prisijungimas su produkciniais callback URI.
 - [ ] Gyvas atskiras Calendar / Tasks prijungimas kiekvienam iš dviejų naudotojų.
