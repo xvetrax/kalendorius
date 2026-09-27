@@ -123,12 +123,13 @@ export async function GET(request: Request): Promise<Response> {
 
   // Fix 1: Bind state to browser via cookie (CSRF protection)
   const secure = origin.startsWith("https://");
-  const redirectResponse = Response.redirect(authUrl.toString(), 302);
-  redirectResponse.headers.set(
-    "Set-Cookie",
-    `oauth_state_ms=${rawState}; Path=/api/auth/microsoft-oidc/callback; Max-Age=600; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`,
-  );
-  return redirectResponse;
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: authUrl.toString(),
+      "Set-Cookie": `oauth_state_ms=${rawState}; Path=/api/auth/microsoft-oidc/callback; Max-Age=600; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`,
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
