@@ -109,7 +109,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const redirectUrl = `${authorizeBase}?invite=${encodeURIComponent(rawToken)}`;
 
-  return Response.redirect(redirectUrl, 302);
+  return Response.json({ redirectUrl });
 }
 
 // ---------------------------------------------------------------------------
