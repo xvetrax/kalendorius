@@ -321,7 +321,7 @@ export default function Planner() {
       <form className="quickAdd" onSubmit={quickAdd}><span>＋</span><input value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} placeholder="Pridėti užduotį…"/><kbd>↵</kbd></form>
       <div className="filters"><button className={project === "Visi" ? "active" : ""} onClick={() => setProject("Visi")}>Visos</button>{projects.map((name) => <button className={project === name ? "active" : ""} onClick={() => setProject(name)} key={name}>{name}</button>)}</div>
       <div className="listTitle"><span>NEPLANUOTA</span><b>{unplanned.length}</b></div>
-      <div className="taskListDestination"><TaskDestination lists={taskLists} value={taskDestination} onChange={setTaskDestination}/><button type="button" onClick={()=>setTaskListManagerOpen(true)}>Tvarkyti sąrašus</button></div><section className="taskList" onDragOver={(e) => e.preventDefault()} onDrop={unscheduleDrop}>{unplanned.map((task) => <TaskCard task={task} onDone={() => { void patchTask(task, { completed: true }).catch(report); }} onFocus={() => startFocus(task)} key={task.key}/>)}{!unplanned.length && <div className="emptyState"><b>✓</b><strong>Viskas suplanuota</strong><span>Naują užduotį pridėk aukščiau</span></div>}</section>
+      <div className="taskListDestination"><TaskDestination lists={taskLists} value={taskDestination} onChange={setTaskDestination}/><button type="button" onClick={()=>setTaskListManagerOpen(true)}><Icon name="settings"/>Tvarkyti užduočių sąrašus</button></div><section className="taskList" onDragOver={(e) => e.preventDefault()} onDrop={unscheduleDrop}>{unplanned.map((task) => <TaskCard task={task} onDone={() => { void patchTask(task, { completed: true }).catch(report); }} onFocus={() => startFocus(task)} key={task.key}/>)}{!unplanned.length && <div className="emptyState"><b>✓</b><strong>Viskas suplanuota</strong><span>Naują užduotį pridėk aukščiau</span></div>}</section>
       <p className="panelHint">{isMobile ? "Paspausk užduotį ir pasirink suplanuotą pradžią." : "Tempk užduotį į kalendorių."}<br/>Terminas ir darbo laikas – atskirai.</p>
 
     </aside>
@@ -359,7 +359,7 @@ function TaskCard({task,onDone,onFocus}:{task:Task;onDone:()=>void;onFocus:()=>v
     }}>
     <button className="check" disabled={saving || Boolean(task.readonly_reason)} aria-label={`Užbaigti: ${task.title}`} onClick={onDone}/>
     <button className="taskDetailsButton" disabled={saving} onClick={event=>{if(event.detail===0 || !moved.current)actions.edit(task);}}><strong>{task.title}</strong><span>{taskSourceLabel(task)}{task.stale ? " · pasenę duomenys" : ""}</span><span>{task.project} · {durationLabel(task.duration_minutes)}{task.due_at ? ` · terminas ${new Date(task.due_at).toLocaleDateString("lt-LT")}` : task.due_date ? ` · Google diena ${task.due_date}` : ""}</span></button>
-    <button className="playMini" disabled={saving} aria-label={`Fokusuotis: ${task.title}`} onClick={onFocus}>▶</button><em aria-hidden="true">⋮⋮</em>
+    <button className="playMini" disabled={saving} aria-label={`Fokusuotis: ${task.title}`} title="Pradėti fokusavimo sesiją" onClick={onFocus}><span aria-hidden="true">▶</span> Fokusas</button>
     {ghost && createPortal(<div className="taskDragPreview" style={{left:ghost.x+12,top:ghost.y+12}}><strong>{task.title}</strong><small>{durationLabel(task.duration_minutes)} · Paleisk kalendoriuje</small></div>,document.body)}
   </article>;
 }

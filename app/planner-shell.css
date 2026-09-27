@@ -63,11 +63,12 @@ button svg{flex-shrink:0}
 .filters button.active{background:var(--accent-soft);color:var(--accent-text)}
 .listTitle,.taskDestination,.taskDetailsButton span{color:var(--muted)}
 .taskDestination{font-size:.62rem;flex-shrink:0}.taskDestination select{font-size:.62rem;max-width:137px;background:var(--surface)}
-.taskListDestination{display:flex;justify-content:space-between;align-items:end;gap:8px}.taskListDestination>button,.settingsListButton{border:0;background:transparent;color:var(--accent-text);font-size:.67rem;font-weight:700;cursor:pointer;padding:3px 0;text-decoration:underline;text-underline-offset:2px}
+.taskListDestination{display:grid;gap:8px;margin-bottom:10px}.taskListDestination .taskDestination{display:grid;gap:6px;margin:0;font-size:.68rem}.taskListDestination .taskDestination select{width:100%;max-width:none;padding:8px;font-size:.72rem}.taskListDestination>button{min-height:38px;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--accent-text);font-size:.72rem;font-weight:750;cursor:pointer;padding:8px 10px}.taskListDestination>button:hover{border-color:var(--accent-text);background:var(--accent-soft)}.taskListDestination>button svg{width:16px;height:16px}.settingsListButton{border:0;background:transparent;color:var(--accent-text);font-size:.67rem;font-weight:700;cursor:pointer;padding:3px 0;text-decoration:underline;text-underline-offset:2px}
 .taskList{flex:1;min-height:130px;overflow:auto;padding-top:4px}
 .taskList:has(.taskCard:hover){background:var(--accent-soft)}
-.taskCard{background:var(--surface);border-radius:9px;padding:12px 8px;gap:7px;box-shadow:0 2px 7px #20263a04}
+.taskCard{grid-template-columns:auto minmax(0,1fr) auto;background:var(--surface);border-radius:9px;padding:12px 8px;gap:7px;box-shadow:0 2px 7px #20263a04}
 .taskCard strong{font-size:.78rem}.taskDetailsButton span{font-size:.63rem}
+.playMini{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:7px;background:var(--accent-soft);color:var(--accent-text);padding:6px 7px;font-size:.66rem;font-weight:700;white-space:nowrap}.playMini:hover{border-color:var(--accent-text)}
 .taskCard{user-select:none}.taskDragPreview{position:fixed;z-index:100;pointer-events:none;max-width:240px;padding:12px 16px;background:var(--task-bg);color:var(--task-text);border:1px solid var(--purple);border-radius:10px;box-shadow:var(--shadow);font-size:.8rem}.taskDragPreview strong,.taskDragPreview small{display:block}.taskDragPreview small{font-size:.65rem;margin-top:5px}
 .panelHint{font-size:.67rem;line-height:1.6;color:var(--muted);margin:12px 2px 0;padding-top:14px;border-top:1px solid var(--line)}
 .emptyState{color:var(--muted)}.emptyState b{background:var(--success-bg);color:var(--success-text)}
@@ -97,6 +98,7 @@ button svg{flex-shrink:0}
 .boardTaskCard:hover{border-color:var(--accent-text);background:var(--accent-soft)}
 .boardTaskTitle{border:0;background:transparent;color:var(--ink);font-weight:650;font-size:.8rem;text-align:left;padding:0 7px;cursor:pointer}
 .columns article.done .boardTaskTitle{text-decoration:line-through}
+.columns article>small{grid-column:2;margin:3px 8px 0;color:var(--muted);font-size:.68rem}
 .columns article>p,.columns article>footer{color:var(--muted);overflow-wrap:anywhere}.columns article>footer{flex-wrap:wrap;gap:5px}
 .columns article>footer span{color:var(--accent-text)}.columns article>footer button{background:var(--accent-soft);color:var(--accent-text)}
 .columnEmpty{border-color:var(--line);color:var(--muted)}
