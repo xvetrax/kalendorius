@@ -176,6 +176,15 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 - [x] **P1 — Docker priėmimas.** Realiai sukurtas ir paleistas image; patikrinta sveikata, versija, neprivilegijuotas procesas ir duomenų tomo išlikimas.
 - [ ] **D/F priėmimas.** Užbaigti detalaus įvykio redagavimo spragas, sinchronizuoti README su faktine būsena, tada vykdyti abiejų gyvų paskyrų scenarijų pagal atskirą kontrolinį sąrašą.
 
+### H. Įdiegiama PWA programėlė
+
+Detalus įdiegimo, saugaus podėlio, ryšio būsenos, Web Push, platformų patikros ir white-label paruošimo planas aprašytas [PWA_PLAN.md](PWA_PLAN.md).
+
+- [ ] **PWA-1:** manifestas, ikonų rinkinys, diegimo sąsaja ir reali macOS / Android patikra.
+- [ ] **PWA-2:** minimalus service worker, tik viešų statinių resursų podėlis, offline bei atnaujinimo būsenos.
+- [ ] **PWA-3:** naudotojo valdomos Push prenumeratos, atskiras patvarus pranešimų worker ir privatūs pranešimų nustatymai.
+- [ ] **PWA-4:** tik pagal patvirtintą poreikį — ribotas vieno naudotojo dienos plano skaitymas be interneto; offline redagavimas lieka atskiras konfliktų valdymo projektas.
+
 ## Darbo eiga ir ribos
 
 ### 2026-09-24 Google Calendar ir Outlook RSVP
