@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { exchangeCode, isGoogleTasksConnectedForUser } from "@/lib/google";
+import { exchangeCode } from "@/lib/google";
 import { oauthResultUrl } from "@/lib/http";
 import { db } from "@/lib/db-multi";
 
@@ -42,12 +42,21 @@ export async function GET(request: Request) {
 
   const op = db
     .prepare(`
-      SELECT id, pkce_verifier, session_id, used, expires_at
+      SELECT id, pkce_verifier, session_id, used, expires_at,
+             oauth_mode, expected_connection_id
       FROM auth_operations
       WHERE state_hash = ? AND provider = 'google'
     `)
     .get(stateHash) as
-    | { id: number; pkce_verifier: string; session_id: number | null; used: number; expires_at: string }
+    | {
+      id: number;
+      pkce_verifier: string;
+      session_id: number | null;
+      used: number;
+      expires_at: string;
+      oauth_mode: "legacy" | "add" | "reconsent";
+      expected_connection_id: number | null;
+    }
     | undefined;
 
   if (!op || op.used !== 0 || new Date(op.expires_at) <= new Date()) {
@@ -87,11 +96,12 @@ export async function GET(request: Request) {
 
   // Handle user-denied access
   if (errorParam === "access_denied") {
-    if (isGoogleTasksConnectedForUser(userId)) {
-      // Was already connected — treat as tasks permission denied
-    }
     return redirectWithClear(
-      oauthResultUrl(request.url, "google", "tasks-permission-required").href,
+      oauthResultUrl(
+        request.url,
+        "google",
+        op.oauth_mode === "reconsent" ? "tasks-permission-required" : "error",
+      ).href,
       clearStateCookie,
     );
   }
@@ -101,7 +111,10 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await exchangeCode(code, op.pkce_verifier, userId);
+    const result = await exchangeCode(code, op.pkce_verifier, userId, {
+      mode: op.oauth_mode,
+      expectedConnectionId: op.expected_connection_id,
+    });
     return redirectWithClear(
       oauthResultUrl(
         request.url,

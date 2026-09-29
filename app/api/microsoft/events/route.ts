@@ -44,7 +44,7 @@ function makeMicrosoftCalendarService(userId: number, conn: OAuthConnectionRow) 
     mirrorTaskKey: (raw: any, calendarId: string) => {
       const defaultCalSetting = userSetting(userId, OUTLOOK_DEFAULT_CALENDAR_SETTING);
       const defaultCalId = outlookDefaultCalendarId(defaultCalSetting, accountId, connectionId);
-      return outlookMirrorTaskKey(db, accountId, calendarId, defaultCalId, raw);
+      return outlookMirrorTaskKey(db, userId, conn.id, accountId, calendarId, defaultCalId, raw);
     },
   });
 }

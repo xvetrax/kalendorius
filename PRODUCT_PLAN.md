@@ -180,8 +180,8 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 
 Detalus saugios schemos migracijos, kelių OAuth jungčių, visų kalendorių agregavimo, checkbox matomumo, spalvų, užduočių ir gyvų paskyrų patikros planas aprašytas [MULTI_ACCOUNT_PLAN.md](MULTI_ACCOUNT_PLAN.md).
 
-- [ ] **MA-1:** išplėsti OAuth, kalendorių pasirinkimų ir Outlook blokų duomenų modelį išsaugant dabartines jungtis.
-- [ ] **MA-2/3:** įgyvendinti saugų kelių paskyrų pridėjimą, leidimų atnaujinimą, atjungimą ir aiškų nustatymų ekraną.
+- [x] **MA-1:** išplėstas OAuth, kalendorių pasirinkimų ir Outlook blokų duomenų modelis išsaugant dabartines jungtis; patikrintas backup / restore.
+- [ ] **MA-2/3:** OAuth kelių jungčių servisas, `add` / `re-consent` callback eiga ir tikslus atjungimas baigti; liko aiškus kelių paskyrų nustatymų ekranas.
 - [ ] **MA-4/5:** agreguoti visų paskyrų kalendorius, išsaugoti kiekvieno checkbox būseną ir visur taikyti nuoseklias spalvas bei tekstinę kilmę.
 - [ ] **MA-6/7:** visas įvykių ir užduočių mutacijas bei Outlook blokus pririšti prie konkrečios jungties.
 - [ ] **MA-8:** pilna automatinė, Docker, backup / restore ir kontroliuojama gyvų Google bei Microsoft paskyrų patikra.

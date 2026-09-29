@@ -13,7 +13,7 @@ export function outlookDefaultCalendarId(serialized:string|undefined,accountId:s
 
 // Called only for an event read from Graph under the current connection and
 // calendar scope. Never infer ownership from the event ID or subject alone.
-export function outlookMirrorTaskKey(db:DatabaseSync,accountId:string|undefined,calendarId:string,defaultCalendarId:string|undefined,raw:any):string|null {
+export function outlookMirrorTaskKey(db:DatabaseSync,userId:number,connectionId:number,accountId:string|undefined,calendarId:string,defaultCalendarId:string|undefined,raw:any):string|null {
   if (!accountId || (calendarId!=="primary" && calendarId!==defaultCalendarId) || typeof raw.id!=="string" || !raw.id || typeof raw.transactionId!=="string" || !raw.transactionId
     || raw.showAs!=="free" || raw.isOrganizer!==true || raw.isCancelled || raw.isAllDay
     || raw.type!=="singleInstance" || raw.seriesMasterId || raw.recurrence || (raw.attendees?.length ?? 0)>0
@@ -22,8 +22,8 @@ export function outlookMirrorTaskKey(db:DatabaseSync,accountId:string|undefined,
     || raw.sensitivity!=="normal" || raw.importance!=="normal" || raw.hasAttachments!==false
     || (raw.categories?.length ?? 0)>0) return null;
   const matches=db.prepare(`SELECT task_key FROM task_plans
-    WHERE mirror_account_id=? AND mirror_event_id=? AND mirror_transaction_id=?
+    WHERE user_id=? AND mirror_connection_id=? AND mirror_account_id=? AND mirror_event_id=? AND mirror_transaction_id=?
       AND mirror_requested=1 AND scheduled_at IS NOT NULL AND mirror_error IS NULL
-    LIMIT 2`).all(accountId,raw.id,raw.transactionId) as {task_key:string}[];
+    LIMIT 2`).all(userId,connectionId,accountId,raw.id,raw.transactionId) as {task_key:string}[];
   return matches.length===1 ? matches[0].task_key : null;
 }

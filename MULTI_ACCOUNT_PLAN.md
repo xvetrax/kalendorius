@@ -1,6 +1,19 @@
 # Kelių Google ir Microsoft paskyrų įgyvendinimo planas
 
-Atnaujinta: 2026-09-27. Būsena: **prioritetinis etapas prieš PWA**, įgyvendinimas nepradėtas.
+Atnaujinta: 2026-09-29. Būsena: **prioritetinis etapas prieš PWA**, duomenų ir OAuth paslaugos pagrindas įgyvendintas.
+
+## Įgyvendinimo būsena
+
+- [x] **MA-1a:** versijuota, pakartojama SQLite migracija pakeičia OAuth unikalumą į `user + provider + provider_account_id`, išlaikydama esamus ID, užšifruotus žetonus, scopes, generation ir laikus.
+- [x] **MA-1b:** pridėtos savininkui pririštos `calendar_preferences` ir `calendar_preference_sets`, išsaugomas aiškiai tuščias pasirinkimas, o Outlook blokai turi `mirror_connection_id` su savininko apsauga ir saugiu backfill.
+- [x] **MA-2a:** OAuth servisas moka išvardyti jungtis bei rasti jas pagal ID ar tiekėjo paskyrą; tas pats account atnaujinamas vietoje, kita paskyra sukuriama kaip atskira eilutė, o senas vienos paskyros metodas kelių aktyvių jungčių atveju sustoja su aiškia klaida.
+- [x] **MA-2b:** OAuth operacijoje serveryje saugomas `add` arba `reconsent` režimas ir laukiamas jungties ID; callback tikrina tikrą tiekėjo paskyrą, statusas grąžina saugų `connections` sąrašą, o viena jungtis atjungiama pagal konkretų ID.
+- [x] **Backup / restore pagrindas:** pilna kopija apima naujas lenteles ir schemos versiją, sena kopija normalizuojama atkūrimo transakcijoje, tikrinami išoriniai raktai ir neatkuriamos senos naršyklės sesijos.
+- [x] **Patikra:** `npm run typecheck`, 305/305 vienetiniai bei integraciniai testai ir `npm run build` praėjo 2026-09-29.
+- [ ] **Kitas žingsnis — MA-3:** nustatymų UI parodyti visas jungtis su atskirais pridėjimo, leidimo atnaujinimo ir atjungimo veiksmais.
+- [ ] **Po jo — MA-4:** agreguotas kelių paskyrų kalendorių katalogas ir realus checkbox skaitymas iš normalizuotų pasirinkimų.
+
+Svarbi tarpinė riba: DB ir OAuth pridėjimo / atjungimo maršrutai jau saugiai priima kelias paskyras, tačiau dabartiniai katalogo, įvykių, užduočių ir UI keliai vis dar skirti vienai jungčiai. Produkcijoje antros to paties tiekėjo paskyros dar nejungti, kol nebaigti MA-3, MA-4a ir atitinkami MA-6/7 jungčiai priskirti keliai.
 
 ## Produkto tikslas
 
@@ -28,6 +41,10 @@ UI privalo šias sąvokas įvardyti skirtingai. Veiksmas **Pridėti kalendoriaus
 
 ### Kas jau tinkama kelioms paskyroms
 
+- OAuth schema, servisas ir duomenų OAuth callback palaiko kelias jungtis, aiškius `add` / `reconsent` režimus bei tikslų vienos jungties atjungimą.
+- Statuso API grąžina saugų `connections` sąrašą, palikdamas senus laukus suderinamumui.
+- Kalendorių pasirinkimai saugomi pagal jungtį normalizuotose lentelėse; aiškiai tuščias pasirinkimas atskiriamas nuo dar nepasirinktos būsenos.
+- Outlook papildomas blokas saugo `mirror_connection_id`, o DB neleidžia susieti kito naudotojo ar ne Microsoft jungties.
 - Kalendoriaus įvykio tapatybė apima tiekėją, `connectionId`, kalendorių ir įvykio ID.
 - Kalendoriaus kūrimo operacijų registras jau turi paskyros bei jungties ID.
 - Nuotolinių užduočių ir sąrašų talpykla turi tiekėją bei `account_id`.
@@ -36,13 +53,10 @@ UI privalo šias sąvokas įvardyti skirtingai. Veiksmas **Pridėti kalendoriaus
 
 ### Kas šiuo metu riboja
 
-- `oauth_connections` turi `UNIQUE(user_id, provider)`, todėl antra to paties tiekėjo paskyra perrašo pirmąją.
-- `getConnection(userId, provider)` grąžina tik vieną jungtį; dauguma API ir gateway tuo remiasi.
-- Google / Microsoft statuso API grąžina vieną `connected` ir vieną `account` reikšmę.
-- OAuth prijungimo eiga naudoja esamos vienintelės paskyros `login_hint` ir neturi aiškaus **pridėti naują** bei **atnaujinti šią** režimų.
-- Kalendorių matomumas saugomas po vieną JSON nustatymą kiekvienam tiekėjui, o ne kiekvienai paskyrai.
+- Nustatymų UI dar neskaito `connections` sąrašo ir neturi atskirų kiekvienos jungties veiksmų.
+- Kalendorių katalogo, įvykių ir užduočių gateway dar naudoja laikiną vienos aktyvios jungties metodą; radęs kelias jis saugiai sustoja.
+- Kalendorių katalogo maršrutai dar neskaito normalizuotų pasirinkimų ir neagreguoja kelių jungčių rezultatų.
 - Užduočių paslauga kiekvienam tiekėjui turi vieną aktyvų gateway.
-- Outlook papildomas blokas nesaugo atskiro jungties ID, todėl kelių Microsoft paskyrų atveju ryšys būtų dviprasmis.
 - Dienos / savaitės vaizde kalendoriaus spalva naudojama tik kairiam kraštui; mėnesio ir visos dienos rodiniai jos pilnai nenaudoja.
 
 ## Nekintamos saugumo taisyklės
@@ -281,10 +295,10 @@ Naudoti keturias valdomas bandomąsias paskyras arba tiek realių paskyrų, kiek
 
 Kiekvienas užbaigtas žingsnis yra atskiras patikrintas commit ir push. Pilnas testų rinkinys leidžiamas po didesnio etapo, kaip sutarta; tarpiniuose žingsniuose naudojama siaura migracijos, tipo ar maršruto patikra.
 
-1. **MA-1a:** schemos versija ir `oauth_connections` expand migracija.
-2. **MA-1b:** `calendar_preferences`, `mirror_connection_id`, backup / restore sutartis.
-3. **MA-2a:** jungčiai priskirtas OAuth service API ir senos vienos jungties apsauga.
-4. **MA-2b:** OAuth add / re-consent režimai ir kelių jungčių sintetinė patikra.
+1. [x] **MA-1a:** schemos versija ir `oauth_connections` expand migracija.
+2. [x] **MA-1b:** `calendar_preferences`, `mirror_connection_id`, backup / restore sutartis.
+3. [x] **MA-2a:** jungčiai priskirtas OAuth service API ir senos vienos jungties apsauga.
+4. [x] **MA-2b:** OAuth add / re-consent režimai ir kelių jungčių sintetinė patikra.
 5. **MA-3:** paskyrų sąrašo API ir naujas nustatymų ekranas.
 6. **MA-4a:** kelių paskyrų kalendorių katalogas bei checkbox saugojimas.
 7. **MA-4b:** agreguotas įvykių skaitymas ir dalinės klaidos.

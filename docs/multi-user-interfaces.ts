@@ -86,6 +86,8 @@ export interface AuthOperationRow {
   callback_path: string;           // e.g. '/api/google/callback'
   expires_at:    string;           // ISO-8601; short-lived (≤10 min)
   used:          0 | 1;           // 1 once callback processed; blocks replay
+  oauth_mode:    'legacy' | 'add' | 'reconsent';
+  expected_connection_id: number | null; // server-bound target for re-consent
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +109,8 @@ export interface OAuthConnectionRow {
   generation:              number;         // incremented on each token rotation
   status:                  OAuthConnectionStatus;
   connected_at:            string;         // ISO-8601
+  display_label:           string | null;  // user-defined integration label
+  color_key:               string;         // stable provider/account palette key
 }
 
 // ---------------------------------------------------------------------------

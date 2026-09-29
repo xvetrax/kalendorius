@@ -26,13 +26,13 @@ export type GoogleTaskOrderSnapshot = {
 };
 export type MirrorCleanup = {
   task_key:string; source:RemoteTaskSource; title:string; mirror_event_id:string|null;
-  mirror_account_id:string|null; orphaned_at:string; can_retry:boolean;
+  mirror_account_id:string|null; mirror_connection_id:number|null; orphaned_at:string; can_retry:boolean;
 };
 type Input = Record<string, unknown>;
 type Plan = {
   task_key: string; scheduled_at: string | null; duration_minutes: number; schedule_version: number;
   legacy_schedule: number; mirror_requested: number; mirror_event_id: string | null;
-  mirror_account_id: string | null; mirror_transaction_id: string | null; mirror_error: string | null; mirror_create_payload: string | null;
+  mirror_account_id: string | null; mirror_connection_id: number | null; mirror_transaction_id: string | null; mirror_error: string | null; mirror_create_payload: string | null;
   mirror_orphaned_at: string | null; mirror_orphan_title: string | null;
   project: string | null; tags: string | null; energy: string | null; local_priority: Task["priority"] | null;
 };
@@ -41,6 +41,7 @@ type PendingGoogleMove = { setting_key: string; account_id: string; source_list_
 export type TaskGateway = {
   connected(): boolean;
   cachedAccountId(): string | null;
+  connectionId?(): number | null;
   accountId(): Promise<string>;
   defaultListId?(): Promise<string>;
   request(path: string, init?: RequestInit): Promise<any>;
@@ -120,6 +121,7 @@ export function migrateTaskPlanning(db: DatabaseSync) {
       task_key TEXT PRIMARY KEY, scheduled_at TEXT, duration_minutes INTEGER NOT NULL DEFAULT 30,
       schedule_version INTEGER NOT NULL DEFAULT 0, legacy_schedule INTEGER NOT NULL DEFAULT 0,
       mirror_requested INTEGER NOT NULL DEFAULT 0, mirror_event_id TEXT, mirror_account_id TEXT,
+      mirror_connection_id INTEGER,
       mirror_transaction_id TEXT, mirror_error TEXT, project TEXT, tags TEXT, energy TEXT, mirror_create_payload TEXT,
       mirror_orphaned_at TEXT, mirror_orphan_title TEXT
     ); CREATE TABLE IF NOT EXISTS remote_tasks (task_key TEXT PRIMARY KEY, account_id TEXT NOT NULL, list_id TEXT NOT NULL, task_json TEXT NOT NULL);`);
@@ -128,6 +130,7 @@ export function migrateTaskPlanning(db: DatabaseSync) {
     if (!columns.some((column) => column.name === "local_priority")) db.exec("ALTER TABLE task_plans ADD COLUMN local_priority TEXT");
     if (!columns.some((column) => column.name === "mirror_orphaned_at")) db.exec("ALTER TABLE task_plans ADD COLUMN mirror_orphaned_at TEXT");
     if (!columns.some((column) => column.name === "mirror_orphan_title")) db.exec("ALTER TABLE task_plans ADD COLUMN mirror_orphan_title TEXT");
+    if (!columns.some((column) => column.name === "mirror_connection_id")) db.exec("ALTER TABLE task_plans ADD COLUMN mirror_connection_id INTEGER");
     // H3: add user_id column if upgrading from pre-multi-user schema
     if (!columns.some((column) => column.name === "user_id")) db.exec("ALTER TABLE task_plans ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1");
     const remoteTaskColumns = db.prepare("PRAGMA table_info(remote_tasks)").all() as {name:string}[];
@@ -242,9 +245,9 @@ export function createTaskService(db: DatabaseSync, userId: number, microsoft: T
     return (db.prepare("SELECT task_json FROM remote_tasks WHERE user_id = ? AND account_id = ? AND source = ? AND (? IS NULL OR list_id = ?)").all(userId, account, source, list ?? null, list ?? null) as {task_json: string}[]).map((row) => decorate(JSON.parse(row.task_json) as Task));
   }
   function mirrorCleanups():MirrorCleanup[] {
-    const rows=db.prepare(`SELECT task_key,mirror_event_id,mirror_account_id,mirror_transaction_id,mirror_create_payload,mirror_orphaned_at,mirror_orphan_title
+    const rows=db.prepare(`SELECT task_key,mirror_event_id,mirror_account_id,mirror_connection_id,mirror_transaction_id,mirror_create_payload,mirror_orphaned_at,mirror_orphan_title
       FROM task_plans WHERE user_id = ? AND mirror_orphaned_at IS NOT NULL
-      ORDER BY mirror_orphaned_at,task_key`).all(userId) as {task_key:string;mirror_event_id:string|null;mirror_account_id:string|null;mirror_transaction_id:string|null;mirror_create_payload:string|null;mirror_orphaned_at:string;mirror_orphan_title:string|null}[];
+      ORDER BY mirror_orphaned_at,task_key`).all(userId) as {task_key:string;mirror_event_id:string|null;mirror_account_id:string|null;mirror_connection_id:number|null;mirror_transaction_id:string|null;mirror_create_payload:string|null;mirror_orphaned_at:string;mirror_orphan_title:string|null}[];
     return rows.flatMap(row=>{
       try {
         const parts=JSON.parse(row.task_key);
@@ -252,8 +255,9 @@ export function createTaskService(db: DatabaseSync, userId: number, microsoft: T
         const source=parts[0] as RemoteTaskSource;
         const needsProvider=Boolean(row.mirror_event_id || row.mirror_transaction_id || row.mirror_create_payload);
         return [{task_key:row.task_key,source,title:row.mirror_orphan_title || "Ištrinta užduotis",mirror_event_id:row.mirror_event_id,
-          mirror_account_id:row.mirror_account_id,orphaned_at:row.mirror_orphaned_at,
-          can_retry:!needsProvider || Boolean(row.mirror_account_id && microsoft.connected() && microsoft.cachedAccountId()===row.mirror_account_id)}];
+          mirror_account_id:row.mirror_account_id,mirror_connection_id:row.mirror_connection_id,orphaned_at:row.mirror_orphaned_at,
+          can_retry:!needsProvider || Boolean(row.mirror_account_id && microsoft.connected() && microsoft.cachedAccountId()===row.mirror_account_id
+            && (!row.mirror_connection_id || microsoft.connectionId?.()===row.mirror_connection_id))}];
       } catch {return [];}
     });
   }
@@ -667,8 +671,10 @@ export function createTaskService(db: DatabaseSync, userId: number, microsoft: T
     try {
       if (!microsoft.connected()) throw new Error("Paskyra neprijungta");
       const account = await microsoft.accountId();
+      const connectionId = microsoft.connectionId?.() ?? null;
       requireAccount(account);
       if (current.mirror_account_id && current.mirror_account_id !== account) throw new Error("Kita paskyra");
+      if (current.mirror_connection_id && current.mirror_connection_id !== connectionId) throw new Error("Kitas prisijungimas");
       if (!current.mirror_requested || !current.scheduled_at || task.completed) {
         // An uncertain create must be resolved with its persisted transactionId
         // before deletion, so retries do not leave an orphan free block.
@@ -685,11 +691,11 @@ export function createTaskService(db: DatabaseSync, userId: number, microsoft: T
             if (!(e instanceof ProviderError && e.status === 404)) throw e;
           }
         }
-        db.prepare("UPDATE task_plans SET mirror_event_id=NULL, mirror_account_id=NULL, mirror_transaction_id=NULL, mirror_create_payload=NULL, mirror_error=NULL WHERE task_key=? AND user_id=?").run(task.key, userId);
+        db.prepare("UPDATE task_plans SET mirror_event_id=NULL, mirror_account_id=NULL, mirror_connection_id=NULL, mirror_transaction_id=NULL, mirror_create_payload=NULL, mirror_error=NULL WHERE task_key=? AND user_id=?").run(task.key, userId);
         return;
       }
       const transactionId = current.mirror_transaction_id || randomUUID();
-      db.prepare("UPDATE task_plans SET mirror_account_id=?, mirror_transaction_id=? WHERE task_key=? AND user_id=?").run(account, transactionId, task.key, userId);
+      db.prepare("UPDATE task_plans SET mirror_account_id=?, mirror_connection_id=?, mirror_transaction_id=? WHERE task_key=? AND user_id=?").run(account, connectionId, transactionId, task.key, userId);
       const start = new Date(current.scheduled_at);
       const payload = { subject: `✓ ${task.title}`, body: {contentType: "text", content: OUTLOOK_MIRROR_BODY},
         start: {dateTime: start.toISOString().replace(/Z$/, ""), timeZone:"UTC"},
@@ -973,6 +979,8 @@ export function createTaskService(db: DatabaseSync, userId: number, microsoft: T
           if (!microsoft.connected()) throw new TaskError("Prijunk susietą Microsoft paskyrą ir bandyk dar kartą.",409);
           const account=await microsoft.accountId();requireAccount(account);
           if (account!==current.mirror_account_id) throw new TaskError("Prijunk tą Microsoft paskyrą, kurioje buvo sukurtas blokas.",409);
+          if (current.mirror_connection_id && microsoft.connectionId?.()!==current.mirror_connection_id)
+            throw new TaskError("Prijunk tą Microsoft jungtį, kurioje buvo sukurtas blokas.",409);
           if (!eventId) {
             if (!current.mirror_create_payload) throw new TaskError("Nepakanka duomenų nebaigtam Outlook blokui saugiai nustatyti.",409);
             const recovered=await microsoft.request("/me/events",{method:"POST",body:current.mirror_create_payload});requireAccount(account);

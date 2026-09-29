@@ -27,6 +27,7 @@ export function makeMicrosoftTaskGateway(userId: number): TaskGateway {
   return {
     connected: () => isMicrosoftConnectedForUser(userId),
     cachedAccountId: () => microsoftAccountIdForUser(userId),
+    connectionId: () => getConnection(userId, "microsoft")?.id ?? null,
     accountId: async () => {
       const id = microsoftAccountIdForUser(userId);
       if (!id) throw new Error("Microsoft neprijungtas");
@@ -53,6 +54,7 @@ export function makeGoogleTaskGateway(userId: number): TaskGateway {
   return {
     connected: () => isGoogleTasksConnectedForUser(userId),
     cachedAccountId: () => googleAccountIdForUser(userId),
+    connectionId: () => getConnection(userId, "google")?.id ?? null,
     accountId: async () => {
       const id = googleAccountIdForUser(userId);
       if (!id || !isGoogleTasksConnectedForUser(userId))

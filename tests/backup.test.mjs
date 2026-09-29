@@ -49,6 +49,8 @@ describe("backup", { concurrency: false }, () => {
       DELETE FROM remote_tasks;
       DELETE FROM task_plans;
       DELETE FROM tasks;
+      DELETE FROM calendar_preferences;
+      DELETE FROM calendar_preference_sets;
       DELETE FROM user_settings;
       DELETE FROM security_events;
       DELETE FROM oauth_connections;
@@ -92,6 +94,15 @@ describe("backup", { concurrency: false }, () => {
     db.prepare(
       "INSERT INTO oauth_connections (user_id, provider, provider_account_id, encrypted_refresh_token, scopes, generation, status) VALUES (?, ?, ?, ?, ?, 1, 'active')"
     ).run(testUserId, "google", "google-sub-123", "ENCRYPTED_TOKEN_SECRET", "calendar.readonly");
+    const connectionId = db.prepare(
+      "SELECT id FROM oauth_connections WHERE user_id = ? AND provider = 'google' AND provider_account_id = 'google-sub-123'"
+    ).get(testUserId).id;
+    db.prepare(
+      "INSERT INTO calendar_preference_sets (user_id, connection_id, explicit) VALUES (?, ?, 1)"
+    ).run(testUserId, connectionId);
+    db.prepare(
+      "INSERT INTO calendar_preferences (user_id, connection_id, calendar_id, enabled) VALUES (?, ?, 'primary', 1)"
+    ).run(testUserId, connectionId);
 
     return taskId;
   }
@@ -127,6 +138,9 @@ describe("backup", { concurrency: false }, () => {
     assert.equal(db.prepare("SELECT source FROM remote_tasks").get()?.source, "google");
     assert.equal(db.prepare("SELECT source FROM remote_task_lists").get()?.source, "google");
     assert.equal(db.prepare("SELECT fingerprint FROM calendar_event_creates").get()?.fingerprint, "fingerprint");
+    assert.equal(db.prepare("SELECT explicit FROM calendar_preference_sets").get()?.explicit, 1);
+    assert.equal(db.prepare("SELECT calendar_id FROM calendar_preferences").get()?.calendar_id, "primary");
+    assert.equal(db.prepare("SELECT color_key FROM oauth_connections").get()?.color_key, "google:google-sub-123");
     assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
 
     // DB must remain writable after restore
@@ -144,6 +158,8 @@ describe("backup", { concurrency: false }, () => {
       assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM oauth_connections").get().count, 1);
       // And the encrypted token is present in full backup (admin access)
       assert.ok(backed.prepare("SELECT encrypted_refresh_token FROM oauth_connections").get()?.encrypted_refresh_token);
+      assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM calendar_preferences").get().count, 1);
+      assert.equal(backed.prepare("PRAGMA user_version").get().user_version, 3);
     } finally {
       backed.close();
     }

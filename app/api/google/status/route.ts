@@ -1,24 +1,42 @@
 import {
   disconnectGoogleForUser,
-  googleAccountForUser,
-  googleTasksStatusForUser,
   isGoogleConfigured,
-  isGoogleConnectedForUser,
-  isGoogleTasksConnectedForUser,
 } from "@/lib/google";
 import { apiError, assertSameOrigin } from "@/lib/http";
 import { requireUserContext } from "@/lib/db-multi";
+import { listConnections } from "@/lib/oauth-service";
+
+const tasksScope = "https://www.googleapis.com/auth/tasks";
 
 export async function GET(request: Request) {
   try {
     const user = requireUserContext(request);
+    const connections = listConnections(user.id, "google").map((connection) => ({
+      id: connection.id,
+      accountId: connection.provider_account_id,
+      email: connection.provider_email,
+      label: connection.display_label,
+      colorKey: connection.color_key,
+      status: connection.status,
+      tasksConnected:
+        connection.status === "active" &&
+        connection.scopes.split(/\s+/).includes(tasksScope),
+    }));
+    const active = connections.filter((connection) => connection.status === "active");
+    const sole = active.length === 1 ? active[0] : null;
     return Response.json(
       {
-        connected: isGoogleConnectedForUser(user.id),
+        connected: active.length > 0,
         configured: isGoogleConfigured(),
-        account: googleAccountForUser(user.id),
-        tasksConnected: isGoogleTasksConnectedForUser(user.id),
-        tasksStatus: googleTasksStatusForUser(user.id),
+        account: sole?.email ?? null,
+        tasksConnected: active.length > 0 && active.every((connection) => connection.tasksConnected),
+        tasksStatus:
+          active.length === 0
+            ? "disconnected"
+            : active.every((connection) => connection.tasksConnected)
+              ? "connected"
+              : "permission_required",
+        connections,
       },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -32,7 +50,15 @@ export async function DELETE(request: Request) {
   try {
     assertSameOrigin(request);
     const user = requireUserContext(request);
-    disconnectGoogleForUser(user.id);
+    const rawConnectionId = new URL(request.url).searchParams.get("connectionId");
+    const connectionId = rawConnectionId === null ? undefined : Number(rawConnectionId);
+    if (connectionId !== undefined && (!Number.isSafeInteger(connectionId) || connectionId <= 0)) {
+      return Response.json({ error: "Neteisingas jungties ID." }, { status: 400 });
+    }
+    const disconnected = disconnectGoogleForUser(user.id, connectionId);
+    if (!disconnected) {
+      return Response.json({ error: "Google jungtis nerasta." }, { status: 404 });
+    }
     return Response.json({ ok: true });
   } catch (error) {
     if (error instanceof Response) return error;

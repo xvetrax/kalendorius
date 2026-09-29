@@ -4,10 +4,14 @@ import { oauthRedirectUri } from "@/lib/http";
 import { ProviderError } from "@/lib/provider-error";
 import {
   getConnection,
+  getConnectionByAccount,
+  getConnectionById,
   getDecryptedRefreshToken,
   updateRefreshToken,
   deleteConnection,
-  saveConnection,
+  saveConnectionForOAuthOperation,
+  disconnectConnection,
+  type OAuthConnectMode,
   type OAuthConnectionRow,
   type OAuthProvider,
 } from "@/lib/oauth-service";
@@ -60,6 +64,7 @@ export function googleAuthUrl(
   state: string,
   codeChallenge: string,
   loginHint?: string,
+  selectAccount = false,
 ) {
   const { clientId, redirectUri } = config();
   const params = new URLSearchParams({
@@ -74,6 +79,7 @@ export function googleAuthUrl(
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
   });
+  if (selectAccount) params.set("prompt", "select_account consent");
   if (loginHint) params.set("login_hint", loginHint);
   return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 }
@@ -86,6 +92,7 @@ export async function exchangeCode(
   code: string,
   codeVerifier: string,
   userId: number,
+  operation?: { mode: OAuthConnectMode; expectedConnectionId?: number | null },
 ): Promise<{ tasksConnected: boolean; connectionId: number }> {
   const { clientId, clientSecret, redirectUri } = config();
 
@@ -121,8 +128,29 @@ export async function exchangeCode(
   const providerAccountId = String(account.sub);
   const providerEmail = account.email ? String(account.email) : null;
 
-  // Check existing connection for same user+provider to handle token-less re-consent
-  const existing = getConnection(userId, "google");
+  const mode = operation?.mode ?? "legacy";
+  let existing: OAuthConnectionRow | null;
+  if (mode === "reconsent") {
+    if (!operation?.expectedConnectionId) {
+      throw new Error("Trūksta Google jungties leidimui atnaujinti.");
+    }
+    existing = getConnectionById(userId, operation.expectedConnectionId, "google");
+    if (!existing || existing.status !== "active") {
+      throw new Error("Google jungtis leidimui atnaujinti neberasta.");
+    }
+    if (existing.provider_account_id !== providerAccountId) {
+      throw new Error("Pasirinkta ne ta Google paskyra, kurios leidimas atnaujinamas.");
+    }
+  } else if (mode === "add") {
+    existing = getConnectionByAccount(userId, "google", providerAccountId);
+  } else {
+    existing = getConnection(userId, "google");
+    if (existing && existing.provider_account_id !== providerAccountId) {
+      throw new Error(
+        "Pasirinkta kita Google paskyra. Naują paskyrą pridėk atskiru veiksmu.",
+      );
+    }
+  }
   const sameAccount =
     existing !== null && existing.provider_account_id === providerAccountId;
 
@@ -149,13 +177,15 @@ export async function exchangeCode(
         ? existing!.scopes
         : "";
 
-  const connectionId = saveConnection(
+  const connectionId = saveConnectionForOAuthOperation(
     userId,
     "google",
     providerAccountId,
     providerEmail,
     encryptedToken,
     scopes,
+    mode,
+    operation?.expectedConnectionId,
   );
 
   // Invalidate any cached token for this connection
@@ -236,7 +266,7 @@ async function _refreshGoogleAccessToken(
   const { id: connectionId, generation } = conn;
   const { clientId, clientSecret } = config();
 
-  const refreshToken = getDecryptedRefreshToken(connectionId);
+  const refreshToken = getDecryptedRefreshToken(conn.user_id, connectionId, "google");
 
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -265,7 +295,7 @@ async function _refreshGoogleAccessToken(
   let effectiveGeneration = generation;
   if (body.refresh_token) {
     try {
-      updateRefreshToken(connectionId, encrypt(body.refresh_token), generation);
+      updateRefreshToken(conn.user_id, connectionId, "google", encrypt(body.refresh_token), generation);
       effectiveGeneration = generation + 1;
     } catch {
       // Another process already rotated — evict our cache entry, caller will retry
@@ -320,9 +350,18 @@ export function isGoogleTasksConnectedForUser(userId: number): boolean {
   return status === "connected" || status === "api_unavailable";
 }
 
-export function disconnectGoogleForUser(userId: number): void {
+export function disconnectGoogleForUser(userId: number, connectionId?: number): boolean {
+  if (connectionId !== undefined) {
+    const connection = getConnectionById(userId, connectionId, "google");
+    if (!connection) return false;
+    _evictCachedToken(connectionId);
+    return disconnectConnection(userId, connectionId, "google");
+  }
+  const connection = getConnection(userId, "google");
+  if (!connection) return true;
   _evictAllForUser(userId, "google");
   deleteConnection(userId, "google");
+  return true;
 }
 
 function _evictAllForUser(userId: number, provider: OAuthProvider) {
@@ -371,11 +410,10 @@ export async function googleTasksFetchForUser(
   path: string,
   init?: RequestInit,
 ): Promise<any> {
-  const status = googleTasksStatusForUser(userId);
-  if (status === "permission_required") {
+  if (!hasScope(conn.scopes, tasksScope)) {
     throw new Error("Prijunk Google iš naujo ir suteik Tasks leidimą.");
   }
-  if (status !== "connected" && status !== "api_unavailable") {
+  if (conn.status !== "active" || !conn.encrypted_refresh_token) {
     throw new Error("Google Tasks neprijungta.");
   }
   return _googleApiFetch(userId, conn, "https://tasks.googleapis.com/tasks/v1", path, init, true);
@@ -392,7 +430,7 @@ async function _googleApiFetch(
   const connectionId = conn.id;
 
   // Re-read the connection to get current generation before acquiring token
-  const current = getConnection(userId, conn.provider as OAuthProvider);
+  const current = getConnectionById(userId, connectionId, "google");
   if (!current || current.status !== "active" || !current.encrypted_refresh_token) {
     throw new Error("Google prisijungimas pasikeitė");
   }
@@ -401,7 +439,7 @@ async function _googleApiFetch(
 
   // Re-verify connection still belongs to this user (id must match; generation
   // may have incremented if the token was just rotated — that is expected).
-  const after = getConnection(userId, conn.provider as OAuthProvider);
+  const after = getConnectionById(userId, connectionId, "google");
   if (!after || after.id !== connectionId) {
     throw new Error("Google prisijungimas pasikeitė");
   }

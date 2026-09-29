@@ -15,7 +15,7 @@ const hooks=registerHooks({resolve(specifier,context,next){
 const {db:multiDb,createSession,SESSION_COOKIE}=await import("../lib/db-multi.ts");
 const {db}=await import("../lib/db.ts");
 const {encrypt}=await import("../lib/secrets.ts");
-const {getConnection}=await import("../lib/oauth-service.ts");
+const {getConnection,getConnectionByAccount,listConnections}=await import("../lib/oauth-service.ts");
 const connect=await import("../app/api/google/connect/route.ts");
 const callback=await import("../app/api/google/callback/route.ts");
 const status=await import("../app/api/google/status/route.ts");
@@ -37,7 +37,7 @@ function refreshSession(){
 refreshSession();
 
 // Helper: build a connect request with session cookie
-function connectReq(){return new Request("http://localhost:3000/api/google/connect",{headers:{Cookie:sessionCookie}});}
+function connectReq(query=""){return new Request("http://localhost:3000/api/google/connect"+query,{headers:{Cookie:sessionCookie}});}
 // Helper: build a callback request, forwarding google_connect_state cookie from connect response
 function callbackReq(connectResp,query){
   const setCookie=connectResp.headers.get("set-cookie")||"";
@@ -46,11 +46,11 @@ function callbackReq(connectResp,query){
   return new Request("http://localhost:3000/api/google/callback?"+new URLSearchParams(query),{headers:{Cookie:cookies}});
 }
 function oauthResult(r){return new URL(r.headers.get("location")).searchParams.get("oauth");}
-function consent(scope){
+function consent(scope,accountId="fixture-account"){
   globalThis.fetch=async raw=>{
     const url=new URL(raw);
     if(url.origin==="https://oauth2.googleapis.com")return Response.json({access_token:"synthetic-access",refresh_token:"synthetic-refresh",scope});
-    if(url.origin==="https://openidconnect.googleapis.com")return Response.json({sub:"fixture-account"});
+    if(url.origin==="https://openidconnect.googleapis.com")return Response.json({sub:accountId,email:`${accountId}@example.test`});
     throw Error("No external network allowed");
   };
 }
@@ -58,6 +58,81 @@ function consent(scope){
 beforeEach(()=>{
   multiDb.exec(`DELETE FROM oauth_connections WHERE user_id=${testUserId}; DELETE FROM auth_operations;`);
   globalThis.fetch=async()=>{throw Error("No external network allowed");};
+});
+
+test("overlapping default Google bootstrap flows cannot create different sibling accounts",async()=>{
+  const first=await connect.GET(connectReq());
+  const second=await connect.GET(connectReq());
+  const firstState=new URL(first.headers.get("location")).searchParams.get("state");
+  const secondState=new URL(second.headers.get("location")).searchParams.get("state");
+  const modes=multiDb.prepare(
+    "SELECT oauth_mode FROM auth_operations WHERE state_hash IN (?,?) ORDER BY id",
+  ).all(
+    (await import("node:crypto")).createHash("sha256").update(firstState).digest("hex"),
+    (await import("node:crypto")).createHash("sha256").update(secondState).digest("hex"),
+  );
+  assert.deepEqual(modes.map(row=>row.oauth_mode),["legacy","legacy"]);
+
+  consent(calendar,"first-account");
+  assert.notEqual(oauthResult(await callback.GET(callbackReq(first,{state:firstState,code:"first"}))),"error");
+  consent(calendar,"second-account");
+  assert.equal(oauthResult(await callback.GET(callbackReq(second,{state:secondState,code:"second"}))),"error");
+  assert.equal(listConnections(testUserId,"google").length,1);
+  assert.ok(getConnectionByAccount(testUserId,"google","first-account"));
+});
+
+test("explicit add and account-bound re-consent persist intent and keep exact disconnect recoverable",async()=>{
+  multiDb.prepare(`INSERT INTO oauth_connections
+    (user_id,provider,provider_account_id,provider_email,encrypted_refresh_token,scopes,generation,status,connected_at)
+    VALUES (?,?,?,?,?,?,1,'active',CURRENT_TIMESTAMP)`)
+    .run(testUserId,"google","old-account","old@example.test",encrypt("old-refresh"),calendar);
+  const old=getConnection(testUserId,"google");
+
+  const reconsent=await connect.GET(connectReq(`?mode=reconsent&connectionId=${old.id}`));
+  const reconsentAuth=new URL(reconsent.headers.get("location"));
+  assert.equal(reconsentAuth.searchParams.get("login_hint"),"old@example.test");
+  const reconsentState=reconsentAuth.searchParams.get("state");
+  const reconsentOp=multiDb.prepare(
+    "SELECT oauth_mode,expected_connection_id FROM auth_operations WHERE state_hash=?",
+  ).get((await import("node:crypto")).createHash("sha256").update(reconsentState).digest("hex"));
+  assert.deepEqual({...reconsentOp},{oauth_mode:"reconsent",expected_connection_id:old.id});
+
+  consent(calendar,"different-account");
+  const rejected=await callback.GET(callbackReq(reconsent,{state:reconsentState,code:"wrong-account"}));
+  assert.equal(oauthResult(rejected),"error");
+  assert.equal(listConnections(testUserId,"google").length,1);
+  assert.equal(getConnection(testUserId,"google").provider_account_id,"old-account");
+
+  const add=await connect.GET(connectReq("?mode=add"));
+  const addAuth=new URL(add.headers.get("location"));
+  assert.equal(addAuth.searchParams.get("login_hint"),null);
+  assert.match(addAuth.searchParams.get("prompt"),/select_account/);
+  const addState=addAuth.searchParams.get("state");
+  const addOp=multiDb.prepare(
+    "SELECT oauth_mode,expected_connection_id FROM auth_operations WHERE state_hash=?",
+  ).get((await import("node:crypto")).createHash("sha256").update(addState).digest("hex"));
+  assert.deepEqual({...addOp},{oauth_mode:"add",expected_connection_id:null});
+
+  consent(`${calendar} ${tasks}`,"new-account");
+  const added=await callback.GET(callbackReq(add,{state:addState,code:"new-account"}));
+  assert.equal(oauthResult(added),"connected");
+  const newConnection=getConnectionByAccount(testUserId,"google","new-account");
+  assert.ok(newConnection);
+
+  const state=await (await status.GET(new Request(
+    "http://localhost:3000/api/google/status",
+    {headers:{Cookie:sessionCookie}},
+  ))).json();
+  assert.equal(state.connections.length,2);
+  assert.equal(state.account,null);
+
+  const removed=await status.DELETE(new Request(
+    `http://localhost:3000/api/google/status?connectionId=${newConnection.id}`,
+    {method:"DELETE",headers:{Cookie:sessionCookie,Origin:"http://localhost:3000"}},
+  ));
+  assert.equal(removed.status,200);
+  assert.equal(getConnectionByAccount(testUserId,"google","new-account"),null);
+  assert.equal(getConnectionByAccount(testUserId,"google","old-account").id,old.id);
 });
 after(()=>{globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 
@@ -71,7 +146,7 @@ test("Google connect requests incremental Tasks consent and callback marks grant
   const setCookie=resp.headers.get("set-cookie")||"";
   assert.ok(setCookie.includes("google_connect_state="),"connect must set google_connect_state cookie");
   // Auth URL checks
-  assert.equal(auth.searchParams.get("prompt"),"consent");
+  assert.match(auth.searchParams.get("prompt"),/consent/);
   assert.equal(auth.searchParams.get("include_granted_scopes"),"true");
   assert.ok(auth.searchParams.get("scope").includes("tasks"),"scope must include tasks");
   assert.equal(auth.searchParams.get("code_challenge_method"),"S256");

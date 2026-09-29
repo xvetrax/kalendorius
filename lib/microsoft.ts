@@ -4,10 +4,14 @@ import { createHash, randomBytes } from "node:crypto";
 import { ProviderError } from "@/lib/provider-error";
 import {
   getConnection,
+  getConnectionByAccount,
+  getConnectionById,
   getDecryptedRefreshToken,
   updateRefreshToken,
   deleteConnection,
-  saveConnection,
+  saveConnectionForOAuthOperation,
+  disconnectConnection,
+  type OAuthConnectMode,
   type OAuthConnectionRow,
   type OAuthProvider,
 } from "@/lib/oauth-service";
@@ -55,6 +59,7 @@ export function microsoftAuthUrl(
   state: string,
   codeChallenge: string,
   loginHint?: string,
+  selectAccount = false,
 ) {
   const { clientId, redirectUri, tenant } = config();
   const params = new URLSearchParams({
@@ -67,6 +72,7 @@ export function microsoftAuthUrl(
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
   });
+  if (selectAccount) params.set("prompt", "select_account");
   if (loginHint) params.set("login_hint", loginHint);
   return `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize?${params}`;
 }
@@ -79,6 +85,7 @@ export async function exchangeMicrosoftCode(
   code: string,
   codeVerifier: string,
   userId: number,
+  operation?: { mode: OAuthConnectMode; expectedConnectionId?: number | null },
 ): Promise<{ connectionId: number }> {
   const { clientId, clientSecret, redirectUri, tenant } = config();
 
@@ -123,17 +130,43 @@ export async function exchangeMicrosoftCode(
       ? String(account.mail || account.userPrincipalName)
       : null;
 
+  const mode = operation?.mode ?? "legacy";
+  let existing: OAuthConnectionRow | null;
+  if (mode === "reconsent") {
+    if (!operation?.expectedConnectionId) {
+      throw new Error("Trūksta Microsoft jungties leidimui atnaujinti.");
+    }
+    existing = getConnectionById(userId, operation.expectedConnectionId, "microsoft");
+    if (!existing || existing.status !== "active") {
+      throw new Error("Microsoft jungtis leidimui atnaujinti neberasta.");
+    }
+    if (existing.provider_account_id !== providerAccountId) {
+      throw new Error("Pasirinkta ne ta Microsoft paskyra, kurios leidimas atnaujinamas.");
+    }
+  } else if (mode === "add") {
+    existing = getConnectionByAccount(userId, "microsoft", providerAccountId);
+  } else {
+    existing = getConnection(userId, "microsoft");
+    if (existing && existing.provider_account_id !== providerAccountId) {
+      throw new Error(
+        "Pasirinkta kita Microsoft paskyra. Naują paskyrą pridėk atskiru veiksmu.",
+      );
+    }
+  }
+
   const encryptedToken = encrypt(body.refresh_token);
   const scopes =
     typeof body.scope === "string" ? body.scope.trim() : MICROSOFT_OAUTH_SCOPES;
 
-  const connectionId = saveConnection(
+  const connectionId = saveConnectionForOAuthOperation(
     userId,
     "microsoft",
     providerAccountId,
     providerEmail,
     encryptedToken,
     scopes,
+    mode,
+    operation?.expectedConnectionId,
   );
 
   _evictCachedToken(connectionId);
@@ -208,7 +241,7 @@ async function _refreshMicrosoftAccessToken(
   const { id: connectionId, generation } = conn;
   const { clientId, clientSecret, tenant } = config();
 
-  const refreshToken = getDecryptedRefreshToken(connectionId);
+  const refreshToken = getDecryptedRefreshToken(conn.user_id, connectionId, "microsoft");
 
   const response = await fetch(
     `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
@@ -242,7 +275,7 @@ async function _refreshMicrosoftAccessToken(
   let effectiveGeneration = generation;
   if (body.refresh_token) {
     try {
-      updateRefreshToken(connectionId, encrypt(body.refresh_token), generation);
+      updateRefreshToken(conn.user_id, connectionId, "microsoft", encrypt(body.refresh_token), generation);
       effectiveGeneration = generation + 1;
     } catch {
       _evictCachedToken(connectionId);
@@ -282,12 +315,21 @@ export function microsoftAccountIdForUser(userId: number): string | null {
   return conn?.provider_account_id ?? null;
 }
 
-export function disconnectMicrosoftForUser(userId: number): void {
+export function disconnectMicrosoftForUser(userId: number, connectionId?: number): boolean {
+  if (connectionId !== undefined) {
+    const connection = getConnectionById(userId, connectionId, "microsoft");
+    if (!connection) return false;
+    _evictCachedToken(connectionId);
+    return disconnectConnection(userId, connectionId, "microsoft");
+  }
+  const connection = getConnection(userId, "microsoft");
+  if (!connection) return true;
   for (const [connectionId] of tokenCache) {
     tokenCache.delete(connectionId);
     tokenRefreshes.delete(connectionId);
   }
   deleteConnection(userId, "microsoft");
+  return true;
 }
 
 export function isMicrosoftConfigured() {
@@ -316,7 +358,7 @@ export async function graphFetchForUser(
   const connectionId = conn.id;
 
   // Re-read to get current generation
-  const current = getConnection(userId, conn.provider as OAuthProvider);
+  const current = getConnectionById(userId, connectionId, "microsoft");
   if (
     !current ||
     current.status !== "active" ||
@@ -329,7 +371,7 @@ export async function graphFetchForUser(
 
   // Verify connection still belongs to this user (id must match; generation
   // may have incremented if the token was just rotated — that is expected).
-  const after = getConnection(userId, conn.provider as OAuthProvider);
+  const after = getConnectionById(userId, connectionId, "microsoft");
   if (!after || after.id !== connectionId) {
     throw new Error("Microsoft prisijungimas pasikeitė");
   }
@@ -351,7 +393,7 @@ export async function graphFetchForUser(
       : await response.json();
 
   // Final connection check
-  const final = getConnection(userId, conn.provider as OAuthProvider);
+  const final = getConnectionById(userId, connectionId, "microsoft");
   if (!final || final.id !== connectionId) {
     throw new Error("Microsoft prisijungimas pasikeitė");
   }

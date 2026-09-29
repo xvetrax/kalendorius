@@ -27,7 +27,7 @@ const {db:multiDb,createSession,SESSION_COOKIE}=await import("../lib/db-multi.ts
 const {db}=await import("../lib/db.ts");
 const {encrypt,decrypt}=await import("../lib/secrets.ts");
 const google=await import("../lib/google.ts");
-const {getConnection}=await import("../lib/oauth-service.ts");
+const {getConnection,getConnectionByAccount,listConnections}=await import("../lib/oauth-service.ts");
 const originalFetch=globalThis.fetch;
 
 // Bootstrap a test user once
@@ -100,38 +100,63 @@ test("failed new profile lookup leaves the previous token and account paired",as
   assert.equal(conn.provider_account_id,"old-account");assert.equal(decrypt(conn.encrypted_refresh_token),"old-refresh");
 });
 
-test("successful account switch atomically replaces identity and clears the old task list",async () => {
+test("legacy consent rejects a different account without creating an unusable sibling",async () => {
   const beforeConn=getConnection(testUserId,"google");
   globalThis.fetch=async (url) => url.includes("/token") ? json({access_token:"new-access",refresh_token:"new-refresh"}) : json({sub:"new-account",name:"Test account"});
-  await google.exchangeCode("test-code","test-verifier",testUserId);
-  const conn=getConnection(testUserId,"google");
-  assert.equal(conn.provider_account_id,"new-account");assert.equal(decrypt(conn.encrypted_refresh_token),"new-refresh");
-  // saveConnection increments generation on upsert
-  assert.ok(conn.generation > beforeConn.generation);
+  await assert.rejects(
+    google.exchangeCode("test-code","test-verifier",testUserId),
+    /Pasirinkta kita Google paskyra/,
+  );
+  const after=getConnection(testUserId,"google");
+  assert.equal(after.id,beforeConn.id);
+  assert.equal(after.provider_account_id,"old-account");
+  assert.equal(decrypt(after.encrypted_refresh_token),"old-refresh");
+  assert.equal(listConnections(testUserId,"google").length,1);
 });
 
-test("in-flight sign-in cannot undo a newer disconnect",async () => {
+test("explicit add creates a sibling while re-consent is bound to one exact Google account",async () => {
+  const original=getConnection(testUserId,"google");
+  globalThis.fetch=async (url) => url.includes("/token")
+    ? json({access_token:"new-access",refresh_token:"new-refresh",scope:calendarScope})
+    : json({sub:"new-account",email:"new@example.test"});
+  const added=await google.exchangeCode(
+    "test-code",
+    "test-verifier",
+    testUserId,
+    {mode:"add"},
+  );
+  assert.equal(getConnectionByAccount(testUserId,"google","new-account").id,added.connectionId);
+  assert.equal(listConnections(testUserId,"google").length,2);
+
+  globalThis.fetch=async (url) => url.includes("/token")
+    ? json({access_token:"wrong-access",refresh_token:"wrong-refresh",scope:calendarScope})
+    : json({sub:"new-account"});
+  await assert.rejects(
+    google.exchangeCode(
+      "test-code",
+      "test-verifier",
+      testUserId,
+      {mode:"reconsent",expectedConnectionId:original.id},
+    ),
+    /ne ta Google paskyra/,
+  );
+  assert.equal(decrypt(getConnectionByAccount(testUserId,"google","old-account").encrypted_refresh_token),"old-refresh");
+});
+
+test("in-flight Google re-consent cannot recreate a connection deleted before callback completion",async () => {
   const waiting=deferred();
-  globalThis.fetch=async (url) => url.includes("/token") ? waiting.promise : json({sub:"new-account"});
+  globalThis.fetch=async (url) => url.includes("/token") ? waiting.promise : json({sub:"old-account"});
   const conn=getConnection(testUserId,"google");
-  const signingIn=google.exchangeCode("test-code","test-verifier",testUserId);
-  google.disconnectGoogleForUser(testUserId);
+  const signingIn=google.exchangeCode(
+    "test-code",
+    "test-verifier",
+    testUserId,
+    {mode:"reconsent",expectedConnectionId:conn.id},
+  );
+  google.disconnectGoogleForUser(testUserId,conn.id);
   waiting.resolve(json({access_token:"new-access",refresh_token:"new-refresh"}));
-  // exchangeCode may succeed (saveConnection re-creates the row) or fail — the
-  // important invariant is that the disconnect is NOT reversed. After exchange
-  // the row may or may not exist, but isGoogleConnected checks for active status.
-  // In the new per-user model, exchangeCode always calls saveConnection which
-  // upserts — so the in-flight exchange can re-create the connection. The test
-  // verifies the old "late sign-in" contract: if disconnect fired first, it
-  // must not be silently undone by a concurrent exchange resolving later.
-  // With the CAS model this is handled by the evict-on-disconnect pattern.
-  try { await signingIn; } catch {}
-  // The important thing: the cached token for the old conn is evicted.
-  // We can't directly assert isGoogleConnected==false because saveConnection
-  // may have re-created the row. What matters is that the token cache was cleared.
-  google._clearCachedTokenForTest();
-  // Verify no stale token is cached for the old connection
-  assert.equal(google.isGoogleConnectedForUser(testUserId), getConnection(testUserId,"google")!==null);
+  await assert.rejects(signingIn,/jungtis leidimui atnaujinti neberasta|target changed or was disconnected/);
+  assert.equal(getConnection(testUserId,"google"),null);
 });
 
 test("legacy Calendar connection requires explicit Tasks consent and never attempts Tasks requests",async()=>{
@@ -159,7 +184,15 @@ test("incremental grant without a refresh token reuses only the verified same ac
   const generationAfterConsent=conn.generation;
   // Re-consent with a DIFFERENT account and no refresh token → must fail
   globalThis.fetch=async url=>url.includes("/token")?json({access_token:"other-access",scope:tasksScope}):json({sub:"other-account"});
-  await assert.rejects(google.exchangeCode("test-code","test-verifier",testUserId),/refresh token/);
+  await assert.rejects(
+    google.exchangeCode(
+      "test-code",
+      "test-verifier",
+      testUserId,
+      {mode:"reconsent",expectedConnectionId:beforeConn.id},
+    ),
+    /ne ta Google paskyra/,
+  );
   // Connection should remain unchanged
   const after=getConnection(testUserId,"google");
   assert.equal(after.generation,generationAfterConsent);assert.equal(after.provider_account_id,"old-account");
@@ -178,11 +211,17 @@ test("partial Tasks consent preserves Calendar and missing scopes never invent a
   assert.deepEqual(await google.googleFetchForUser(testUserId,conn,"/calendars/primary/events"),{items:[]});
   // Another exchange with different account and no Tasks scope — Tasks still not granted
   globalThis.fetch=async url=>url.includes("/token")?json({access_token:"access",refresh_token:"new-refresh"}):json({sub:"new-account"});
-  const result2=await google.exchangeCode("test-code","test-verifier",testUserId);
+  const result2=await google.exchangeCode(
+    "test-code",
+    "test-verifier",
+    testUserId,
+    {mode:"add"},
+  );
   assert.equal(result2.tasksConnected,false);
-  const conn2=getConnection(testUserId,"google");
+  const conn2=getConnectionByAccount(testUserId,"google","new-account");
   // New account, no Tasks scope
   assert.ok(!conn2.scopes.includes(tasksScope));
+  assert.ok(getConnectionByAccount(testUserId,"google","old-account"));
 });
 
 test("revoked refresh tokens require reconnection without exposing provider error details",async()=>{

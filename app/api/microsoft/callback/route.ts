@@ -41,12 +41,21 @@ export async function GET(request: Request) {
 
   const op = db
     .prepare(`
-      SELECT id, pkce_verifier, session_id, used, expires_at
+      SELECT id, pkce_verifier, session_id, used, expires_at,
+             oauth_mode, expected_connection_id
       FROM auth_operations
       WHERE state_hash = ? AND provider = 'microsoft'
     `)
     .get(stateHash) as
-    | { id: number; pkce_verifier: string; session_id: number | null; used: number; expires_at: string }
+    | {
+      id: number;
+      pkce_verifier: string;
+      session_id: number | null;
+      used: number;
+      expires_at: string;
+      oauth_mode: "legacy" | "add" | "reconsent";
+      expected_connection_id: number | null;
+    }
     | undefined;
 
   if (!op || op.used !== 0 || new Date(op.expires_at) <= new Date()) {
@@ -89,7 +98,10 @@ export async function GET(request: Request) {
   }
 
   try {
-    await exchangeMicrosoftCode(code, op.pkce_verifier, userId);
+    await exchangeMicrosoftCode(code, op.pkce_verifier, userId, {
+      mode: op.oauth_mode,
+      expectedConnectionId: op.expected_connection_id,
+    });
     return redirectWithClear(oauthResultUrl(request.url, "microsoft", "connected").href, clearStateCookie);
   } catch {
     return redirectWithClear(oauthResultUrl(request.url, "microsoft", "error").href, clearStateCookie);

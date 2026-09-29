@@ -284,8 +284,8 @@ test("Outlook route confirms mirror identity by account and transaction, never b
   assert.equal(selection.status,200);assert.equal(JSON.parse(userSetting(testUserId,"microsoft_enabled_calendars")).accountId,"fixture-account");
   db.prepare("DELETE FROM user_settings WHERE user_id=? AND key=?").run(testUserId,"microsoft_default_calendar_identity");
   // task_plans in multi-user schema has user_id NOT NULL — include it in all inserts.
-  const insert=db.prepare(`INSERT INTO task_plans(user_id,task_key,scheduled_at,mirror_requested,mirror_account_id,mirror_event_id,mirror_transaction_id) VALUES (?,?,?,1,?,?,?)`);
-  insert.run(testUserId,"mirror-test",source.start.dateTime+"Z","fixture-account",mirror.id,mirror.transactionId);
+  const insert=db.prepare(`INSERT INTO task_plans(user_id,task_key,scheduled_at,mirror_requested,mirror_account_id,mirror_connection_id,mirror_event_id,mirror_transaction_id) VALUES (?,?,?,1,?,?,?,?)`);
+  insert.run(testUserId,"mirror-test",source.start.dateTime+"Z","fixture-account",Number(connIds.microsoft),mirror.id,mirror.transactionId);
   const list=async()=>{
     const response=await routes.microsoft.GET(new Request("http://localhost:3000/api/microsoft/events",{headers:{Cookie:sessionCookie}}));
     assert.equal(response.status,200);return (await response.json()).items.filter(e=>e.id===mirror.id);
@@ -313,7 +313,7 @@ test("Outlook route confirms mirror identity by account and transaction, never b
       defaultCalendar.set(mirror.id,{...mirror,...change});assert.ok((await list()).every(e=>e.mirrorTaskKey===null),JSON.stringify(change));
     }
     defaultCalendar.set(mirror.id,mirror);
-    insert.run(testUserId,"mirror-ambiguous",source.start.dateTime+"Z","fixture-account",mirror.id,mirror.transactionId);
+    insert.run(testUserId,"mirror-ambiguous",source.start.dateTime+"Z","fixture-account",Number(connIds.microsoft),mirror.id,mirror.transactionId);
     assert.ok((await list()).every(e=>e.mirrorTaskKey===null));
     db.prepare("DELETE FROM task_plans WHERE task_key=? AND user_id=?").run("mirror-ambiguous",testUserId);
     for (const sql of ["mirror_requested=0","mirror_error='Retry'","scheduled_at=NULL"]) {

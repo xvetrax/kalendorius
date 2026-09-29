@@ -2,7 +2,11 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { db } from "@/lib/db-multi";
+import {
+  DATABASE_SCHEMA_VERSION,
+  db,
+  normalizeMultiAccountData,
+} from "@/lib/db-multi";
 
 // ---------------------------------------------------------------------------
 // Table registry
@@ -19,6 +23,8 @@ const ALL_TABLES = [
   "sessions",
   "auth_operations",
   "oauth_connections",
+  "calendar_preferences",
+  "calendar_preference_sets",
   "user_settings",
   "security_events",
   "tasks",
@@ -76,6 +82,8 @@ const REQUIRED_COLUMNS: Record<AllTable, readonly string[]> = {
   sessions: ["id", "token_hash", "user_id", "expires_at"],
   auth_operations: ["id", "state_hash", "nonce", "pkce_verifier", "provider", "expires_at", "used"],
   oauth_connections: ["id", "user_id", "provider", "provider_account_id", "generation", "status"],
+  calendar_preferences: ["user_id", "connection_id", "calendar_id", "enabled", "updated_at"],
+  calendar_preference_sets: ["user_id", "connection_id", "explicit", "updated_at"],
   user_settings: ["user_id", "key", "value"],
   security_events: ["id", "event_type", "created_at"],
   tasks: ["id", "user_id", "title", "notes", "due_at", "duration_minutes", "completed", "created_at"],
@@ -98,6 +106,8 @@ const PRIMARY_KEYS: Record<AllTable, readonly string[]> = {
   sessions: ["id"],
   auth_operations: ["id"],
   oauth_connections: ["id"],
+  calendar_preferences: ["user_id", "connection_id", "calendar_id"],
+  calendar_preference_sets: ["user_id", "connection_id"],
   user_settings: ["user_id", "key"],
   security_events: ["id"],
   tasks: ["id"],
@@ -162,11 +172,17 @@ function stripForeignKeys(sql: string): string {
 
 function copyAllTablesTo(destination: string) {
   // Find all tables that actually exist in the live DB and are part of ALL_TABLES
-  const existingTables = db.prepare(
+  const discoveredTables = db.prepare(
     `SELECT name, sql FROM sqlite_master
-     WHERE type='table' AND name IN (${ALL_TABLES.map(() => "?").join(",")})
-     ORDER BY rowid`
+     WHERE type='table' AND name IN (${ALL_TABLES.map(() => "?").join(",")})`
   ).all(...ALL_TABLES) as { name: string; sql: string }[];
+  const discoveredByName = new Map(discoveredTables.map((table) => [table.name, table]));
+  // sqlite_master row order changes when a migration rebuilds a table. Always
+  // copy in the registry's parent-before-child order so attached-DB FKs resolve.
+  const existingTables = ALL_TABLES.flatMap((name) => {
+    const table = discoveredByName.get(name);
+    return table ? [table] : [];
+  });
 
   db.exec(`ATTACH DATABASE ${quotedPath(destination)} AS backup_target`);
   try {
@@ -176,6 +192,7 @@ function copyAllTablesTo(destination: string) {
         db.exec(sql.replace(/^CREATE TABLE\s+/i, "CREATE TABLE backup_target."));
         db.exec(`INSERT INTO backup_target.${name} SELECT * FROM main.${name}`);
       }
+      db.exec(`PRAGMA backup_target.user_version = ${DATABASE_SCHEMA_VERSION}`);
       // Copy all non-system indexes for included tables
       const tableNames = existingTables.map(t => t.name);
       if (tableNames.length) {
@@ -303,6 +320,12 @@ function validateBackup(database: DatabaseSync): string[] {
   if (integrity.length !== 1 || integrity[0].integrity_check !== "ok") {
     throw new BackupError("Atsarginė kopija pažeista.");
   }
+  const incomingVersion = Number(
+    (database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+  );
+  if (incomingVersion > DATABASE_SCHEMA_VERSION) {
+    throw new BackupError("Atsarginės kopijos duomenų bazės schema yra naujesnė arba nepalaikoma.");
+  }
 
   const objects = database
     .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
@@ -333,6 +356,12 @@ function validateBackup(database: DatabaseSync): string[] {
       throw new BackupError(`Atsarginėje kopijoje trūksta ${required} lentelės.`);
     }
   }
+  if (
+    incomingVersion >= 2 &&
+    (!tableNames.has("calendar_preferences") || !tableNames.has("calendar_preference_sets"))
+  ) {
+    throw new BackupError("Atsarginėje kopijoje trūksta kelių paskyrų kalendorių pasirinkimų.");
+  }
 
   // Column compatibility checks
   for (const table of tables) {
@@ -349,6 +378,17 @@ function validateBackup(database: DatabaseSync): string[] {
     // Required columns must be present
     if (REQUIRED_COLUMNS[name].some(col => !incoming.some(c => c.name === col))) {
       throw new BackupError(`Atsarginės kopijos ${name} schemoje trūksta būtinų stulpelių.`);
+    }
+    const versionedRequired =
+      name === "oauth_connections" && incomingVersion >= 1
+        ? ["display_label", "color_key"]
+        : name === "task_plans" && incomingVersion >= 2
+          ? ["mirror_connection_id"]
+          : name === "auth_operations" && incomingVersion >= 3
+            ? ["oauth_mode", "expected_connection_id"]
+            : [];
+    if (versionedRequired.some(col => !incoming.some(c => c.name === col))) {
+      throw new BackupError(`Atsarginės kopijos ${name} versijuota schema nepilna.`);
     }
 
     // Primary key columns must be present and marked
@@ -408,6 +448,20 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
           }
           const list = columns.map(col => `"${col.replaceAll('"', '""')}"`).join(",");
           db.exec(`INSERT INTO main.${table} (${list}) SELECT ${list} FROM restore_source.${table}`);
+        }
+
+        // Legacy backups predate stable color keys, normalized calendar
+        // preferences and mirror connection ids. Rebuild those derived values
+        // before exposing the restored database.
+        normalizeMultiAccountData();
+
+        // A restored browser session would let a copied bearer cookie survive
+        // the restore boundary. Force every user to authenticate again.
+        db.exec("DELETE FROM auth_operations; DELETE FROM sessions;");
+
+        const foreignKeyProblems = db.prepare("PRAGMA foreign_key_check").all();
+        if (foreignKeyProblems.length > 0) {
+          throw new BackupError("Atsarginės kopijos ryšiai tarp duomenų yra pažeisti.");
         }
 
         db.exec("COMMIT");

@@ -27,7 +27,7 @@ const {db:multiDb,createSession,SESSION_COOKIE}=await import("../lib/db-multi.ts
 const {db}=await import("../lib/db.ts");
 const {encrypt,decrypt}=await import("../lib/secrets.ts");
 const ms=await import("../lib/microsoft.ts");
-const {getConnection}=await import("../lib/oauth-service.ts");
+const {getConnection,getConnectionByAccount,listConnections}=await import("../lib/oauth-service.ts");
 const originalFetch=globalThis.fetch;
 
 // Bootstrap a test user once
@@ -97,29 +97,63 @@ test("failed new profile lookup leaves the previous token and account paired",as
   assert.equal(conn.provider_account_id,"old-account");assert.equal(decrypt(conn.encrypted_refresh_token),"old-refresh");
 });
 
-test("successful account switch atomically replaces identity and clears the old task list",async () => {
+test("legacy consent rejects a different account without creating an unusable sibling",async () => {
   const beforeConn=getConnection(testUserId,"microsoft");
   globalThis.fetch=async (url) => url.includes("/token") ? json({access_token:"new-access",refresh_token:"new-refresh"}) : json({id:"new-account",displayName:"Test account"});
-  await ms.exchangeMicrosoftCode("test-code","test-verifier",testUserId);
-  const conn=getConnection(testUserId,"microsoft");
-  assert.equal(conn.provider_account_id,"new-account");assert.equal(decrypt(conn.encrypted_refresh_token),"new-refresh");
-  // saveConnection increments generation on upsert (account switch = generation bump)
-  assert.ok(conn.generation > beforeConn.generation);
+  await assert.rejects(
+    ms.exchangeMicrosoftCode("test-code","test-verifier",testUserId),
+    /Pasirinkta kita Microsoft paskyra/,
+  );
+  const after=getConnection(testUserId,"microsoft");
+  assert.equal(after.id,beforeConn.id);
+  assert.equal(after.provider_account_id,"old-account");
+  assert.equal(decrypt(after.encrypted_refresh_token),"old-refresh");
+  assert.equal(listConnections(testUserId,"microsoft").length,1);
 });
 
-test("in-flight sign-in cannot undo a newer disconnect",async () => {
+test("explicit add creates a sibling while re-consent is bound to one exact Microsoft account",async () => {
+  const original=getConnection(testUserId,"microsoft");
+  globalThis.fetch=async (url) => url.includes("/token")
+    ? json({access_token:"new-access",refresh_token:"new-refresh",scope:"Calendars.ReadWrite"})
+    : json({id:"new-account",mail:"new@example.test"});
+  const added=await ms.exchangeMicrosoftCode(
+    "test-code",
+    "test-verifier",
+    testUserId,
+    {mode:"add"},
+  );
+  assert.equal(getConnectionByAccount(testUserId,"microsoft","new-account").id,added.connectionId);
+  assert.equal(listConnections(testUserId,"microsoft").length,2);
+
+  globalThis.fetch=async (url) => url.includes("/token")
+    ? json({access_token:"wrong-access",refresh_token:"wrong-refresh",scope:"Calendars.ReadWrite"})
+    : json({id:"new-account"});
+  await assert.rejects(
+    ms.exchangeMicrosoftCode(
+      "test-code",
+      "test-verifier",
+      testUserId,
+      {mode:"reconsent",expectedConnectionId:original.id},
+    ),
+    /ne ta Microsoft paskyra/,
+  );
+  assert.equal(decrypt(getConnectionByAccount(testUserId,"microsoft","old-account").encrypted_refresh_token),"old-refresh");
+});
+
+test("in-flight Microsoft re-consent cannot recreate a connection deleted before callback completion",async () => {
   const waiting=deferred();
-  globalThis.fetch=async (url) => url.includes("/token") ? waiting.promise : json({id:"new-account"});
-  const signingIn=ms.exchangeMicrosoftCode("test-code","test-verifier",testUserId);
-  ms.disconnectMicrosoftForUser(testUserId);
+  globalThis.fetch=async (url) => url.includes("/token") ? waiting.promise : json({id:"old-account"});
+  const conn=getConnection(testUserId,"microsoft");
+  const signingIn=ms.exchangeMicrosoftCode(
+    "test-code",
+    "test-verifier",
+    testUserId,
+    {mode:"reconsent",expectedConnectionId:conn.id},
+  );
+  ms.disconnectMicrosoftForUser(testUserId,conn.id);
   waiting.resolve(json({access_token:"new-access",refresh_token:"new-refresh"}));
-  // With per-user model, exchangeCode upserts via saveConnection so it may
-  // re-create the connection. The disconnect evicts the cache; subsequent
-  // calls to graphFetchForUser with the old conn object fail.
-  try { await signingIn; } catch {}
-  ms._clearCachedTokenForTest();
-  // Verify no stale cache remains
-  assert.equal(ms.isMicrosoftConnectedForUser(testUserId), getConnection(testUserId,"microsoft")!==null);
+  await assert.rejects(signingIn,/jungtis leidimui atnaujinti neberasta|target changed or was disconnected/);
+  assert.equal(getConnection(testUserId,"microsoft"),null);
 });
 
 test("a list response arriving after an account switch cannot poison the new account cache",async () => {

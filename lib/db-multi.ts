@@ -100,7 +100,10 @@ db.exec(`
     session_id    INTEGER REFERENCES sessions(id),
     callback_path TEXT    NOT NULL,
     expires_at    TEXT    NOT NULL,
-    used          INTEGER NOT NULL DEFAULT 0
+    used          INTEGER NOT NULL DEFAULT 0,
+    oauth_mode    TEXT    NOT NULL DEFAULT 'legacy'
+      CHECK(oauth_mode IN ('legacy', 'add', 'reconsent')),
+    expected_connection_id INTEGER
   );
 
   CREATE INDEX IF NOT EXISTS idx_auth_operations_expires ON auth_operations(expires_at) WHERE used = 0;
@@ -116,7 +119,10 @@ db.exec(`
     generation              INTEGER NOT NULL DEFAULT 1,
     status                  TEXT    NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'revoked', 'error')),
     connected_at            TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, provider)
+    display_label           TEXT,
+    color_key               TEXT    NOT NULL DEFAULT '',
+    UNIQUE(user_id, provider, provider_account_id),
+    UNIQUE(id, user_id)
   );
 
   CREATE INDEX IF NOT EXISTS idx_oauth_connections_user    ON oauth_connections(user_id);
@@ -175,6 +181,7 @@ db.exec(`
     mirror_requested      INTEGER NOT NULL DEFAULT 0,
     mirror_event_id       TEXT,
     mirror_account_id     TEXT,
+    mirror_connection_id  INTEGER REFERENCES oauth_connections(id) ON DELETE SET NULL,
     mirror_transaction_id TEXT,
     mirror_error          TEXT,
     mirror_create_payload TEXT,
@@ -239,6 +246,327 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
+// ---------------------------------------------------------------------------
+// Schema migrations
+// ---------------------------------------------------------------------------
+
+// v1: oauth_connections supports more than one account per provider.
+// v2: normalized calendar preferences and connection-bound Outlook mirrors.
+// v3: OAuth data-consent operations persist add/re-consent intent.
+export const DATABASE_SCHEMA_VERSION = 3;
+
+type SqliteColumn = { name: string };
+type SqliteIndex = { name: string; unique: number };
+
+function tableColumns(table: string): string[] {
+  return (db.prepare(`PRAGMA table_info("${table.replaceAll('"', '""')}")`).all() as SqliteColumn[])
+    .map((column) => column.name);
+}
+
+function hasUniqueIndex(table: string, columns: readonly string[]): boolean {
+  const indexes = db.prepare(`PRAGMA index_list("${table.replaceAll('"', '""')}")`).all() as SqliteIndex[];
+  return indexes.some((index) => {
+    if (!index.unique) return false;
+    const escaped = index.name.replaceAll('"', '""');
+    const names = (db.prepare(`PRAGMA index_info("${escaped}")`).all() as { name: string }[])
+      .map((column) => column.name);
+    return names.length === columns.length && names.every((name, position) => name === columns[position]);
+  });
+}
+
+function recordPreferenceMigrationIssue(userId: number, provider: string, reason: string): void {
+  db.prepare(
+    `INSERT INTO security_events (user_id, event_type, details)
+     VALUES (?, 'calendar_preferences_migration_skipped', ?)`,
+  ).run(userId, JSON.stringify({ provider, reason }));
+}
+
+function migrateLegacyCalendarPreferences(): void {
+  const settings = db.prepare(
+    `SELECT user_id, key, value, updated_at
+     FROM user_settings
+     WHERE key IN ('google_enabled_calendars', 'microsoft_enabled_calendars')`,
+  ).all() as { user_id: number; key: string; value: string; updated_at: string }[];
+
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO calendar_preferences
+       (user_id, connection_id, calendar_id, enabled, updated_at)
+     VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)`,
+  );
+  const markExplicit = db.prepare(
+    `INSERT INTO calendar_preference_sets
+       (user_id, connection_id, explicit, updated_at)
+     VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+     ON CONFLICT(user_id, connection_id) DO UPDATE SET
+       explicit = 1,
+       updated_at = excluded.updated_at`,
+  );
+
+  for (const setting of settings) {
+    const provider = setting.key.startsWith("google_") ? "google" : "microsoft";
+    try {
+      const parsed = JSON.parse(setting.value) as { accountId?: unknown; items?: unknown } | unknown[];
+      const accountId = Array.isArray(parsed) ? null : parsed.accountId;
+      const items = Array.isArray(parsed) ? parsed : parsed.items;
+      if (!Array.isArray(items) || (accountId !== null && typeof accountId !== "string")) {
+        recordPreferenceMigrationIssue(setting.user_id, provider, "invalid_setting_shape");
+        continue;
+      }
+      const connections = accountId === null
+        ? db.prepare(
+          `SELECT id FROM oauth_connections
+           WHERE user_id = ? AND provider = ? AND status = 'active'
+           ORDER BY id LIMIT 2`,
+        ).all(setting.user_id, provider) as { id: number }[]
+        : db.prepare(
+          `SELECT id FROM oauth_connections
+           WHERE user_id = ? AND provider = ? AND provider_account_id = ?`,
+        ).all(setting.user_id, provider, accountId) as { id: number }[];
+      const connection = connections.length === 1 ? connections[0] : undefined;
+      if (!connection) {
+        recordPreferenceMigrationIssue(
+          setting.user_id,
+          provider,
+          connections.length > 1 ? "ambiguous_connection" : "connection_not_found",
+        );
+        continue;
+      }
+      const existingSet = db.prepare(
+        `SELECT updated_at FROM calendar_preference_sets
+         WHERE user_id = ? AND connection_id = ?`,
+      ).get(setting.user_id, connection.id) as { updated_at: string } | undefined;
+      if (
+        existingSet &&
+        Number.isFinite(Date.parse(existingSet.updated_at)) &&
+        Date.parse(existingSet.updated_at) >= Date.parse(setting.updated_at)
+      ) {
+        continue;
+      }
+      db.prepare(
+        "DELETE FROM calendar_preferences WHERE user_id = ? AND connection_id = ?",
+      ).run(setting.user_id, connection.id);
+      markExplicit.run(setting.user_id, connection.id);
+      for (const item of items) {
+        const calendarId = typeof item === "string"
+          ? item
+          : item && typeof item === "object" && "id" in item
+            ? (item as { id?: unknown }).id
+            : undefined;
+        if (typeof calendarId === "string" && calendarId) {
+          insert.run(setting.user_id, connection.id, calendarId);
+        }
+      }
+    } catch {
+      recordPreferenceMigrationIssue(setting.user_id, provider, "invalid_json");
+    }
+  }
+}
+
+function backfillMirrorConnections(): void {
+  db.exec(`
+    UPDATE task_plans
+    SET mirror_connection_id = (
+      SELECT MIN(oc.id)
+      FROM oauth_connections oc
+      WHERE oc.user_id = task_plans.user_id
+        AND oc.provider = 'microsoft'
+        AND oc.provider_account_id = task_plans.mirror_account_id
+    )
+    WHERE mirror_connection_id IS NULL
+      AND mirror_account_id IS NOT NULL
+      AND (
+        SELECT COUNT(*)
+        FROM oauth_connections oc
+        WHERE oc.user_id = task_plans.user_id
+          AND oc.provider = 'microsoft'
+          AND oc.provider_account_id = task_plans.mirror_account_id
+      ) = 1;
+  `);
+
+  const unresolved = db.prepare(
+    `SELECT user_id, COUNT(*) AS count
+     FROM task_plans
+     WHERE mirror_connection_id IS NULL
+       AND mirror_account_id IS NOT NULL
+       AND (mirror_event_id IS NOT NULL OR mirror_transaction_id IS NOT NULL
+            OR mirror_create_payload IS NOT NULL OR mirror_requested <> 0)
+     GROUP BY user_id`,
+  ).all() as { user_id: number; count: number }[];
+  for (const item of unresolved) {
+    db.prepare(
+      `INSERT INTO security_events (user_id, event_type, details)
+       VALUES (?, 'mirror_connection_migration_unresolved', ?)`,
+    ).run(item.user_id, JSON.stringify({ count: item.count }));
+  }
+}
+
+/**
+ * Rebuild derived multi-account metadata after a legacy migration or restore.
+ * The old settings remain in place throughout the compatibility window.
+ */
+export function normalizeMultiAccountData(): void {
+  db.exec(`
+    UPDATE oauth_connections
+    SET color_key = provider || ':' || provider_account_id
+    WHERE color_key = '';
+  `);
+  migrateLegacyCalendarPreferences();
+  backfillMirrorConnections();
+}
+
+function migrateMultiAccountSchema(): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // Inspect only after acquiring the write lock. Two app processes may start
+    // against the same database, and the second must observe the first migration.
+    const currentVersion = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+    if (currentVersion > DATABASE_SCHEMA_VERSION) {
+      throw new Error(
+        `Duomenų bazės schema (${currentVersion}) naujesnė už programos palaikomą (${DATABASE_SCHEMA_VERSION})`,
+      );
+    }
+    const oauthColumns = tableColumns("oauth_connections");
+    const needsOAuthRebuild =
+      !oauthColumns.includes("display_label") ||
+      !oauthColumns.includes("color_key") ||
+      !hasUniqueIndex("oauth_connections", ["user_id", "provider", "provider_account_id"]);
+
+    if (needsOAuthRebuild) {
+      db.exec(`
+        ALTER TABLE oauth_connections RENAME TO oauth_connections_ma1_legacy;
+
+        CREATE TABLE oauth_connections (
+          id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id                 INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          provider                TEXT    NOT NULL CHECK(provider IN ('google', 'microsoft')),
+          provider_account_id     TEXT    NOT NULL,
+          provider_email          TEXT,
+          encrypted_refresh_token TEXT,
+          scopes                  TEXT    NOT NULL DEFAULT '',
+          generation              INTEGER NOT NULL DEFAULT 1,
+          status                  TEXT    NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'revoked', 'error')),
+          connected_at            TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          display_label           TEXT,
+          color_key               TEXT    NOT NULL DEFAULT '',
+          UNIQUE(user_id, provider, provider_account_id),
+          UNIQUE(id, user_id)
+        );
+
+        INSERT INTO oauth_connections
+          (id, user_id, provider, provider_account_id, provider_email,
+           encrypted_refresh_token, scopes, generation, status, connected_at,
+           display_label, color_key)
+        SELECT id, user_id, provider, provider_account_id, provider_email,
+               encrypted_refresh_token, scopes, generation, status, connected_at,
+               NULL, provider || ':' || provider_account_id
+        FROM oauth_connections_ma1_legacy;
+      `);
+
+      const legacyCount = (db.prepare("SELECT COUNT(*) AS count FROM oauth_connections_ma1_legacy").get() as { count: number }).count;
+      const migratedCount = (db.prepare("SELECT COUNT(*) AS count FROM oauth_connections").get() as { count: number }).count;
+      if (legacyCount !== migratedCount) {
+        throw new Error("OAuth jungčių migracija neišsaugojo visų eilučių");
+      }
+
+      db.exec("DROP TABLE oauth_connections_ma1_legacy");
+    }
+
+    const taskPlanColumns = tableColumns("task_plans");
+    if (!taskPlanColumns.includes("mirror_connection_id")) {
+      db.exec(
+        "ALTER TABLE task_plans ADD COLUMN mirror_connection_id INTEGER REFERENCES oauth_connections(id) ON DELETE SET NULL",
+      );
+    }
+
+    const authOperationColumns = tableColumns("auth_operations");
+    if (!authOperationColumns.includes("oauth_mode")) {
+      db.exec(
+        "ALTER TABLE auth_operations ADD COLUMN oauth_mode TEXT NOT NULL DEFAULT 'legacy' CHECK(oauth_mode IN ('legacy', 'add', 'reconsent'))",
+      );
+    }
+    if (!authOperationColumns.includes("expected_connection_id")) {
+      db.exec("ALTER TABLE auth_operations ADD COLUMN expected_connection_id INTEGER");
+    }
+
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_oauth_connections_user
+        ON oauth_connections(user_id);
+      CREATE INDEX IF NOT EXISTS idx_oauth_connections_account
+        ON oauth_connections(provider, provider_account_id);
+      CREATE INDEX IF NOT EXISTS idx_oauth_connections_user_provider_status
+        ON oauth_connections(user_id, provider, status);
+
+      CREATE TABLE IF NOT EXISTS calendar_preferences (
+        user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        connection_id INTEGER NOT NULL,
+        calendar_id   TEXT    NOT NULL,
+        enabled       INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+        color_override TEXT,
+        updated_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(user_id, connection_id, calendar_id),
+        FOREIGN KEY(connection_id, user_id)
+          REFERENCES oauth_connections(id, user_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_calendar_preferences_connection
+        ON calendar_preferences(user_id, connection_id);
+
+      CREATE TABLE IF NOT EXISTS calendar_preference_sets (
+        user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        connection_id INTEGER NOT NULL,
+        explicit      INTEGER NOT NULL DEFAULT 0 CHECK(explicit IN (0, 1)),
+        updated_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(user_id, connection_id),
+        FOREIGN KEY(connection_id, user_id)
+          REFERENCES oauth_connections(id, user_id) ON DELETE CASCADE
+      );
+
+      CREATE TRIGGER IF NOT EXISTS trg_task_plans_mirror_connection_insert
+      BEFORE INSERT ON task_plans
+      WHEN NEW.mirror_connection_id IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM oauth_connections
+         WHERE id = NEW.mirror_connection_id
+           AND user_id = NEW.user_id
+           AND provider = 'microsoft'
+       )
+      BEGIN
+        SELECT RAISE(ABORT, 'mirror connection must belong to task owner');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_task_plans_mirror_connection_update
+      BEFORE UPDATE OF mirror_connection_id, user_id ON task_plans
+      WHEN NEW.mirror_connection_id IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM oauth_connections
+         WHERE id = NEW.mirror_connection_id
+           AND user_id = NEW.user_id
+           AND provider = 'microsoft'
+       )
+      BEGIN
+        SELECT RAISE(ABORT, 'mirror connection must belong to task owner');
+      END;
+    `);
+
+    if (currentVersion < 2) {
+      normalizeMultiAccountData();
+    }
+
+    const foreignKeyProblems = db.prepare("PRAGMA foreign_key_check").all();
+    if (foreignKeyProblems.length > 0) {
+      throw new Error("Kelių paskyrų schemos migracija pažeidė išorinius raktus");
+    }
+
+    db.exec(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION}`);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+migrateMultiAccountSchema();
 
 // ---------------------------------------------------------------------------
 // Constants

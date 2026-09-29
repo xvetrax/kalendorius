@@ -76,14 +76,17 @@ CREATE TABLE IF NOT EXISTS auth_operations (
   session_id    INTEGER REFERENCES sessions(id),-- set when flow was initiated by a logged-in user
   callback_path TEXT    NOT NULL,               -- e.g. '/api/google/callback'
   expires_at    TEXT    NOT NULL,               -- ISO-8601; operation must complete before this
-  used          INTEGER NOT NULL DEFAULT 0      -- 1 once callback has been processed; prevents replay
+  used          INTEGER NOT NULL DEFAULT 0,     -- 1 once callback has been processed; prevents replay
+  oauth_mode    TEXT    NOT NULL DEFAULT 'legacy'
+    CHECK(oauth_mode IN ('legacy', 'add', 'reconsent')),
+  expected_connection_id INTEGER                 -- exact target for data OAuth re-consent
 );
 
 CREATE INDEX IF NOT EXISTS idx_auth_operations_expires ON auth_operations(expires_at) WHERE used = 0;
 
 -- ---------------------------------------------------------------------------
 -- OAuth connections (Calendar / Tasks scopes; separate from login identity)
--- One active connection per user per provider (UNIQUE(user_id, provider)).
+-- Multiple data connections per user/provider, unique by provider account.
 -- Encrypted refresh token uses AES-256-GCM; encrypted value stored as base64.
 -- generation increments on each successful token refresh to detect races.
 -- ---------------------------------------------------------------------------
@@ -99,11 +102,41 @@ CREATE TABLE IF NOT EXISTS oauth_connections (
   generation             INTEGER NOT NULL DEFAULT 1,  -- incremented on each token rotation
   status                 TEXT    NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'revoked', 'error')),
   connected_at           TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(user_id, provider)                     -- one active connection per user per provider
+  display_label          TEXT,
+  color_key              TEXT    NOT NULL DEFAULT '',
+  UNIQUE(user_id, provider, provider_account_id),
+  UNIQUE(id, user_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_oauth_connections_user    ON oauth_connections(user_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_connections_account ON oauth_connections(provider, provider_account_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_connections_user_provider_status
+  ON oauth_connections(user_id, provider, status);
+
+CREATE TABLE IF NOT EXISTS calendar_preferences (
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  connection_id  INTEGER NOT NULL,
+  calendar_id    TEXT    NOT NULL,
+  enabled        INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+  color_override TEXT,
+  updated_at     TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id, connection_id, calendar_id),
+  FOREIGN KEY(connection_id, user_id)
+    REFERENCES oauth_connections(id, user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_preferences_connection
+  ON calendar_preferences(user_id, connection_id);
+
+CREATE TABLE IF NOT EXISTS calendar_preference_sets (
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  connection_id INTEGER NOT NULL,
+  explicit      INTEGER NOT NULL DEFAULT 0 CHECK(explicit IN (0, 1)),
+  updated_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id, connection_id),
+  FOREIGN KEY(connection_id, user_id)
+    REFERENCES oauth_connections(id, user_id) ON DELETE CASCADE
+);
 
 -- ---------------------------------------------------------------------------
 -- User-scoped key-value settings
@@ -177,6 +210,7 @@ CREATE TABLE IF NOT EXISTS task_plans (
   mirror_requested     INTEGER NOT NULL DEFAULT 0,
   mirror_event_id      TEXT,
   mirror_account_id    TEXT,
+  mirror_connection_id INTEGER REFERENCES oauth_connections(id) ON DELETE SET NULL,
   mirror_transaction_id TEXT,
   mirror_error         TEXT,
   mirror_create_payload TEXT,
@@ -192,6 +226,32 @@ CREATE TABLE IF NOT EXISTS task_plans (
 CREATE INDEX IF NOT EXISTS idx_task_plans_user    ON task_plans(user_id);
 CREATE INDEX IF NOT EXISTS idx_task_plans_mirror  ON task_plans(user_id, mirror_orphaned_at)
   WHERE mirror_orphaned_at IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS trg_task_plans_mirror_connection_insert
+BEFORE INSERT ON task_plans
+WHEN NEW.mirror_connection_id IS NOT NULL
+ AND NOT EXISTS (
+   SELECT 1 FROM oauth_connections
+   WHERE id = NEW.mirror_connection_id
+     AND user_id = NEW.user_id
+     AND provider = 'microsoft'
+ )
+BEGIN
+  SELECT RAISE(ABORT, 'mirror connection must belong to task owner');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_task_plans_mirror_connection_update
+BEFORE UPDATE OF mirror_connection_id, user_id ON task_plans
+WHEN NEW.mirror_connection_id IS NOT NULL
+ AND NOT EXISTS (
+   SELECT 1 FROM oauth_connections
+   WHERE id = NEW.mirror_connection_id
+     AND user_id = NEW.user_id
+     AND provider = 'microsoft'
+ )
+BEGIN
+  SELECT RAISE(ABORT, 'mirror connection must belong to task owner');
+END;
 
 -- ---------------------------------------------------------------------------
 
