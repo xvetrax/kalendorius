@@ -912,7 +912,7 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh,onDelete}
     finally {setSaving(false);}
   }
   const safeLink=event.htmlLink?.startsWith("https://") ? event.htmlLink : undefined;
-  return <Modal eyebrow={event.provider==="outlook"?"OUTLOOK":"GOOGLE CALENDAR"} title="Kalendoriaus įvykis" onClose={()=>{if(!saving&&!responding)onClose();}}>
+  return <Modal eyebrow={event.provider==="outlook"?`OUTLOOK${event.calendarName?` · ${event.calendarName}`:""}`:`GOOGLE CALENDAR${event.calendarName?` · ${event.calendarName}`:""}`} title="Kalendoriaus įvykis" onClose={()=>{if(!saving&&!responding)onClose();}}>
     {!event.editable && <p className="formHint">{event.readOnlyReason}</p>}
     {event.recurring && event.editable && <p className="formHint">↻ Viršutiniai laukai keičia tik šį egzempliorių. Visos serijos kartojimo taisyklė valdoma atskirai žemiau.</p>}
     {error && <p className="formError" role="alert">{error}{conflict && onRefresh && <> <button type="button" className="inlineRefreshBtn" onClick={()=>{onRefresh();onClose();}}>Atnaujinti ir uždaryti →</button></>}</p>}
