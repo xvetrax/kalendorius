@@ -16,8 +16,11 @@ import {
   googleAccountIdForUser,
   googleTasksFetchForUser,
 } from "@/lib/google";
-import { getConnection } from "@/lib/oauth-service";
+import { getConnection, getConnectionById, listConnections } from "@/lib/oauth-service";
+import type { OAuthConnectionRow } from "@/lib/oauth-service";
 import type { TaskGateway } from "@/lib/task-service";
+
+const TASKS_SCOPE = "https://www.googleapis.com/auth/tasks";
 
 /**
  * makeMicrosoftTaskGateway — creates a TaskGateway for Microsoft To Do
@@ -65,6 +68,60 @@ export function makeGoogleTaskGateway(userId: number): TaskGateway {
       const conn = getConnection(userId, "google");
       if (!conn) throw new Error("Google Tasks neprijungta");
       return googleTasksFetchForUser(userId, conn, path, init);
+    },
+  };
+}
+
+/**
+ * makeMicrosoftTaskGatewayForConnection — creates a TaskGateway for Microsoft To Do
+ * scoped to a specific oauth_connections row.
+ */
+export function makeMicrosoftTaskGatewayForConnection(userId: number, conn: OAuthConnectionRow): TaskGateway {
+  return {
+    connected: () => {
+      const c = getConnectionById(userId, conn.id, "microsoft");
+      return Boolean(c && c.status === "active" && c.encrypted_refresh_token);
+    },
+    cachedAccountId: () => conn.provider_account_id,
+    connectionId: () => conn.id,
+    label: () => conn.provider_email || conn.provider_account_id,
+    accountId: async () => {
+      const c = getConnectionById(userId, conn.id, "microsoft");
+      if (!c || c.status !== "active") throw new Error("Microsoft neprijungtas");
+      return conn.provider_account_id;
+    },
+    defaultListId: async () => {
+      const c = getConnectionById(userId, conn.id, "microsoft");
+      if (!c) throw new Error("Microsoft neprijungtas");
+      return defaultTaskListIdForUser(userId, c);
+    },
+    request: (path: string, init?: RequestInit) => {
+      const c = getConnectionById(userId, conn.id, "microsoft");
+      if (!c) throw new Error("Microsoft neprijungtas");
+      return graphFetchForUser(userId, c, path, init);
+    },
+  };
+}
+
+/**
+ * makeGoogleTaskGatewayForConnection — creates a TaskGateway for Google Tasks
+ * scoped to a specific oauth_connections row.
+ */
+export function makeGoogleTaskGatewayForConnection(userId: number, conn: OAuthConnectionRow): TaskGateway {
+  return {
+    connected: () => {
+      const c = getConnectionById(userId, conn.id, "google");
+      if (!c || c.status !== "active" || !c.encrypted_refresh_token) return false;
+      return (c.scopes ?? "").split(" ").includes(TASKS_SCOPE);
+    },
+    cachedAccountId: () => conn.provider_account_id,
+    connectionId: () => conn.id,
+    label: () => conn.provider_email || conn.provider_account_id,
+    accountId: async () => conn.provider_account_id,
+    request: (path: string, init?: RequestInit) => {
+      const c = getConnectionById(userId, conn.id, "google");
+      if (!c) throw new Error("Google Tasks neprijungta");
+      return googleTasksFetchForUser(userId, c, path, init);
     },
   };
 }

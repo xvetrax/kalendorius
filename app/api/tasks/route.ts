@@ -1,13 +1,20 @@
 import { db, requireUserContext } from "@/lib/db-multi";
 import { apiError, assertSameOrigin } from "@/lib/http";
 import { createTaskService, TaskError } from "@/lib/task-service";
-import { makeMicrosoftTaskGateway, makeGoogleTaskGateway } from "@/lib/task-gateway";
+import { makeMicrosoftTaskGatewayForConnection, makeGoogleTaskGatewayForConnection } from "@/lib/task-gateway";
+import { listConnections } from "@/lib/oauth-service";
 
 export const runtime = "nodejs";
 
 function getTaskService(request: Request) {
   const user = requireUserContext(request);
-  return createTaskService(db, user.id, makeMicrosoftTaskGateway(user.id), makeGoogleTaskGateway(user.id));
+  const msConns = listConnections(user.id, "microsoft").filter(c => c.status === "active");
+  const gConns = listConnections(user.id, "google").filter(c => c.status === "active");
+  return createTaskService(
+    db, user.id,
+    msConns.map(conn => makeMicrosoftTaskGatewayForConnection(user.id, conn)),
+    gConns.map(conn => makeGoogleTaskGatewayForConnection(user.id, conn)),
+  );
 }
 
 function failure(error: unknown) {

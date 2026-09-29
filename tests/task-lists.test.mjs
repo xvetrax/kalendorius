@@ -42,7 +42,7 @@ function fixture(t) {
         throw Error(`Unexpected fixture request ${method} ${raw}`);
       }};
   }
-  return {db,...adapters,service:createTaskService(db,TEST_USER_ID,adapters.microsoft,adapters.google)};
+  return {db,...adapters,service:createTaskService(db,TEST_USER_ID,[adapters.microsoft],[adapters.google])};
 }
 const ref=list=>({source:list.source,account_id:list.account_id,list_id:list.list_id,version:list.version});
 const deletion=preview=>({...ref(preview.list),confirmation:preview.confirmation,confirm_name:preview.list.name});

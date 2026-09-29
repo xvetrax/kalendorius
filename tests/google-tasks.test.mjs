@@ -52,10 +52,10 @@ function setup(t) {
       throw Error("unexpected method");
     }};
   const microsoft={connected:()=>false,cachedAccountId:()=>null,accountId:async()=>{throw Error("disconnected");},request:async()=>{throw Error("unexpected Microsoft call");}};
-  let service=createTaskService(db,TEST_USER_ID,microsoft,google);
+  let service=createTaskService(db,TEST_USER_ID,[microsoft],[google]);
   t.after(()=>{db.close();rmSync(dir,{recursive:true,force:true});});
   return {get service(){return service;},get db(){return db;},google,state,lists,calls,
-    restart(){db.close();db=new DatabaseSync(file);migrateTaskPlanning(db);service=createTaskService(db,TEST_USER_ID,microsoft,google);return service;}};
+    restart(){db.close();db=new DatabaseSync(file);migrateTaskPlanning(db);service=createTaskService(db,TEST_USER_ID,[microsoft],[google]);return service;}};
 }
 const ref=t=>({source:t.source,account_id:t.account_id,list_id:t.list_id,id:t.id,schedule_version:t.schedule_version});
 const start="2026-10-25T08:00:00.000Z";
