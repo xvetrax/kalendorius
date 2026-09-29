@@ -1,184 +1,35 @@
 import { requireUserContext } from "@/lib/db-multi";
-import { saveUserSetting, userSetting, deleteUserSettings } from "@/lib/db";
-import { graphFetchForUser, isMicrosoftConnectedForUser } from "@/lib/microsoft";
+import { saveUserSetting } from "@/lib/db";
+import { graphFetchForUser } from "@/lib/microsoft";
 import { apiError, assertSameOrigin } from "@/lib/http";
-import { OUTLOOK_DEFAULT_CALENDAR_SETTING } from "@/lib/outlook-mirror-link";
 import { calendarSelectionVersion } from "@/lib/calendar-selection";
-import { getConnection } from "@/lib/oauth-service";
+import { getCalendarSelection, replaceCalendarSelection, CalendarPreferenceError } from "@/lib/calendar-preferences";
+import { listConnections, getConnectionById, type OAuthConnectionRow } from "@/lib/oauth-service";
+import { allSettledLimited, calendarAccountError, calendarAccountLabel } from "@/lib/calendar-multi";
+import { resolveLegacyCalendarSelection, writeLegacyCalendarSelection } from "@/lib/calendar-legacy";
 
 export const runtime = "nodejs";
+const colors: Record<string,string>={lightBlue:"#74b7e8",lightGreen:"#57a55a",lightOrange:"#e8975b",lightGray:"#9e9e9e",lightYellow:"#e8c85b",lightTeal:"#4db6ac",lightPink:"#e87494",lightBrown:"#a07850",lightRed:"#e85b5b",lightMagenta:"#b04db6",auto:"#0078d4"};
+type Item={id:string;name:string;color?:string;isDefault?:boolean;writable:boolean};
+// The identity value already carries the connection id ([accountId, connId,
+// calendarId]) and is validated against it, so a single unsuffixed key is safe.
+export const outlookDefaultCalendarSetting=(_connectionId?:string)=>`microsoft_default_calendar_identity`;
 
-const outlookColors: Record<string, string> = {
-  lightBlue: "#74b7e8",
-  lightGreen: "#57a55a",
-  lightOrange: "#e8975b",
-  lightGray: "#9e9e9e",
-  lightYellow: "#e8c85b",
-  lightTeal: "#4db6ac",
-  lightPink: "#e87494",
-  lightBrown: "#a07850",
-  lightRed: "#e85b5b",
-  lightMagenta: "#b04db6",
-  auto: "#0078d4",
-};
-
-export async function microsoftCalendarCatalog(userId: number) {
-  const conn = getConnection(userId, "microsoft");
-  if (!conn || conn.status !== "active") {
-    throw Object.assign(new Error("Microsoft paskyra neprijungta."), { status: 409 });
-  }
-
-  const accountId = conn.provider_account_id;
-  const connectionId = String(conn.id);
-
-  const items: { id: string; name: string; color?: string; isDefault?: boolean; writable: boolean }[] = [];
-  let next: string | null =
-    "/me/calendars?$top=50&$select=id,name,color,isDefaultCalendar,canEdit";
-  const visited = new Set<string>();
-  while (next) {
-    if (visited.has(next)) break;
-    visited.add(next);
-    const page = await graphFetchForUser(userId, conn, next);
-    for (const cal of page.value || []) {
-      items.push({
-        id: String(cal.id),
-        name: String(cal.name || cal.id),
-        color: outlookColors[cal.color] || undefined,
-        isDefault: Boolean(cal.isDefaultCalendar),
-        writable: Boolean(cal.canEdit),
-      });
-    }
-    const link = page["@odata.nextLink"] || null;
-    if (link) {
-      const url = new URL(link);
-      if (
-        url.origin !== "https://graph.microsoft.com" ||
-        url.username ||
-        url.password ||
-        url.hash
-      )
-        break;
-      next = url.pathname.slice(5) + url.search;
-    } else {
-      next = null;
-    }
-  }
-
-  // Verify connection still belongs to this user
-  const after = getConnection(userId, "microsoft");
-  if (!after || after.id !== conn.id) {
-    throw Object.assign(
-      new Error("Microsoft paskyra pasikeitė. Atnaujink kalendorius."),
-      { status: 409 },
-    );
-  }
-
-  // Track default calendar in per-user settings
-  const primary = items.find((item) => item.isDefault);
-  if (primary && accountId) {
-    saveUserSetting(
-      userId,
-      OUTLOOK_DEFAULT_CALENDAR_SETTING,
-      JSON.stringify([accountId, connectionId, primary.id]),
-    );
-  } else {
-    deleteUserSettings(userId, OUTLOOK_DEFAULT_CALENDAR_SETTING);
-  }
-
-  const stored = userSetting(userId, "microsoft_enabled_calendars");
-  let enabled = items.filter((item) => item.isDefault).map((item) => item.id);
-  let explicit = false;
-  let defaultAlias = false;
-
-  try {
-    const parsed = stored ? JSON.parse(stored) : null;
-    const live = new Set(items.map((item) => item.id));
-    const defaultId = items.find((item) => item.isDefault)?.id;
-    if (parsed?.accountId === accountId && Array.isArray(parsed.items)) {
-      explicit = true;
-      defaultAlias = parsed.items.some((item: any) => String(item.id || "") === "primary");
-      enabled = parsed.items
-        .map((item: any) =>
-          String(item.id || "") === "primary" && defaultId ? defaultId : String(item.id || ""),
-        )
-        .filter((id: string) => live.has(id));
-    }
-  } catch {}
-
-  return {
-    items,
-    enabled,
-    explicit,
-    defaultAlias,
-    version: calendarSelectionVersion("microsoft", accountId, connectionId),
-  };
+export async function microsoftCalendarCatalogForConnection(userId:number,connection:OAuthConnectionRow){
+  const items:Item[]=[],visited=new Set<string>();let next:string|null="/me/calendars?$top=50&$select=id,name,color,isDefaultCalendar,canEdit";
+  while(next){if(visited.has(next))break;visited.add(next);const page=await graphFetchForUser(userId,connection,next);for(const cal of page.value||[])items.push({id:String(cal.id),name:String(cal.name||cal.id),color:colors[cal.color]||undefined,isDefault:Boolean(cal.isDefaultCalendar),writable:Boolean(cal.canEdit)});const link=page["@odata.nextLink"]||null;if(!link){next=null;continue;}const url=new URL(link);next=url.origin==="https://graph.microsoft.com"&&!url.username&&!url.password&&!url.hash?url.pathname.slice(5)+url.search:null;}
+  const current=getConnectionById(userId,connection.id,"microsoft");if(!current||current.status!=="active"||current.provider_account_id!==connection.provider_account_id)throw Object.assign(new Error("Microsoft paskyra pasikeitė. Atnaujink kalendorius."),{status:409});
+  const connectionId=String(connection.id),primary=items.find(item=>item.isDefault);if(primary)saveUserSetting(userId,outlookDefaultCalendarSetting(connectionId),JSON.stringify([connection.provider_account_id,connectionId,primary.id]));
+  // Legacy selections stored "primary" for the default calendar; map it onto the
+  // live opaque default id so the overlay references a real calendar.
+  const overlay=resolveLegacyCalendarSelection(userId,connection.id,connection.provider_account_id,"microsoft",id=>id==="primary"&&primary?primary.id:id);
+  const selection=overlay?.selection??getCalendarSelection(userId,connection.id),live=new Set(items.map(item=>item.id));
+  const enabled=selection.explicit?selection.items.filter(item=>item.enabled&&live.has(item.calendar_id)).map(item=>item.calendar_id):items.filter(item=>item.isDefault).map(item=>item.id);
+  return {provider:"microsoft" as const,connectionId,accountId:connection.provider_account_id,email:connection.provider_email,label:calendarAccountLabel(connection),colorKey:connection.color_key,items,enabled,explicit:selection.explicit,defaultAlias:overlay?.defaultAlias??false,version:calendarSelectionVersion("microsoft",connection.provider_account_id,connectionId,selection)};
 }
 
-export async function GET(request: Request) {
-  try {
-    const user = requireUserContext(request);
-    if (!isMicrosoftConnectedForUser(user.id)) {
-      return Response.json({ items: [], enabled: [], version: "" });
-    }
-    return Response.json(await microsoftCalendarCatalog(user.id), {
-      headers: { "Cache-Control": "no-store" },
-    });
-  } catch (error) {
-    if (error instanceof Response) return error;
-    return apiError(error);
-  }
-}
+export async function microsoftCalendarCatalog(userId:number){const active=listConnections(userId,"microsoft").filter(c=>c.status==="active");if(active.length!==1)throw Object.assign(new Error("Pasirink konkrečią Microsoft paskyrą."),{status:409});return microsoftCalendarCatalogForConnection(userId,active[0]);}
 
-export async function PATCH(request: Request) {
-  try {
-    assertSameOrigin(request);
-    const user = requireUserContext(request);
-    const body = await request.json();
+export async function GET(request:Request){try{const user=requireUserContext(request),connections=listConnections(user.id,"microsoft").filter(c=>c.status==="active");if(!connections.length)return Response.json({accounts:[],items:[],enabled:[],errors:[],version:""});const settled=await allSettledLimited(connections,3,connection=>microsoftCalendarCatalogForConnection(user.id,connection));const accounts=settled.flatMap(result=>result.status==="fulfilled"?[result.value]:[]),errors=settled.flatMap((result,index)=>result.status==="rejected"?[calendarAccountError(connections[index],result.reason)]:[]);if(!accounts.length&&connections.length===1)throw (settled[0] as PromiseRejectedResult).reason;const sole=accounts.length===1?accounts[0]:null;return Response.json({accounts,items:sole?.items??[],enabled:sole?.enabled??[],explicit:sole?.explicit??false,defaultAlias:sole?.defaultAlias??false,version:sole?.version??"",errors},{headers:{"Cache-Control":"no-store"}});}catch(error){if(error instanceof Response)return error;return apiError(error);}}
 
-    const conn = getConnection(user.id, "microsoft");
-    if (!isMicrosoftConnectedForUser(user.id) || !conn) {
-      return Response.json({ error: "Microsoft paskyra neprijungta." }, { status: 401 });
-    }
-
-    const accountId = conn.provider_account_id;
-    const connectionId = String(conn.id);
-    const version = calendarSelectionVersion("microsoft", accountId, connectionId);
-
-    if (body.version !== version) {
-      return Response.json(
-        {
-          error: "Microsoft paskyra arba kalendorių katalogas pasikeitė. Atnaujink kalendorius.",
-        },
-        { status: 409 },
-      );
-    }
-
-    if (
-      !Array.isArray(body.enabled) ||
-      body.enabled.some(
-        (c: unknown) =>
-          typeof (c as any)?.id !== "string" ||
-          !(c as any).id ||
-          (c as any).id.length > 1024,
-      )
-    ) {
-      return Response.json({ error: "Neteisingas kalendorių sąrašas." }, { status: 400 });
-    }
-
-    const safe = (body.enabled as any[]).map((c: any) => ({
-      id: String(c.id),
-      ...(c.name ? { name: String(c.name).slice(0, 200) } : {}),
-      ...(c.color ? { color: String(c.color).slice(0, 30) } : {}),
-    }));
-
-    saveUserSetting(
-      user.id,
-      "microsoft_enabled_calendars",
-      JSON.stringify({ accountId, items: safe }),
-    );
-    return Response.json({ ok: true, version });
-  } catch (error) {
-    if (error instanceof Response) return error;
-    return apiError(error);
-  }
-}
+export async function PATCH(request:Request){try{assertSameOrigin(request);const user=requireUserContext(request),body=await request.json(),active=listConnections(user.id,"microsoft").filter(c=>c.status==="active");const connectionId=Number(body.connectionId??(active.length===1?active[0].id:NaN)),connection=Number.isSafeInteger(connectionId)?getConnectionById(user.id,connectionId,"microsoft"):null;if(!connection||connection.status!=="active")return Response.json({error:"Microsoft paskyra neprijungta."},{status:409});if(!Array.isArray(body.enabled))return Response.json({error:"Neteisingas kalendorių sąrašas."},{status:400});const catalog=await microsoftCalendarCatalogForConnection(user.id,connection),live=new Set(catalog.items.map(item=>item.id));if(body.version!==catalog.version)return Response.json({error:"Microsoft paskyra arba kalendorių katalogas pasikeitė. Atnaujink kalendorius."},{status:409});if(body.enabled.some((item:any)=>typeof item?.id!=="string"||!live.has(item.id)))return Response.json({error:"Kalendorius šiai paskyrai nepriklauso."},{status:409});const selection=replaceCalendarSelection(user.id,connection.id,connection.provider_account_id,body.enabled.map((item:any)=>({id:item.id,color_override:item.color_override})),"microsoft");writeLegacyCalendarSelection(user.id,"microsoft",connection.provider_account_id,selection.items.filter(item=>item.enabled).map(item=>({id:item.calendar_id})));return Response.json({ok:true,connectionId:String(connection.id),version:calendarSelectionVersion("microsoft",connection.provider_account_id,String(connection.id),selection),enabled:selection.items.filter(item=>item.enabled).map(item=>item.calendar_id)});}catch(error){if(error instanceof Response)return error;if(error instanceof CalendarPreferenceError)return Response.json({error:error.message},{status:error.status});return apiError(error);}}

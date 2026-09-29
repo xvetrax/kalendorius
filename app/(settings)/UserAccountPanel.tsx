@@ -149,21 +149,6 @@ export function UserAccountPanel() {
         </div>
       </div>
 
-      {/* Calendar / Tasks connection links */}
-      <div>
-        <p style={{ margin: "0 0 6px", fontSize: ".72rem", fontWeight: 700, color: "#8792a1", textTransform: "uppercase", letterSpacing: ".06em" }}>
-          Kalendoriaus prieiga
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <a href="/api/google/connect" style={{ fontSize: ".78rem", color: "#6247d8", fontWeight: 700, textDecoration: "none" }}>
-            Prijungti Google kalendorių / užduotis
-          </a>
-          <a href="/api/microsoft/connect" style={{ fontSize: ".78rem", color: "#0078d4", fontWeight: 700, textDecoration: "none" }}>
-            Prijungti Microsoft kalendorių / užduotis
-          </a>
-        </div>
-      </div>
-
       {/* Logout actions */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <button

@@ -60,6 +60,7 @@ const calendarCatalogs={google:await import("../app/api/google/calendars/route.t
 const microsoftCalendars=calendarCatalogs.microsoft;
 after(()=>{globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 const inputFor=e=>({id:e.id,calendarId:e.calendarId,version:e.version,connectionId:e.connectionId,start:e.start.dateTime,end:e.end.dateTime});
+const setSelection=(provider,ids,explicit=true)=>{const connectionId=Number(connIds[provider]);multiDb.exec("BEGIN IMMEDIATE");try{multiDb.prepare("DELETE FROM calendar_preferences WHERE user_id=? AND connection_id=?").run(testUserId,connectionId);for(const id of ids)multiDb.prepare("INSERT INTO calendar_preferences(user_id,connection_id,calendar_id,enabled,updated_at) VALUES (?,?,?,1,CURRENT_TIMESTAMP)").run(testUserId,connectionId,id);multiDb.prepare("INSERT INTO calendar_preference_sets(user_id,connection_id,explicit,updated_at) VALUES (?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id,connection_id) DO UPDATE SET explicit=excluded.explicit,updated_at=excluded.updated_at").run(testUserId,connectionId,explicit?1:0);multiDb.exec("COMMIT");}catch(error){multiDb.exec("ROLLBACK");throw error;}};
 const shiftDate=(value,days)=>{const date=new Date(`${value}T00:00:00Z`);date.setUTCDate(date.getUTCDate()+days);return date.toISOString().slice(0,10);};
 let createOperation=0;const operationId=()=>`00000000-0000-4000-8000-${String(++createOperation).padStart(12,"0")}`;
 
@@ -115,7 +116,7 @@ for(const provider of ["google","microsoft"]){
     const body={calendarId:"other/calendar",calendarVersion:catalog.version,summary:`${provider} zonos kūrimas`,start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:requested,showAs:"busy"};
     assert.equal((await post(body)).status,409);assert.equal(calendarUpstreamWrites.length,before);
     const selection=await calendarCatalogs[provider].PATCH(new Request(`http://localhost:3000/api/${provider}/calendars`,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({enabled:catalog.items.map(item=>({id:item.id})),version:catalog.version})}));assert.equal(selection.status,200);
-    const response=await post(body);assert.equal(response.status,201);assert.equal(calendarUpstreamWrites.length,before+1);
+    const saved=await selection.json();const response=await post({...body,calendarVersion:saved.version});assert.equal(response.status,201);assert.equal(calendarUpstreamWrites.length,before+1);
     const write=calendarUpstreamWrites.at(-1);assert.equal(write.provider,provider==="google"?"google":"outlook");assert.equal(write.body.start.timeZone,providerZone);assert.equal(write.body.end.timeZone,providerZone);
     assert.match(write.path,/\/calendars\/other%2Fcalendar\/events$/);
     if(provider==="google"){assert.equal(write.body.start.dateTime,"2026-10-24T07:00:00.000Z");assert.equal(write.body.end.dateTime,"2026-10-24T08:00:00.000Z");}
@@ -147,11 +148,11 @@ for(const provider of ["google","microsoft"]){
   test(`${provider} actual routes: removed enabled calendars are pruned before listing`,async()=>{
     const key=`${provider}_enabled_calendars`,previous=userSetting(testUserId,key);
     try {
-      saveUserSetting(testUserId,key,JSON.stringify({accountId:"fixture-account",items:[{id:"removed-calendar"}]}));
+      setSelection(provider,["removed-calendar"]);
       const listed=await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}));assert.equal(listed.status,200);assert.deepEqual((await listed.json()).items,[]);
       const catalogResponse=await calendarCatalogs[provider].GET(new Request(`http://localhost:3000/api/${provider}/calendars`,{headers:{Cookie:sessionCookie}})),catalog=await catalogResponse.json();assert.equal(catalogResponse.status,200);assert.deepEqual(catalog.enabled,[]);
       const saved=await calendarCatalogs[provider].PATCH(new Request(`http://localhost:3000/api/${provider}/calendars`,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({enabled:[],version:catalog.version})}));
-      assert.equal(saved.status,200);assert.deepEqual(JSON.parse(userSetting(testUserId,key)).items,[]);
+      assert.equal(saved.status,200);
     } finally {
       if(previous===undefined)db.prepare("DELETE FROM user_settings WHERE user_id=? AND key=?").run(testUserId,key);
       else saveUserSetting(testUserId,key,previous);
@@ -170,7 +171,7 @@ for(const provider of ["google","microsoft"]){
     }
     assert.equal((await post({...base,calendarId:"readonly",timeZone:"UTC"})).status,403);
     assert.equal((await post({...base,timeZone:"UTC"},"https://attacker.example")).status,403);assert.equal(calendarUpstreamWrites.length,before);
-    saveUserSetting(testUserId,`${provider}_enabled_calendars`,JSON.stringify({accountId:"fixture-account",items:[{id:"primary"}]}));
+    setSelection(provider,[provider==="google"?"primary":"opaque-default"]);
   });
 }
 

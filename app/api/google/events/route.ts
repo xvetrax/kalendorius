@@ -9,12 +9,12 @@ import { calendarCreateIdentity, calendarCreateOperationId } from "@/lib/calenda
 import { googleCalendarRecurrence, parseCalendarRecurrence } from "@/lib/calendar-recurrence";
 import { isCalendarTimeZone } from "@/lib/calendar-time-zone";
 import { requireUserContext } from "@/lib/db-multi";
-import { userSetting } from "@/lib/db";
-import { googleFetchForUser, isGoogleConnectedForUser } from "@/lib/google";
+import { googleFetchForUser } from "@/lib/google";
 import { apiError, assertSameOrigin } from "@/lib/http";
 import { calendarSelectionVersion } from "@/lib/calendar-selection";
-import { getConnection, type OAuthConnectionRow } from "@/lib/oauth-service";
-import { googleCalendarCatalog } from "../calendars/route.ts";
+import { getConnection, getConnectionById, listConnections, type OAuthConnectionRow } from "@/lib/oauth-service";
+import { googleCalendarCatalogForConnection } from "../calendars/route.ts";
+import { allSettledLimited, calendarAccountError } from "@/lib/calendar-multi";
 
 export const runtime = "nodejs";
 
@@ -28,7 +28,7 @@ function makeGoogleCalendarService(userId: number, conn: OAuthConnectionRow) {
   const connectionId = String(conn.id);
   return createCalendarService("google", {
     connection: () => {
-      const c = getConnection(userId, "google");
+      const c = getConnectionById(userId, conn.id, "google");
       return c && c.id === conn.id && c.status === "active" ? connectionId : null;
     },
     request: (path: string, init?: RequestInit) =>
@@ -36,84 +36,33 @@ function makeGoogleCalendarService(userId: number, conn: OAuthConnectionRow) {
   });
 }
 
-function enabledCalendars(
-  userId: number,
-  accountId: string,
-): { id: string; name?: string; color?: string }[] | undefined {
-  const stored = userSetting(userId, "google_enabled_calendars");
-  if (!stored || !accountId) return undefined;
-  try {
-    const parsed = JSON.parse(stored);
-    const items =
-      Array.isArray(parsed)
-        ? parsed
-        : parsed?.accountId === accountId && Array.isArray(parsed.items)
-          ? parsed.items
-          : null;
-    if (!items) return undefined;
-    return items
-      .map((c: any) =>
-        typeof c === "string"
-          ? { id: c }
-          : {
-              id: String(c.id || ""),
-              name: c.name || undefined,
-              color: c.color || undefined,
-            },
-      )
-      .filter((c: { id: string }) => c.id);
-  } catch {
-    return undefined;
-  }
+function googleConnection(userId:number,raw:unknown){
+  if(raw!==undefined&&raw!==null&&raw!==""){const id=Number(raw);return Number.isSafeInteger(id)?getConnectionById(userId,id,"google"):null;}
+  return getConnection(userId,"google");
 }
 
 export async function GET(request: Request) {
   try {
     const user = requireUserContext(request);
-    if (!isGoogleConnectedForUser(user.id)) return Response.json({ items: [] });
-
-    const conn = getConnection(user.id, "google");
-    if (!conn) return Response.json({ items: [] });
-
-    const calendar = makeGoogleCalendarService(user.id, conn);
     const input = new URL(request.url).searchParams;
-
     const seriesId = input.get("seriesId");
-    if (seriesId) return Response.json(await calendar.series(Object.fromEntries(input)));
-
-    const accountId = conn.provider_account_id;
-    const connectionId = String(conn.id);
-    const version = calendarSelectionVersion("google", accountId, connectionId);
-    const catalog = await googleCalendarCatalog(user.id);
-    const enabled = new Set(catalog.enabled);
-    if (catalog.version !== version) {
-      throw new CalendarError("Google paskyra pasikeitė. Atnaujink kalendorių.", 409);
+    if (seriesId) {
+      const connectionId=Number(input.get("connectionId")),conn=Number.isSafeInteger(connectionId)?getConnectionById(user.id,connectionId,"google"):null;
+      if(!conn||conn.status!=="active")throw new CalendarError("Pasirink konkrečią Google paskyrą.",409);
+      return Response.json(await makeGoogleCalendarService(user.id,conn).series(Object.fromEntries(input)));
     }
-
-    const calendars = catalog.explicit
-      ? catalog.items
-          .filter((item) => enabled.has(item.id))
-          .map((item) => ({ id: item.id, name: item.name, color: item.color }))
-      : undefined;
-
-    const items = await calendar.list(
-      input.get("timeMin") || new Date().toISOString(),
-      input.get("timeMax") || new Date(Date.now() + 7 * 864e5).toISOString(),
-      calendars,
-      connectionId,
-    );
-
-    const afterConn = getConnection(user.id, "google");
-    if (
-      !afterConn ||
-      afterConn.id !== conn.id ||
-      calendarSelectionVersion("google", afterConn.provider_account_id, String(afterConn.id)) !==
-        version
-    ) {
-      throw new CalendarError("Google paskyra pasikeitė. Atnaujink kalendorių.", 409);
-    }
-
-    return Response.json({ items }, { headers: { "Cache-Control": "no-store" } });
+    const connections=listConnections(user.id,"google").filter(conn=>conn.status==="active");
+    if(!connections.length)return Response.json({items:[],errors:[],loadedConnectionIds:[]});
+    const settled=await allSettledLimited(connections,3,async conn=>{
+      const catalog=await googleCalendarCatalogForConnection(user.id,conn),enabled=new Set(catalog.enabled);
+      const calendars=catalog.explicit?catalog.items.filter(item=>enabled.has(item.id)).map(item=>({id:item.id,name:item.name,color:item.color})):undefined;
+      const items=await makeGoogleCalendarService(user.id,conn).list(input.get("timeMin")||new Date().toISOString(),input.get("timeMax")||new Date(Date.now()+7*864e5).toISOString(),calendars,String(conn.id));
+      if(!getConnectionById(user.id,conn.id,"google"))throw new CalendarError("Google paskyra pasikeitė. Atnaujink kalendorių.",409);
+      return {connectionId:String(conn.id),items};
+    });
+    const loaded=settled.flatMap(result=>result.status==="fulfilled"?[result.value]:[]),errors=settled.flatMap((result,index)=>result.status==="rejected"?[calendarAccountError(connections[index],result.reason)]:[]);
+    if(!loaded.length&&connections.length===1)throw (settled[0] as PromiseRejectedResult).reason;
+    return Response.json({items:loaded.flatMap(result=>result.items),errors,loadedConnectionIds:loaded.map(result=>result.connectionId),activeConnectionIds:connections.map(conn=>String(conn.id))},{headers:{"Cache-Control":"no-store"}});
   } catch (error) {
     if (error instanceof Response) return error;
     return failure(error);
@@ -133,8 +82,8 @@ export async function POST(request: Request) {
       return Response.json({ error: "Trūksta pavadinimo arba laiko" }, { status: 400 });
     }
 
-    const conn = getConnection(user.id, "google");
-    if (!isGoogleConnectedForUser(user.id) || !conn) {
+    const conn = googleConnection(user.id, body.connectionId);
+    if (!conn || conn.status !== "active") {
       throw new CalendarError("Google paskyra neprijungta.", 409);
     }
 
@@ -151,18 +100,34 @@ export async function POST(request: Request) {
       );
     }
 
-    if (
-      body.calendarVersion !==
-      calendarSelectionVersion("google", accountId, connectionId)
-    ) {
+    const createCatalog=await googleCalendarCatalogForConnection(user.id,conn);
+    if (body.calendarVersion !== createCatalog.version) {
       throw new CalendarError(
         "Google paskyra arba kalendorių katalogas pasikeitė. Atnaujink kalendorius.",
         409,
       );
     }
 
-    const enabled = enabledCalendars(user.id, accountId);
-    if (enabled && !enabled.some((calendar) => calendar.id === calendarId)) {
+    // Validate the timezone / all-day payload before the enabled-calendar
+    // check so malformed requests are rejected with 400 even when the target
+    // calendar is not in the current selection.
+    if (body.allDay) {
+      if (body.timeZone !== undefined)
+        throw new CalendarError("Visos dienos įvykiui laiko zona nesiunčiama.");
+    } else {
+      const timeZone = body.timeZone === undefined ? "UTC" : body.timeZone;
+      if (!isCalendarTimeZone(timeZone))
+        throw new CalendarError("Pasirink galiojančią IANA laiko zoną.");
+    }
+
+    // A live but non-writable calendar is a permission error regardless of the
+    // enabled selection; report 403 before the enabled (409) check.
+    const liveCalendar = createCatalog.items.find((item) => item.id === calendarId);
+    if (liveCalendar && !liveCalendar.writable) {
+      throw new CalendarError("Pasirinktame Google kalendoriuje nėra rašymo teisės.", 403);
+    }
+
+    if (!createCatalog.enabled.includes(calendarId)) {
       throw new CalendarError("Pasirinktas Google kalendorius neįjungtas nustatymuose.", 409);
     }
 
@@ -258,16 +223,13 @@ export async function POST(request: Request) {
     );
 
     // Verify connection hasn't changed
-    const afterConn = getConnection(user.id, "google");
+    const afterConn = getConnectionById(user.id, conn.id, "google");
     if (!afterConn || afterConn.id !== conn.id) {
       throw new CalendarError("Google paskyra pasikeitė. Atnaujink kalendorių.", 409);
     }
 
     if (selected?.id !== calendarId) {
       throw new CalendarError("Google grąžino kitą kalendorių. Atnaujink kalendorių sąrašą.", 502);
-    }
-    if (enabled === undefined && selected.primary !== true) {
-      throw new CalendarError("Pasirinktas Google kalendorius neįjungtas nustatymuose.", 409);
     }
     if (selected.accessRole !== "owner" && selected.accessRole !== "writer") {
       throw new CalendarError("Pasirinktame Google kalendoriuje nėra rašymo teisės.", 403);
@@ -322,7 +284,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const finalConn = getConnection(user.id, "google");
+    const finalConn = getConnectionById(user.id, conn.id, "google");
     if (!finalConn || finalConn.id !== conn.id) {
       throw new CalendarError("Google paskyra pasikeitė. Atnaujink kalendorių.", 409);
     }
@@ -338,10 +300,11 @@ export async function DELETE(request: Request) {
   try {
     assertSameOrigin(request);
     const user = requireUserContext(request);
-    const conn = getConnection(user.id, "google");
+    const input=Object.fromEntries(new URL(request.url).searchParams);
+    const conn = googleConnection(user.id, input.connectionId);
     if (!conn) throw new CalendarError("Google paskyra neprijungta.", 409);
     const calendar = makeGoogleCalendarService(user.id, conn);
-    await calendar.remove(Object.fromEntries(new URL(request.url).searchParams));
+    await calendar.remove(input);
     return Response.json({ ok: true });
   } catch (error) {
     if (error instanceof Response) return error;
@@ -353,10 +316,10 @@ export async function PATCH(request: Request) {
   try {
     assertSameOrigin(request);
     const user = requireUserContext(request);
-    const conn = getConnection(user.id, "google");
+    const body = await request.json();
+    const conn = googleConnection(user.id, body?.connectionId);
     if (!conn) throw new CalendarError("Google paskyra neprijungta.", 409);
     const calendar = makeGoogleCalendarService(user.id, conn);
-    const body = await request.json();
     return Response.json(
       body?.scope === "series"
         ? await calendar.updateSeries(body)
@@ -372,10 +335,11 @@ export async function PUT(request: Request) {
   try {
     assertSameOrigin(request);
     const user = requireUserContext(request);
-    const conn = getConnection(user.id, "google");
+    const body=await request.json();
+    const conn = googleConnection(user.id, body?.connectionId);
     if (!conn) throw new CalendarError("Google paskyra neprijungta.", 409);
     const calendar = makeGoogleCalendarService(user.id, conn);
-    return Response.json(await calendar.respond(await request.json()));
+    return Response.json(await calendar.respond(body));
   } catch (error) {
     if (error instanceof Response) return error;
     return failure(error);

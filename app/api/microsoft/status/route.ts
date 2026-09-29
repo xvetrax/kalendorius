@@ -16,6 +16,10 @@ export async function GET(request: Request) {
       label: connection.display_label,
       colorKey: connection.color_key,
       status: connection.status,
+      connectedAt: connection.connected_at,
+      calendarConnected: connection.status === "active",
+      tasksConnected:
+        connection.status === "active" && connection.scopes.split(/\s+/).includes("Tasks.ReadWrite"),
     }));
     const active = connections.filter((connection) => connection.status === "active");
     const sole = active.length === 1 ? active[0] : null;

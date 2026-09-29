@@ -42,10 +42,25 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const identities = (db.prepare(`
+    SELECT provider, display_email FROM auth_identities WHERE user_id = ?
+  `).all(ctx.id) as { provider: string; display_email: string | null }[]).map((row) => ({
+    provider: row.provider,
+    email: row.display_email,
+  }));
+
+  const now = new Date().toISOString();
+  const activeSessionCount = (db.prepare(`
+    SELECT COUNT(*) as count FROM sessions
+    WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+  `).get(ctx.id, now) as { count: number }).count;
+
   return Response.json({
     id: user.id,
     displayName: user.display_name,
     email: user.primary_email,
     role: user.role,
+    identities,
+    activeSessionCount,
   });
 }

@@ -20,10 +20,11 @@ import {CalendarRecurrenceFields,CalendarSeriesRecurrence} from "@/app/calendar-
 import type {CalendarRecurrence} from "@/lib/calendar-recurrence";
 import {UserAccountPanel} from "@/app/(settings)/UserAccountPanel";
 import {AdminPanel} from "@/app/(settings)/AdminPanel";
+import {IntegrationAccounts, type IntegrationConnection, type IntegrationStatus} from "@/app/(settings)/IntegrationAccounts";
 
 type View = "calendar" | "tasks" | "focus";
 type Mode = "day" | "workweek" | "week" | "month";
-type IntegrationStatus = { connected: boolean; configured: boolean; account: string | null; tasksConnected?: boolean; tasksStatus?: "disconnected" | "connected" | "permission_required" | "api_unavailable" };
+type PlannerIntegrationStatus = IntegrationStatus & {tasksConnected?:boolean;tasksStatus?:"disconnected"|"connected"|"permission_required"|"api_unavailable"};
 
 const hours = Array.from({ length: 24 }, (_, i) => i);
 const dayNames = ["Pr", "An", "Tr", "Kt", "Pn", "Št", "Sk"];
@@ -65,7 +66,7 @@ export default function Planner() {
   const [taskDestination, setTaskDestination] = useState("local");
   const [taskLists,setTaskLists] = useState<TaskList[]>([]);
   const [googleTasks,setGoogleTasks] = useState(false);
-  const [googleTasksStatus,setGoogleTasksStatus] = useState<IntegrationStatus["tasksStatus"]>("disconnected");
+  const [googleTasksStatus,setGoogleTasksStatus] = useState<PlannerIntegrationStatus["tasksStatus"]>("disconnected");
   const [editingEvent,setEditingEvent]=useState<{event:CalEvent;start?:string;end?:string}|null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [view, setView] = useState<View>("calendar");
@@ -78,6 +79,9 @@ export default function Planner() {
   const [outlook, setOutlook] = useState(false); const [google, setGoogle] = useState(false);
   const [outlookReady, setOutlookReady] = useState(false); const [googleReady, setGoogleReady] = useState(false);
   const [outlookAccount, setOutlookAccount] = useState<string | null>(null); const [googleAccount, setGoogleAccount] = useState<string | null>(null);
+  const [googleIntegration,setGoogleIntegration]=useState<PlannerIntegrationStatus>({connected:false,configured:false,account:null,connections:[]});
+  const [microsoftIntegration,setMicrosoftIntegration]=useState<PlannerIntegrationStatus>({connected:false,configured:false,account:null,connections:[]});
+  const [disconnecting,setDisconnecting]=useState<string|null>(null);
   const [quickTitle, setQuickTitle] = useState(""); const [search, setSearch] = useState(""); const [project, setProject] = useState("Visi");
   const [eventDate, setEventDate] = useState<Date | null>(null); const [taskModal, setTaskModal] = useState(false);
   const [toast, setToast] = useState(""); const [loading, setLoading] = useState(true); const [mirrorFree, setMirrorFree] = useState(false);
@@ -137,26 +141,34 @@ export default function Planner() {
     const last = mode === "month" ? monthDays[41] : days[days.length - 1];
     const query = new URLSearchParams({timeMin:rangeStart.toISOString(), timeMax:addDays(last, 1).toISOString()});
     const tasksRequest = fetch("/api/tasks?envelope=1").then(responseJson<{items:Task[];warnings:string[];lists:TaskList[];cleanups:MirrorCleanup[]}>);
-    const googleStatus = () => fetch("/api/google/status").then(responseJson<IntegrationStatus>);
+    const googleStatus = () => fetch("/api/google/status").then(responseJson<PlannerIntegrationStatus>);
     const results = await Promise.allSettled([
-      fetch("/api/microsoft/status").then(responseJson<IntegrationStatus>),
+      fetch("/api/microsoft/status").then(responseJson<PlannerIntegrationStatus>),
       tasksRequest.then(googleStatus,googleStatus),
       tasksRequest,
-      fetch(`/api/microsoft/events?${query}`).then(responseJson<{items:CalEvent[]}>),
-      fetch(`/api/google/events?${query}`).then(responseJson<{items:CalEvent[]}>),
+      fetch(`/api/microsoft/events?${query}`).then(responseJson<{items:CalEvent[];errors?:Array<{accountLabel:string;message:string}>;loadedConnectionIds?:string[];activeConnectionIds?:string[]}>),
+      fetch(`/api/google/events?${query}`).then(responseJson<{items:CalEvent[];errors?:Array<{accountLabel:string;message:string}>;loadedConnectionIds?:string[];activeConnectionIds?:string[]}>),
     ] as const);
     if (version !== loadVersion.current) return;
     const [ms, gs, ts, me, ge] = results;
-    if (ms.status === "fulfilled") { setOutlook(ms.value.connected); setOutlookReady(ms.value.configured); setOutlookAccount(ms.value.account); }
-    if (gs.status === "fulfilled") { setGoogle(gs.value.connected); setGoogleReady(gs.value.configured); setGoogleAccount(gs.value.account); setGoogleTasks(Boolean(gs.value.tasksConnected)); setGoogleTasksStatus(gs.value.tasksStatus); }
+    if (ms.status === "fulfilled") { setMicrosoftIntegration(ms.value);setOutlook(ms.value.connected); setOutlookReady(ms.value.configured); setOutlookAccount(ms.value.account); }
+    if (gs.status === "fulfilled") { setGoogleIntegration(gs.value);setGoogle(gs.value.connected); setGoogleReady(gs.value.configured); setGoogleAccount(gs.value.account); setGoogleTasks(Boolean(gs.value.tasksConnected)); setGoogleTasksStatus(gs.value.tasksStatus); }
     if (ts.status === "fulfilled") {
       setTasks(ts.value.items); setTaskLists(ts.value.lists);setMirrorCleanups(ts.value.cleanups || []);
       if (ts.value.warnings.length) setToast(ts.value.warnings.join(" "));
     }
-    setEvents((previous) => [
-      ...(me.status === "fulfilled" ? me.value.items : previous.filter((event) => event.provider === "outlook")),
-      ...(ge.status === "fulfilled" ? ge.value.items : previous.filter((event) => event.provider === "google")),
-    ]);
+    setEvents(previous=>{
+      function providerItems(provider:"outlook"|"google",result:typeof me|typeof ge){
+        const old=previous.filter(event=>event.provider===provider);
+        if(result.status!=="fulfilled")return old;
+        const loaded=new Set(result.value.loadedConnectionIds??[]),active=new Set(result.value.activeConnectionIds??result.value.loadedConnectionIds??[]);
+        const retained=old.filter(event=>active.has(event.connectionId)&&!loaded.has(event.connectionId));
+        return [...retained,...result.value.items];
+      }
+      return [...providerItems("outlook",me),...providerItems("google",ge)];
+    });
+    const partialWarnings=[me,ge].flatMap(result=>result.status==="fulfilled"?(result.value.errors??[]):[]);
+    if(partialWarnings.length)setToast(partialWarnings.map(item=>`${item.accountLabel}: ${item.message}`).join(" "));
     const rejected=results.filter((r):r is PromiseRejectedResult=>r.status==="rejected");
     if (rejected.length) {
       const auth=rejected.find(r=>r.reason instanceof HttpError && r.reason.status===401);
@@ -295,11 +307,14 @@ export default function Planner() {
     const now=Date.now(),remaining=seconds>0?seconds:FOCUS_DURATION_SECONDS;
     setFocusTask(task);setSeconds(remaining);setFocusStartedAt(seconds>0?focusStartedAt??now:now);setFocusEndsAt(now+remaining*1000);setRunning(true);
   }
-  async function disconnect(provider: "microsoft" | "google") {
+  async function disconnect(provider: "microsoft" | "google", connection:IntegrationConnection) {
     const name = provider === "microsoft" ? "Microsoft" : "Google";
-    if (!window.confirm(`Atjungti ${name} paskyrą šiame įrenginyje?`)) return;
-    try { await responseJson(await fetch(`/api/${provider}/status`, { method: "DELETE" })); setToast(`${name} paskyra atjungta.`); await load(); }
+    const account=connection.label||connection.email||`${name} paskyra`;
+    if (!window.confirm(`Atjungti „${account}“ nuo šios programėlės visuose įrenginiuose? Google / Microsoft paskyra ir joje esantys duomenys nebus ištrinti.`)) return;
+    const key=`${provider}:${connection.id}`;setDisconnecting(key);
+    try { await responseJson(await fetch(`/api/${provider}/status?connectionId=${connection.id}`, { method: "DELETE" })); setToast(`${account} integracija atjungta.`); await load(); }
     catch (error) { setToast(error instanceof Error ? error.message : "Paskyros atjungti nepavyko."); }
+    finally{setDisconnecting(null);}
   }
 
   return <EventActions.Provider value={{report,edit:(event)=>setEditingEvent({event}),move:moveEvent}}><TaskActions.Provider value={{report,edit:setEditingTask,move:async (task,date) => {if (date) await planTask(task,date);else {try {const updated=await patchTask(task,{scheduled_at:null,mirror_requested:false});setToast(updated.mirror_error || "Užduotis grąžinta į neplanuotas.");} catch(error) {report(error);}}},complete:(task) => { void patchTask(task, {completed:!task.completed}).catch(report); },resize:async (task,minutes) => { try {const updated=await patchTask(task,{duration_minutes:minutes});setToast(updated.mirror_error || `Trukmė pakeista: ${durationLabel(minutes)}`);} catch(error) {report(error);} },setDragHint}}><main className={`appShell ${panelOpen ? "withPanel" : "withoutPanel"}`} data-mobile-panel={mobilePanelOpen || undefined}>
@@ -335,7 +350,7 @@ export default function Planner() {
       <p className="panelHint">{isMobile ? "Paspausk užduotį ir pasirink suplanuotą pradžią." : "Tempk užduotį į kalendorių."}<br/>Terminas ir darbo laikas – atskirai.</p>
 
     </aside>
-    {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div><h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><Connection name="Outlook + To Do" providerLabel="Microsoft" letter="O" tone="blue" connected={outlook} ready={outlookReady} account={outlookAccount} href="/api/microsoft/connect" onDisconnect={() => disconnect("microsoft")}/><Connection name="Google Calendar + Tasks" providerLabel="Google" letter="G" tone="multi" connected={google} ready={googleReady} account={googleAccount} href="/api/google/connect" onDisconnect={() => disconnect("google")}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href="/api/google/connect">Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p>{mirrorCleanups.length>0&&<><h3>Likę Outlook blokai</h3><section className="settingsBlock" aria-label="Likusių Outlook blokų valymas">{mirrorCleanups.map(item=><div className="connection" key={item.task_key}><b className="blue">O</b><div><strong>{item.title}</strong><small>{item.source==="google"?"Google Tasks":"Microsoft To Do"} užduotis pašalinta šaltinyje</small></div><button disabled={!item.can_retry||cleanupBusy===item.task_key} onClick={()=>void cleanupMirror(item)}>{cleanupBusy===item.task_key?"Valoma…":item.can_retry?"Pašalinti bloką":"Prijunk paskyrą"}</button></div>)}</section></>}<h3>Paskyra</h3><UserAccountPanel/>{me && me !== "loading" && me.role === "admin" && <><h3>Administravimas</h3><AdminPanel currentUserId={me.id}/></>}<LogoutButton/>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p><h3>Duomenys</h3><BackupPanel/></section></Modal>}
+    {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div><h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><IntegrationAccounts google={googleIntegration} microsoft={microsoftIntegration} busy={disconnecting} onDisconnect={disconnect}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href="/api/google/connect">Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p>{mirrorCleanups.length>0&&<><h3>Likę Outlook blokai</h3><section className="settingsBlock" aria-label="Likusių Outlook blokų valymas">{mirrorCleanups.map(item=><div className="connection" key={item.task_key}><b className="blue">O</b><div><strong>{item.title}</strong><small>{item.source==="google"?"Google Tasks":"Microsoft To Do"} užduotis pašalinta šaltinyje</small></div><button disabled={!item.can_retry||cleanupBusy===item.task_key} onClick={()=>void cleanupMirror(item)}>{cleanupBusy===item.task_key?"Valoma…":item.can_retry?"Pašalinti bloką":"Prijunk paskyrą"}</button></div>)}</section></>}<h3>Programėlės paskyra ir prisijungimo būdai</h3><UserAccountPanel/>{me && me !== "loading" && me.role === "admin" && <><h3>Administravimas</h3><AdminPanel currentUserId={me.id}/></>}<LogoutButton/>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p><h3>Duomenys</h3><BackupPanel/></section></Modal>}
     {taskListManagerOpen && <Modal eyebrow="UŽDUOTYS" title="Tvarkyti sąrašus" onClose={()=>setTaskListManagerOpen(false)}><TaskListManager onChanged={load} onDeleted={(key)=>setTaskDestination(current=>current===key ? "local" : current)} onListCreated={setTaskDestination}/></Modal>}
     {editingEvent && <ExistingEventEditor key={editingEvent.event.key} value={editingEvent} onClose={()=>setEditingEvent(null)} onSave={async(patch)=>{await saveEvent(editingEvent.event,patch);setEditingEvent(null);}} onRespond={async status=>{await respondEvent(editingEvent.event,status);setEditingEvent(null);}} onRefresh={()=>{void load();setEditingEvent(null);}} onDelete={async()=>{const ev=editingEvent.event;await responseJson(await fetch(`/api/${ev.provider==="outlook"?"microsoft":"google"}/events?`+new URLSearchParams({id:ev.id,calendarId:ev.calendarId,connectionId:ev.connectionId,version:ev.version}),{method:"DELETE"}));setEvents(current=>current.filter(item=>item.key!==ev.key));setEditingEvent(null);setToast(`„${ev.summary}" ištrinta.`);await load();}}/>}
     {editingTask && <TaskEditor task={editingTask} outlook={outlook} taskLists={taskLists} onDelete={()=>deleteTask(editingTask)} onClose={() => setEditingTask(null)} onSave={async (patch) => { await patchTask(editingTask, patch); setEditingTask(null); }} onProviderChanged={()=>{setToast("Google Tasks hierarchija atnaujinta.");void load();}} onMoved={(moved)=>{setTasks(current=>current.map(item=>item.key===editingTask.key?moved:item));setFocusTask(current=>current?.key===editingTask.key?moved:current);setToast("Užduotis perkelta.");void load();}}/>}
@@ -345,7 +360,6 @@ export default function Planner() {
 }
 
 function Rail({active,icon,label,badge,onClick}:{active:boolean;icon:IconName;label:string;badge?:number;onClick:()=>void}) {return <button className={active ? "active" : ""} onClick={onClick} title={label} aria-label={label} aria-current={active ? "page" : undefined}><Icon name={icon}/><span className="navLabel">{label}</span>{badge ? <i>{badge}</i> : null}</button>;}
-function Connection({ name, providerLabel, letter, tone, connected, ready, account, href, onDisconnect }: { name: string; providerLabel: string; letter: string; tone: string; connected: boolean; ready: boolean; account: string | null; href: string; onDisconnect: () => void }) { return <div className="connection"><b className={tone}>{letter}</b><div><strong>{name}</strong><small>{connected ? account || "Paskyra prijungta" : ready ? "Paruošta prijungti" : "Reikia serverio OAuth nustatymų"}</small></div><i className={connected ? "online" : ""}/>{connected ? <button onClick={onDisconnect}>Atjungti</button> : ready ? <a href={href}>Prisijungti su {providerLabel}</a> : null}</div>; }
 function TaskCard({task,onDone,onFocus}:{task:Task;onDone:()=>void;onFocus:()=>void}) {
   const actions=useContext(TaskActions);
   const pointer=useRef<{x:number;y:number}|null>(null),moved=useRef(false);
@@ -535,7 +549,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
   const modalTimeZones=timeZones.includes(timeZone)?timeZones:[timeZone,...timeZones];
   const [provider,setProvider]=useState<"outlook"|"google">(initialProvider);
   const [calendars,setCalendars]=useState<{outlook:CalList|null;google:CalList|null}>({outlook:null,google:null});
-  const [calendarId,setCalendarId]=useState("");
+  const [calendarChoice,setCalendarChoice]=useState("");
   const [calendarsLoading,setCalendarsLoading]=useState(outlook||google);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -544,9 +558,10 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
   const [allDayDates,setAllDayDates]=useState({start:startDate,end:startDate});
   const [recurrence,setRecurrence]=useState<CalendarRecurrence|null>(null);
   const createOperation=useRef<string|null>(null);
-  function writable(list:CalList|null){return list?.items.filter(cal=>cal.writable&&(list.enabled===null||list.enabled.includes(cal.id)))||[];}
+  function writable(list:CalList|null){return list?.accounts.flatMap(account=>account.items.filter(cal=>cal.writable&&account.enabled.includes(cal.id)).map(cal=>({...cal,connectionId:account.connectionId,accountLabel:account.label,version:account.version})))||[];}
   const providerCalendars=writable(calendars[provider]);
-  const calendarVersion=calendars[provider]?.version||"";
+  const selectedCalendar=providerCalendars.find(cal=>`${cal.connectionId}\u0000${cal.id}`===calendarChoice);
+  const calendarVersion=selectedCalendar?.version||"";
   useEffect(()=>{
     let active=true;
     if(!outlook&&!google){setCalendars({outlook:null,google:null});setCalendarsLoading(false);return()=>{active=false;};}
@@ -566,13 +581,13 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
     }).finally(()=>{if(active)setCalendarsLoading(false);});
     return()=>{active=false;};
   },[outlook,google]);
-  useEffect(()=>{setCalendarId(current=>providerCalendars.some(cal=>cal.id===current)?current:providerCalendars[0]?.id||"");},[provider,calendars]);
+  useEffect(()=>{setCalendarChoice(current=>providerCalendars.some(cal=>`${cal.connectionId}\u0000${cal.id}`===current)?current:providerCalendars[0]?`${providerCalendars[0].connectionId}\u0000${providerCalendars[0].id}`:"");},[provider,calendars]);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); setSaving(true); setError("");
     try {
-      if(!calendarId||!calendarVersion)throw new Error("Pasirink rašomą kalendorių.");
+      if(!selectedCalendar||!calendarVersion)throw new Error("Pasirink rašomą kalendorių.");
       const f = new FormData(e.currentTarget);
-      const common = { calendarId,calendarVersion,summary: f.get("summary"), description: f.get("description"), location: f.get("location") || undefined, showAs: f.get("showAs") || undefined, visibility: f.get("visibility") || undefined, ...(recurrence?{recurrence}:{}) };
+      const common = { calendarId:selectedCalendar.id,connectionId:selectedCalendar.connectionId,calendarVersion,summary: f.get("summary"), description: f.get("description"), location: f.get("location") || undefined, showAs: f.get("showAs") || undefined, visibility: f.get("visibility") || undefined, ...(recurrence?{recurrence}:{}) };
       let body: Record<string, unknown>;
       if (allDay) {
         const sd = String(f.get("startDate")); const ed = String(f.get("endDate")) || sd;
@@ -593,7 +608,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
     {!outlook && !google ? <div className="connectPrompt"><p>{outlookReady || googleReady ? "Prijunk kalendorių ir kurk tikrus susitikimus." : "Įrašyk OAuth nustatymus į .env failą pagal README."}</p>{outlookReady && <a href="/api/microsoft/connect">Prijungti Outlook</a>}{googleReady && <a href="/api/google/connect">Prijungti Google</a>}</div> :
     <form className="modalForm" onSubmit={submit}>
       <label>Pavadinimas<input name="summary" required autoFocus placeholder="Susitikimo pavadinimas"/></label>
-      <div className="formRow"><label>Paskyra<select name="provider" value={provider} onChange={event=>setProvider(event.target.value as "outlook"|"google")}>{outlook && <option value="outlook">Outlook Calendar</option>}{google && <option value="google">Google Calendar</option>}</select></label><label>Kalendorius<select name="calendarId" value={calendarId} disabled={calendarsLoading||!providerCalendars.length} onChange={event=>setCalendarId(event.target.value)}>{providerCalendars.map(cal=><option key={cal.id} value={cal.id}>{cal.name}{cal.primary||cal.isDefault?" · pagrindinis":""}</option>)}</select></label></div>
+      <div className="formRow"><label>Tiekėjas<select name="provider" value={provider} onChange={event=>setProvider(event.target.value as "outlook"|"google")}>{outlook && <option value="outlook">Outlook Calendar</option>}{google && <option value="google">Google Calendar</option>}</select></label><label>Paskyra ir kalendorius<select name="calendarId" value={calendarChoice} disabled={calendarsLoading||!providerCalendars.length} onChange={event=>setCalendarChoice(event.target.value)}>{providerCalendars.map(cal=>{const value=`${cal.connectionId}\u0000${cal.id}`;return <option key={value} value={value}>{cal.accountLabel} · {cal.name}{cal.primary||cal.isDefault?" · pagrindinis":""}</option>})}</select></label></div>
       {!calendarsLoading&&!providerCalendars.length&&<p className="formHint" role="status">Šiai paskyrai nepasirinktas rašomas kalendorius. Pasirink jį nustatymų skiltyje „Kalendoriai“.</p>}
       {!allDay && <label>Trukmė<select name="duration" defaultValue="30"><option value="15">15 min.</option><option value="30">30 min.</option><option value="60">1 val.</option><option value="90">1,5 val.</option></select></label>}
       <label className="onlineSwitch"><input type="checkbox" checked={allDay} onChange={e=>setAllDay(e.target.checked)}/><i/>Visos dienos įvykis</label>
@@ -605,7 +620,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
       {!allDay && <label>Dalyviai<input name="attendees" placeholder="el. paštai, atskirti kableliais"/></label>}
       <label>Aprašymas<textarea name="description" placeholder="Darbotvarkė…"/></label>
       {!allDay && <label className="onlineSwitch"><input name="online" type="checkbox" defaultChecked/><i/>Sukurti Teams / Google Meet nuorodą</label>}
-      <div className="modalActions"><button type="button" onClick={onClose}>Atšaukti</button><button className="newButton" disabled={saving||calendarsLoading||!calendarId||!calendarVersion}>{saving ? "Kuriama…" : calendarsLoading?"Kraunami kalendoriai…":"Sukurti įvykį"}</button></div>
+      <div className="modalActions"><button type="button" onClick={onClose}>Atšaukti</button><button className="newButton" disabled={saving||calendarsLoading||!selectedCalendar||!calendarVersion}>{saving ? "Kuriama…" : calendarsLoading?"Kraunami kalendoriai…":"Sukurti įvykį"}</button></div>
     </form>}
   </Modal>;
 }
@@ -730,11 +745,12 @@ function TaskEditor({ task, outlook, taskLists, onClose, onSave, onDelete, onMov
 }
 
 type CalInfo={id:string;name:string;color?:string;primary?:boolean;isDefault?:boolean;writable:boolean};
-type CalList={items:CalInfo[];enabled:string[]|null;version:string};
+type CalAccount={provider:"google"|"microsoft";connectionId:string;accountId:string;email:string|null;label:string;colorKey:string;items:CalInfo[];enabled:string[];explicit:boolean;version:string};
+type CalList={accounts:CalAccount[];errors?:Array<{connectionId:string;accountLabel:string;message:string}>;items?:CalInfo[];enabled?:string[];version?:string};
 function isCalList(value:unknown):value is CalList {
   if(!value||typeof value!=="object"||Array.isArray(value))return false;
   const list=value as Partial<CalList>;
-  return Array.isArray(list.items)&&(list.enabled===null||Array.isArray(list.enabled))&&typeof list.version==="string";
+  return Array.isArray(list.accounts)&&list.accounts.every(account=>account&&Array.isArray(account.items)&&Array.isArray(account.enabled)&&typeof account.connectionId==="string"&&typeof account.version==="string");
 }
 function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boolean;onSaved:()=>void}) {
   const [gCals,setGCals]=useState<CalList|null>(null),[mCals,setMCals]=useState<CalList|null>(null),[saving,setSaving]=useState(false),[error,setError]=useState("");
@@ -747,7 +763,7 @@ function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boole
         if(active)setList(value);
       }catch(cause){
         if(!active)return;
-        setList({items:[],enabled:[],version:""});
+        setList({accounts:[]});
         const message=cause instanceof Error?cause.message:"Kalendorių įkelti nepavyko.";
         setError(current=>current||`${label}: ${message}`);
       }
@@ -756,23 +772,21 @@ function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boole
     if(outlook)void read("microsoft","Microsoft",setMCals);
     return()=>{active=false;};
   },[google,outlook]);
-  function isEnabled(list:CalList,id:string){return list.enabled===null ? true : list.enabled.includes(id);}
-  async function toggle(provider:"google"|"microsoft",list:CalList,setList:(v:CalList)=>void,cal:CalInfo,checked:boolean){
-    const wasAll=list.enabled===null;const prev=wasAll ? list.items.map(c=>c.id) : list.enabled!;
-    const next=checked ? [...prev.filter(id=>id!==cal.id),cal.id] : prev.filter(id=>id!==cal.id);
-    const newList:CalList={...list,enabled:next};setList(newList);setSaving(true);setError("");
+  async function saveAccount(provider:"google"|"microsoft",list:CalList,setList:(v:CalList)=>void,account:CalAccount,next:string[]){
+    const previous=list;setList({...list,accounts:list.accounts.map(item=>item.connectionId===account.connectionId?{...item,enabled:next,explicit:true}:item)});setSaving(true);setError("");
     try {
-      const enabled=next.map(id=>{const c=list.items.find(x=>x.id===id);return c?{id:c.id,...(c.name?{name:c.name}:{}),...(c.color?{color:c.color}:{})}:{id};});
-      const res=await fetch(`/api/${provider==="google"?"google":"microsoft"}/calendars`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({enabled,version:list.version})});
-      if(!res.ok)throw new Error("Nepavyko išsaugoti");
+      const enabled=next.map(id=>{const c=account.items.find(x=>x.id===id);return c?{id:c.id,...(c.color?{color_override:c.color}:{})}:{id};});
+      const res=await fetch(`/api/${provider==="google"?"google":"microsoft"}/calendars`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({connectionId:account.connectionId,enabled,version:account.version})});
+      if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.error||"Nepavyko išsaugoti");}
       onSaved();
-    } catch(e){setError(e instanceof Error?e.message:"Klaida");setList(list);}
+    } catch(e){setError(e instanceof Error?e.message:"Klaida");setList(previous);}
     finally{setSaving(false);}
   }
+  async function toggle(provider:"google"|"microsoft",list:CalList,setList:(v:CalList)=>void,account:CalAccount,cal:CalInfo,checked:boolean){const next=checked?[...account.enabled.filter(id=>id!==cal.id),cal.id]:account.enabled.filter(id=>id!==cal.id);await saveAccount(provider,list,setList,account,next);}
   function renderList(provider:"google"|"microsoft",list:CalList|null,setList:(v:CalList)=>void,label:string){
     if(!list) return <p className="formHint">Kraunama…</p>;
-    if(!list.items.length) return null;
-    return <><p className="calProviderLabel">{label}</p><ul className="calendarList">{list.items.map(cal=><li key={cal.id}><label><input type="checkbox" checked={isEnabled(list,cal.id)} disabled={saving} onChange={e=>void toggle(provider,list,setList,cal,e.target.checked)}/>{cal.color&&<span className="calDot" style={{background:cal.color}}/>}<span className="calName">{cal.name}</span>{(cal.primary||cal.isDefault)&&<span className="calBadge">pagrindinis</span>}</label></li>)}</ul></>;
+    if(!list.accounts.length) return null;
+    return <section className="calendarProviderGroup"><p className="calProviderLabel">{label}</p>{list.accounts.map(account=><section className="calendarAccountGroup" key={account.connectionId}><div className="calendarAccountHead"><div><strong>{account.label}</strong>{account.email&&account.email!==account.label&&<small>{account.email}</small>}</div><div><button type="button" disabled={saving} onClick={()=>void saveAccount(provider,list,setList,account,account.items.map(item=>item.id))}>Rodyti visus</button><button type="button" disabled={saving} onClick={()=>void saveAccount(provider,list,setList,account,[])}>Slėpti visus</button></div></div><ul className="calendarList">{account.items.map(cal=><li key={`${account.connectionId}:${cal.id}`}><label><input type="checkbox" checked={account.enabled.includes(cal.id)} disabled={saving} onChange={e=>void toggle(provider,list,setList,account,cal,e.target.checked)}/>{cal.color&&<span className="calDot" style={{background:cal.color}}/>}<span className="calName">{cal.name}</span>{(cal.primary||cal.isDefault)&&<span className="calBadge">pagrindinis</span>}</label></li>)}</ul></section>)}</section>;
   }
   return <div className="calendarSelector">{error&&<p className="formError" role="alert">{error}</p>}{google&&renderList("google",gCals,setGCals,"Google")}{outlook&&renderList("microsoft",mCals,setMCals,"Microsoft / Outlook")}</div>;
 }
