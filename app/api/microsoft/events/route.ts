@@ -101,8 +101,10 @@ export async function GET(request: Request) {
       // through the /me/calendarView default path (id "primary") so its events
       // keep the "primary" calendar identity older clients expect.
       const calendars=catalog.explicit?catalog.items.filter(item=>enabled.has(item.id)).map(item=>({id:item.isDefault&&catalog.defaultAlias?"primary":item.id,name:item.name,color:item.color})):undefined;
+      const defaultColor=!catalog.explicit?catalog.items.find(item=>item.isDefault)?.color:undefined;
       await ensureDefaultCalendarIdentity(user.id,conn,conn.provider_account_id,String(conn.id),calendars);
-      const items=await makeMicrosoftCalendarService(user.id,conn).list(input.get("timeMin")||new Date().toISOString(),input.get("timeMax")||new Date(Date.now()+7*864e5).toISOString(),calendars,String(conn.id));
+      const rawItems=await makeMicrosoftCalendarService(user.id,conn).list(input.get("timeMin")||new Date().toISOString(),input.get("timeMax")||new Date(Date.now()+7*864e5).toISOString(),calendars,String(conn.id));
+      const items=defaultColor?rawItems.map(event=>event.calendarColor?event:{...event,calendarColor:defaultColor}):rawItems;
       if(!getConnectionById(user.id,conn.id,"microsoft"))throw new CalendarError("Microsoft paskyra pasikeitė. Atnaujink kalendorių.",409);
       return {connectionId:String(conn.id),items};
     });

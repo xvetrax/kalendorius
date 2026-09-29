@@ -56,7 +56,9 @@ export async function GET(request: Request) {
     const settled=await allSettledLimited(connections,3,async conn=>{
       const catalog=await googleCalendarCatalogForConnection(user.id,conn),enabled=new Set(catalog.enabled);
       const calendars=catalog.explicit?catalog.items.filter(item=>enabled.has(item.id)).map(item=>({id:item.id,name:item.name,color:item.color})):undefined;
-      const items=await makeGoogleCalendarService(user.id,conn).list(input.get("timeMin")||new Date().toISOString(),input.get("timeMax")||new Date(Date.now()+7*864e5).toISOString(),calendars,String(conn.id));
+      const primaryColor=!catalog.explicit?catalog.items.find(item=>item.primary)?.color:undefined;
+      const rawItems=await makeGoogleCalendarService(user.id,conn).list(input.get("timeMin")||new Date().toISOString(),input.get("timeMax")||new Date(Date.now()+7*864e5).toISOString(),calendars,String(conn.id));
+      const items=primaryColor?rawItems.map(event=>event.calendarColor?event:{...event,calendarColor:primaryColor}):rawItems;
       if(!getConnectionById(user.id,conn.id,"google"))throw new CalendarError("Google paskyra pasikeitė. Atnaujink kalendorių.",409);
       return {connectionId:String(conn.id),items};
     });

@@ -10,7 +10,7 @@ export function EventBlock({event,compact=false,segment,continuesBefore=false,co
   const [offset,setOffset]=useState<{x:number;y:number}|null>(null),[preview,setPreview]=useState<number|null>(null),[saving,setSaving]=useState(false);
   const gesture=useRef<{x:number;y:number;resize:boolean;next:number;grab:number}|null>(null),moved=useRef(false);
   async function commit(from:Date,to:Date) {setSaving(true);try {await actions.move(event,from,to);} finally {setSaving(false);setOffset(null);setPreview(null);}}
-  if (compact) return <button className={`allDayEvent ${event.provider}${continuesBefore?" cont-before":""}${continuesAfter?" cont-after":""}`} onClick={()=>actions.edit(event)} title={event.summary}>{continuesBefore ? "← " : ""}{event.recurring ? "↻ " : ""}{event.summary}{continuesAfter ? " →" : ""}</button>;
+  if (compact) return <button className={`allDayEvent ${event.provider}${continuesBefore?" cont-before":""}${continuesAfter?" cont-after":""}`} style={event.calendarColor ? {borderLeftColor:event.calendarColor} : undefined} onClick={()=>actions.edit(event)} title={event.summary}>{continuesBefore ? "← " : ""}{event.recurring ? "↻ " : ""}{event.summary}{continuesAfter ? " →" : ""}</button>;
   if (!segment) return null;
   const gestureSafe=event.editable && segment.gestureSafe;
   return <div className={`eventBlock calendarEvent ${event.provider} ${event.editable ? "editable" : "readOnly"}`} data-short={segment.height<45 || undefined} data-tiny={segment.height<24 || undefined} style={{...segmentStyle(segment,preview),...(event.calendarColor ? {borderLeftColor:event.calendarColor} : {}),transform:offset ? `translate(${offset.x}px,${offset.y}px)` : undefined,zIndex:offset ? 12 : undefined,pointerEvents:offset ? "none" : undefined}}>
