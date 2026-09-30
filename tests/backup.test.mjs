@@ -32,13 +32,13 @@ after(() => {
 });
 
 describe("backup", { concurrency: false }, () => {
-  let db, createBackup, createUserExport, restoreBackup, BackupError, GET, POST, readBodyWithinLimit;
+  let db, createBackup, createUserExport, restoreBackup, BackupError, GET, POST, PUT, readBodyWithinLimit;
   let testUserId;
 
   before(async () => {
     ({ db } = await import("../lib/db-multi.ts"));
     ({ BackupError, createBackup, createUserExport, restoreBackup } = await import("../lib/backup.ts"));
-    ({ GET, POST, readBodyWithinLimit } = await import("../app/api/backup/route.ts"));
+    ({ GET, POST, PUT, readBodyWithinLimit } = await import("../app/api/backup/route.ts"));
   });
 
   beforeEach(() => {
@@ -279,7 +279,7 @@ describe("backup", { concurrency: false }, () => {
     await assert.rejects(() => readBodyWithinLimit(request, 5), error => error instanceof BackupError && error.status === 413);
   });
 
-  it("uses GET for downloads, POST for restore, and enforces session/origin checks", async () => {
+  it("supports legacy and browser backup contracts while enforcing session/origin checks", async () => {
     seedUserTables();
 
     // GET without session → 401
@@ -311,6 +311,14 @@ describe("backup", { concurrency: false }, () => {
     assert.match(download.headers.get("content-disposition") ?? "", /planner-backup-/);
     const downloaded = Buffer.from(await download.arrayBuffer());
 
+    // Browser contract: POST JSON creates the same full backup while retaining
+    // an Origin-bearing request that cannot be triggered by a plain link.
+    const browserDownload = await POST(new Request("http://localhost:3000/api/backup", {
+      method: "POST", headers: { origin: "http://localhost:3000", cookie: sessionCookie, "content-type": "application/json" }, body: JSON.stringify({ type: "full" }),
+    }));
+    assert.equal(browserDownload.status, 200);
+    assert.match(browserDownload.headers.get("content-disposition") ?? "", /planner-backup-/);
+
     // GET ?type=export as admin → 200
     const exportDownload = await GET(new Request("http://localhost:3000/api/backup?type=export", {
       method: "GET", headers: { origin: "http://localhost:3000", cookie: sessionCookie },
@@ -330,6 +338,19 @@ describe("backup", { concurrency: false }, () => {
       method: "POST", headers: { origin: "http://localhost:3000", cookie: sessionCookie, "content-type": "application/octet-stream" }, body: downloaded,
     }));
     assert.equal(restored.status, 200);
+    assert.equal(db.prepare("SELECT title FROM tasks").get()?.title, "Backup task");
+
+    // Browser contract restores with PUT so POST JSON remains unambiguous.
+    const browserToken = randomBytes(32).toString("hex");
+    db.prepare(
+      "INSERT INTO sessions (token_hash, user_id, expires_at, last_used_at) VALUES (?, ?, ?, ?)"
+    ).run(createHash("sha256").update(browserToken).digest("hex"), testUserId, expiresAt, new Date().toISOString());
+    const browserCookie = `planner_session=${browserToken}`;
+    db.prepare("UPDATE tasks SET title = ?").run("Changed before browser restore");
+    const browserRestored = await PUT(new Request("http://localhost:3000/api/backup", {
+      method: "PUT", headers: { origin: "http://localhost:3000", cookie: browserCookie, "content-type": "application/octet-stream" }, body: downloaded,
+    }));
+    assert.equal(browserRestored.status, 200);
     assert.equal(db.prepare("SELECT title FROM tasks").get()?.title, "Backup task");
 
     // GET full backup as non-admin → 403

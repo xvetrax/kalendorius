@@ -32,11 +32,7 @@ export async function readBodyWithinLimit(request: Request, maxBytes = MAX_BACKU
   return Buffer.concat(chunks, total);
 }
 
-/**
- * GET /api/backup         — admin-only full database backup download
- * GET /api/backup?type=export — any authenticated user; exports only their data
- */
-export async function GET(request: Request) {
+async function downloadBackup(request: Request, requestedType?: "full" | "export") {
   let user;
   try {
     user = requireUserContext(request);
@@ -48,7 +44,11 @@ export async function GET(request: Request) {
     assertSameOrigin(request);
 
     const url = new URL(request.url);
-    const type = url.searchParams.get("type");
+    const type = requestedType ?? url.searchParams.get("type") ?? "full";
+
+    if (type !== "full" && type !== "export") {
+      return Response.json({ error: "Neatpažintas kopijos tipas." }, { status: 400 });
+    }
 
     if (type === "export") {
       // Any authenticated user may export their own data
@@ -85,9 +85,17 @@ export async function GET(request: Request) {
 }
 
 /**
- * POST /api/backup — admin-only full restore (body: raw SQLite file bytes)
+ * GET /api/backup              — legacy/admin full database backup download
+ * GET /api/backup?type=export  — legacy authenticated user's data export
+ * POST /api/backup JSON        — browser download request (`full` or `export`)
+ * POST /api/backup SQLite      — legacy admin restore
+ * PUT /api/backup SQLite       — browser admin restore
  */
-export async function POST(request: Request) {
+export async function GET(request: Request) {
+  return downloadBackup(request);
+}
+
+async function restoreBackupRequest(request: Request) {
   let user;
   try {
     user = requireUserContext(request);
@@ -109,4 +117,23 @@ export async function POST(request: Request) {
   } catch (error) {
     return backupError(error);
   }
+}
+
+export async function POST(request: Request) {
+  if (request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+    try {
+      const body = await request.json() as { type?: unknown };
+      if (body.type !== "full" && body.type !== "export") {
+        return Response.json({ error: "Neatpažintas kopijos tipas." }, { status: 400 });
+      }
+      return downloadBackup(request, body.type);
+    } catch (error) {
+      return backupError(error);
+    }
+  }
+  return restoreBackupRequest(request);
+}
+
+export async function PUT(request: Request) {
+  return restoreBackupRequest(request);
 }
