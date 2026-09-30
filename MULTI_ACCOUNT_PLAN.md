@@ -1,6 +1,6 @@
 # Kelių Google ir Microsoft paskyrų įgyvendinimo planas
 
-Atnaujinta: 2026-09-29. Būsena: **MA-7 baigtas** — visi kelių paskyrų Calendar + Tasks keliai įgyvendinti; liko MA-8 testavimas ir patikra.
+Atnaujinta: 2026-09-30. Būsena: **MA-8a baigtas** — automatinė regresija, Docker ir backup roundtrip praėjo; liko MA-8b gyvų paskyrų priėmimas.
 
 ## Įgyvendinimo būsena
 
@@ -14,8 +14,8 @@ Atnaujinta: 2026-09-29. Būsena: **MA-7 baigtas** — visi kelių paskyrų Calen
 - [x] **MA-5:** vieninga spalvų sistema — `calendarColor` ant įvykių per visus rodinius (dienos, savaitės, mėnesio, visos dienos blokai); primary/default kalendoriaus atsarginė spalva neeksplicitiniam pasirinkimui.
 - [x] **MA-6:** jungčiai priskirtas įvykių kūrimas ir visos mutacijos (PATCH/PUT/DELETE) tikrina `connectionId`; `ExistingEventEditor` rodo kalendoriaus pavadinimą.
 - [x] **MA-7:** visi užduočių maršrutai naudoja jungčiai priskirtus gateway; sąrašų paskirtys rodo paskyros etiketę; mutacijos tikrina account ir connection ID; Outlook blokui pasirenkama Microsoft paskyra, o blokas kuriamas jos numatytajame kalendoriuje.
-- [x] **Patikra:** `npm run typecheck`, 310/310 testų ir `npm run build` praėjo po MA-7 (2026-09-29).
-- [ ] **Kitas žingsnis — MA-8:** pilna automatinė regresija, Docker bei backup roundtrip, gyvų paskyrų priėmimas.
+- [x] **MA-8a:** `npm run typecheck`, 310/310 Node testų, produkcinis build, smoke, Calendar / Tasks HTTP patikros ir 45/45 Playwright scenarijai praėjo. `npm run test:docker` patvirtino image build, health, keturių OAuth jungčių pilnos kopijos atkūrimą ir pakartotinį paleidimą su tais pačiais duomenimis (2026-09-30).
+- [ ] **Kitas žingsnis — MA-8b:** kontroliuojamas priėmimas su gyvomis Google ir Microsoft paskyromis bei rezultato dokumentavimas.
 
 ## Produkto tikslas
 
@@ -53,13 +53,11 @@ UI privalo šias sąvokas įvardyti skirtingai. Veiksmas **Pridėti kalendoriaus
 - Google ir Microsoft prieigos žetonų talpyklos viduje jau raktinamos pagal jungties ID.
 - Užduoties paskirties pasirinkimas jau rodo tiekėjo sąrašus.
 
-### Kas šiuo metu riboja
+### Kas dar nepatvirtinta
 
-- Nustatymų UI dar neskaito `connections` sąrašo ir neturi atskirų kiekvienos jungties veiksmų.
-- Kalendorių katalogo, įvykių ir užduočių gateway dar naudoja laikiną vienos aktyvios jungties metodą; radęs kelias jis saugiai sustoja.
-- Kalendorių katalogo maršrutai dar neskaito normalizuotų pasirinkimų ir neagreguoja kelių jungčių rezultatų.
-- Užduočių paslauga kiekvienam tiekėjui turi vieną aktyvų gateway.
-- Dienos / savaitės vaizde kalendoriaus spalva naudojama tik kairiam kraštui; mėnesio ir visos dienos rodiniai jos pilnai nenaudoja.
+- Tikrų Google ir Microsoft OAuth langų, leidimų atšaukimo ir tiekėjų klaidų elgsena su dviem kiekvieno tiekėjo paskyromis.
+- Gyvas kiekvienos paskyros Calendar / Tasks CRUD, Outlook bloko nukreipimas ir pasirinkimų išlikimas kitame įrenginyje.
+- Tiekėjų išorinių versijų konfliktai bei ribojimo (`429`) atsakymai šiame etape patikrinti sintetiškai, bet dar ne gyvose paskyrose.
 
 ## Nekintamos saugumo taisyklės
 
@@ -308,7 +306,7 @@ Kiekvienas užbaigtas žingsnis yra atskiras patikrintas commit ir push. Pilnas 
 9. [x] **MA-6:** jungčiai priskirtas įvykių kūrimas ir visos mutacijos.
 10. [x] **MA-7a:** kelių paskyrų užduočių skaitymas ir paskirties pasirinkimas.
 11. [x] **MA-7b:** užduočių mutacijos, Google Tasks consent ir Outlook blokai.
-12. **MA-8a:** pilna automatinė regresija, Docker bei backup roundtrip.
+12. [x] **MA-8a:** pilna automatinė regresija, Docker bei backup roundtrip.
 13. **MA-8b:** kontroliuojama gyvų paskyrų patikra ir dokumentacija.
 
 ## Išleidimo vartai

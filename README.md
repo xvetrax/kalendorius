@@ -7,6 +7,8 @@ Nemokama, kelių naudotojų, savarankiškai talpinama „Morgen“ alternatyva. 
 Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](PRODUCT_PLAN.md). Tai dar kuriamas MVP; vien sėkmingas build nepatvirtina gyvų integracijų patikimumo.
 
 - rodyti „Outlook“ ir „Google Calendar“ įvykius vienoje savaitėje;
+- vienoje darbo erdvėje prijungti kelias Google ir kelias Microsoft integracijos paskyras, jų kalendorius rodyti kartu ir kiekvieną kalendorių atskirai paslėpti arba parodyti;
+- kuriant įvykį ar užduotį pasirinkti konkrečios paskyros kalendorių arba sąrašą, o Outlook užduoties blokui — konkrečią Microsoft paskyrą;
 - kurti Google / Outlook įvykius pasirinktame rašomame kalendoriuje; valdyti pavadinimą, aprašymą, vietą, laiką arba visos dienos datas, IANA laiko zoną, matomumą, laisvas / užimtas būseną ir priminimus;
 - perkelti savo organizuojamus Google / Outlook įvykius tarp dienų, keisti trukmę pele ar klaviatūra, konvertuoti nepasikartojančius įvykius tarp laiko ir visos dienos režimų bei redaguoti detales;
 - kurti kasdien, kas savaitę, kas mėnesį ar kas metus pasikartojančius įvykius ir keisti vieną egzempliorių arba visos serijos kartojimo taisyklę;
@@ -61,10 +63,11 @@ npm run test:smoke
 npm run test:calendars
 npm run test:tasks
 npm run test:e2e
+npm run test:docker
 npm start
 ```
 
-`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-09-27 pilnas ciklas baigtas su 292/292 Node testais ir 44/44 Playwright scenarijais.
+`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-09-30 pilnas ciklas baigtas su 310/310 Node testų ir 45/45 Playwright scenarijų.
 
 `test:smoke` paleidžia tik lokalią produkcinę kopiją su laikina DB ir neprijungtomis integracijomis. Tikrina CSS / JS / favicon, OAuth klaidas, CSRF, atjungimo API bei užduoties sukūrimą, planavimą, perkėlimą, trukmę, išplanavimą ir užbaigimą. Tikrina, kad terminas nekinta ir pasenusi plano versija atmetama. Užbaigęs pašalina savo testinę DB.
 
@@ -73,6 +76,8 @@ npm start
 `test:tasks` tikrina produkcinius vietinių, Google Tasks ir Microsoft To Do užduočių maršrutus: kūrimą, planavimą, perkėlimą, trukmę, užbaigimą, atkūrimą ir ištrynimą. Naudojama laikina DB ir tik sintetiniai tiekėjai; išorinis tinklas užblokuotas. `node tests/tasks-smoke.mjs --preview` palieka tą kopiją `http://127.0.0.1:3102` naršyklės patikrai iki Ctrl+C.
 
 `test:e2e` po produkcinio build parenka laisvą vietinį prievadą, sukuria unikalią laikiną SQLite bazę ir paleidžia atskirą produkcinį serverį. Testai niekada neperima jau veikiančio `:3000` serverio. Baigus ar testams nepraėjus laikinas katalogas su DB pašalinamas. Rinkinys tikrina vietinių užduočių pilną CRUD ir išlikimą, nesėkmingo kūrimo rollback, matomus tinklo klaidų pranešimus, lėtą atsakymą, tikrą vienos dienos mobilų tinklelį, prieinamus formų laukus ir konkrečią 2026-03-29 Vilniaus 23 valandų DST dieną. Tiesioginis `playwright test` sąmoningai atmetamas; naudok npm komandą, kad testai negalėtų paliesti naudotojo DB.
+
+`test:docker` sukuria laikiną produkcinį image ir duomenų katalogą, įrašo dvi Google bei dvi Microsoft jungtis, patikrina health endpoint, pilnos kopijos atsisiuntimą, duomenų pakeitimo rollback per atkūrimą ir antrą konteinerio paleidimą su ta pačia baze. Testas nenaudoja `.env` paslapčių ar veikiančio `:3000` serverio ir pabaigoje pašalina savo konteinerį, image bei laikinus duomenis. Jam reikia veikiančio Docker daemon.
 
 ## Atsarginės kopijos ir atkūrimas
 
@@ -92,14 +97,15 @@ Nustatymai atskiria trūkstamą leidimą nuo išjungtos Tasks API. Įjungęs API
 
 Automatiniai testai naudoja sintetinius tiekėjus, todėl prieš galutinį išleidimą dar atliekama kontroliuojama patikra su tikromis Google ir Microsoft paskyromis. Jai naudok atskirus testinius kalendorius ir užduočių sąrašus, pavyzdžiui, **Dienos planas — testas**. Nekviesk kitų žmonių, kol nepatvirtinta pagrindinė kūrimo ir šalinimo eiga.
 
-1. Paleisk programėlę, atverk **Nustatymai** ir prijunk Google bei Microsoft paskyras oficialiuose jų prisijungimo puslapiuose. Prisijungimo duomenys programėlei neperduodami; ji gauna OAuth leidimą ir vietoje saugo užšifruotą atnaujinimo žetoną.
-2. Google paskyrai pirmiausia patikrink Calendar ryšį, tada pasirink **Suteikti Tasks leidimą**. Patvirtink, kad po pakartotinio sutikimo veikia ir kalendorius, ir Google Tasks.
-3. Kiekvieno tiekėjo testiniame kalendoriuje sukurk laiko, visos dienos ir savaitinį pasikartojantį įvykį. Atnaujink puslapį, palygink tiekėjo kalendoriuje, pakeisk vieną egzempliorių bei visos serijos taisyklę ir galiausiai pašalink testinius įvykius.
-4. Atskirai patikrink laiko zoną, priminimą, laisvas / užimtas būseną, dalyvavimo atsakymą ir Meet / Teams nuorodą. Dalyvių testui naudok tik savo kontroliuojamą adresą.
-5. Google Tasks ir Microsoft To Do testiniuose sąrašuose sukurk, pervadink, suplanuok, perkelk, užbaik, atkurk ir pašalink užduotį. Google patikrink pavaldumą bei eilę; Microsoft — priminimą, kartojimą ir žingsnius.
-6. Užduočiai įjunk pasirenkamą Outlook `Free` bloką, perplanuok ją ir patikrink, kad blokas atnaujinamas be dublikato. Pašalink šaltinio užduotį kitoje programoje ir nustatymuose paleisk našlaičio bloko sutvarkymą.
-7. Patikrink konfliktą: atverk tą patį įvykį arba užduotį programėlėje, pakeisk jį tiekėjo programoje ir pabandyk išsaugoti seną programėlės versiją. Programa turi paprašyti atnaujinti duomenis, o ne tyliai perrašyti naujesnį pakeitimą.
-8. Atjunk abi paskyras ir patikrink, kad vietinės užduotys tebėra pasiekiamos. Baigęs ištrink testinius kalendorius, sąrašus ir likusius įrašus tiekėjų programose.
+1. Atverk **Nustatymai** ir per **Pridėti paskyrą** prijunk dvi Google bei dvi Microsoft integracijos paskyras. Prisijungimo duomenys programėlei neperduodami; ji gauna OAuth leidimą ir vietoje saugo užšifruotą atnaujinimo žetoną.
+2. Kiekvienai Google paskyrai patikrink Calendar ryšį ir, jei reikia, tai konkrečiai paskyrai pasirink **Suteikti Tasks leidimą**. Pakartotinis sutikimas negali pakeisti kitos Google jungties.
+3. Kiekvienoje paskyroje sukurk atskirą testinį kalendorių bei užduočių sąrašą. Programėlėje po vieną kalendorių paslėpk ir parodyk, perkrauk puslapį ir patikrink pasirinkimus kitame įrenginyje.
+4. Visose keturiose paskyrose sukurk, pakeisk ir pašalink įvykį. Bent vienoje sukurk visos dienos ir savaitinį pasikartojantį įvykį; patikrink laiko zoną, priminimą, laisvas / užimtas būseną ir Meet / Teams nuorodą.
+5. Visų keturių paskyrų testiniuose sąrašuose sukurk, suplanuok, perkelk tos pačios paskyros sąrašuose, užbaik, atkurk ir pašalink užduotį. Google patikrink pavaldumą bei eilę; Microsoft — priminimą, kartojimą ir žingsnius.
+6. Užduočiai pasirink vieną iš Microsoft paskyrų ir įjunk Outlook `Free` bloką. Perplanuok užduotį, patikrink, kad blokas atnaujinamas tik pasirinktos paskyros numatytajame kalendoriuje ir nesidubliuoja.
+7. Vienai paskyrai atšauk leidimą pas tiekėją. Kitos trys paskyros turi likti veikiančios, o dalinė klaida turi įvardyti paveiktą paskyrą. Po to atnaujink tik tos jungties leidimą.
+8. Patikrink konfliktą: atverk tą patį įvykį arba užduotį programėlėje, pakeisk jį tiekėjo programoje ir pabandyk išsaugoti seną programėlės versiją. Programa turi paprašyti atnaujinti duomenis, o ne tyliai perrašyti naujesnį pakeitimą.
+9. Atjunk vieną integracijos paskyrą ir patikrink, kad likusios trys bei vietinės užduotys tebėra pasiekiamos. Baigęs ištrink testinius kalendorius, sąrašus ir likusius įrašus tiekėjų programose.
 
 Gyvos patikros rezultatai registruojami [produkto plane](PRODUCT_PLAN.md), nerašant žetonų, OAuth kodų ar asmeninių įvykių turinio. Jei tiekėjas elgiasi kitaip nei sintetinė API, klaida pirmiausia atkuriama siauru testu, tada pataisoma atskiru commit’u.
 

@@ -54,7 +54,7 @@ test("Google due-date task appears on its day, opens in month view and shows a d
   await page.route("**/api/google/events**",route=>route.fulfill({json:{items:[]}}));await page.route("**/api/microsoft/events**",route=>route.fulfill({json:{items:[]}}));
   await page.goto("/");await page.getByRole("button",{name:"Diena",exact:true}).click();
   await expect(page.locator(".allDayDueTask").filter({hasText:"Google dienos užduotis"})).toBeVisible();
-  const handle=page.locator(".taskCard").filter({hasText:"Google dienos užduotis"}).locator("em"),lane=page.locator(`.dayLane[data-day="${day}"]`),targetSlot=page.getByRole("button",{name:`${day} 10:00 – naujas įvykis`});
+  const handle=page.locator(".taskCard").filter({hasText:"Google dienos užduotis"}).locator(".taskDetailsButton"),lane=page.locator(`.dayLane[data-day="${day}"]`),targetSlot=page.getByRole("button",{name:`${day} 10:00 – naujas įvykis`});
   const handleBox=await handle.boundingBox(),targetBox=await targetSlot.boundingBox();expect(handleBox).toBeTruthy();expect(targetBox).toBeTruthy();
   await page.mouse.move(handleBox!.x+handleBox!.width/2,handleBox!.y+handleBox!.height/2);await page.mouse.down();await page.mouse.move(targetBox!.x+targetBox!.width/2,targetBox!.y+targetBox!.height/2,{steps:8});
   await expect(lane.locator(".dropHint")).toBeVisible();await page.mouse.move(2,2);await page.mouse.up();await expect(page.locator(".dropHint")).toHaveCount(0);
