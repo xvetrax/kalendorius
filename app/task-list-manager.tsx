@@ -7,6 +7,8 @@ export type ManagedTaskList = {
   key: string;
   source: Source;
   account_id: string;
+  connection_id?: number;
+  account_label?: string;
   list_id: string;
   name: string;
   writable: boolean;
@@ -16,7 +18,7 @@ export type ManagedTaskList = {
   can_delete?: boolean;
   management_reason?: string;
 };
-type Account = { source: Source; account_id: string };
+type Account = { source: Source; account_id: string; connection_id:number|null; label: string };
 type ListResponse = { lists: ManagedTaskList[]; accounts: Account[]; warnings: string[] };
 type DeletePreview = { list: ManagedTaskList; task_count: number; confirmation: string | null; blocked_reason?: string };
 
@@ -113,7 +115,7 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
     setRenaming(true); setError("");
     const version = ++requestVersion.current;
     try {
-      await api<ManagedTaskList>("/api/task-lists", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: list.source, account_id: list.account_id, list_id: list.list_id, version: list.version, name: renameName.trim() }) });
+      await api<ManagedTaskList>("/api/task-lists", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: list.source, account_id: list.account_id, connection_id:list.connection_id, list_id: list.list_id, version: list.version, name: renameName.trim() }) });
       if (!active.current || version !== requestVersion.current) return;
       setRenameKey(null);
       await onChanged();
@@ -128,7 +130,7 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
   async function loadPreview(list: ManagedTaskList, notice = "") {
     setPreviewLoading(true); setError(notice); setPreview(null); setTypedName(""); setRenameKey(null);
     const version = ++requestVersion.current;
-    const query = new URLSearchParams({ source: list.source, account_id: list.account_id, list_id: list.list_id });
+    const query = new URLSearchParams({ source: list.source, account_id: list.account_id, ...(list.connection_id?{connection_id:String(list.connection_id)}:{}), list_id: list.list_id });
     try {
       const result = await api<DeletePreview>(`/api/task-lists?${query}`);
       if (active.current && version === requestVersion.current) setPreview(result);
@@ -145,7 +147,7 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
     const deletingPreview = preview;
     const version = ++requestVersion.current;
     try {
-      await api<{ ok: true }>("/api/task-lists", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: deletingPreview.list.source, account_id: deletingPreview.list.account_id, list_id: deletingPreview.list.list_id, version: deletingPreview.list.version, confirmation: deletingPreview.confirmation, confirm_name: typedName }) });
+      await api<{ ok: true }>("/api/task-lists", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: deletingPreview.list.source, account_id: deletingPreview.list.account_id, connection_id:deletingPreview.list.connection_id, list_id: deletingPreview.list.list_id, version: deletingPreview.list.version, confirmation: deletingPreview.confirmation, confirm_name: typedName }) });
       if (!active.current || version !== requestVersion.current) return;
       onDeleted(deletingPreview.list.key);
       setPreview(null); setTypedName("");
@@ -171,7 +173,7 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
     {warnings.map((warning) => <p className="formHint" role="status" key={warning}>{warning}</p>)}
     <form className="modalForm taskListCreate" onSubmit={create}>
       <h3>Kurti sąrašą</h3>
-      <div className="formRow"><label>Paskyra<select value={account} onChange={(event) => setAccount(event.target.value)} disabled={busy || createNeedsRefresh || !accounts.length}>{accounts.length ? accounts.map((item) => <option value={accountKey(item)} key={accountKey(item)}>{providerName(item.source)}</option>) : <option>Nėra prijungtų paskyrų</option>}</select></label><label>Pavadinimas<input value={newName} onChange={(event) => setNewName(event.target.value)} required maxLength={255} disabled={busy || createNeedsRefresh || !accounts.length} placeholder="Pvz., Namų darbai"/></label></div>
+      <div className="formRow"><label>Paskyra<select value={account} onChange={(event) => setAccount(event.target.value)} disabled={busy || createNeedsRefresh || !accounts.length}>{accounts.length ? accounts.map((item) => <option value={accountKey(item)} key={accountKey(item)}>{item.label} · {providerName(item.source)}</option>) : <option>Nėra prijungtų paskyrų</option>}</select></label><label>Pavadinimas<input value={newName} onChange={(event) => setNewName(event.target.value)} required maxLength={255} disabled={busy || createNeedsRefresh || !accounts.length} placeholder="Pvz., Namų darbai"/></label></div>
       <label className="taskListChoice"><input type="checkbox" checked={useNewList} onChange={(event) => setUseNewList(event.target.checked)} disabled={busy || createNeedsRefresh || !accounts.length}/>Naudoti šį sąrašą naujoms užduotims</label>
       <div className="modalActions"><button className="newButton" disabled={busy || createNeedsRefresh || !accounts.length}>{creating ? "Kuriama…" : "Sukurti sąrašą"}</button></div>
     </form>
@@ -181,7 +183,7 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
         const mayRename = list.can_rename === true && !list.stale;
         const mayDelete = list.can_delete === true && !list.stale;
         const reason = list.management_reason || (list.stale ? "Sąrašo duomenys pasenę — atnaujink prieš tvarkydamas." : !list.writable ? "Šis sąrašas skirtas tik skaitymui." : "Šio sąrašo tvarkyti negalima.");
-        return <article className="taskListRow" key={list.key}><div><strong>{list.name}</strong><small>{providerName(list.source)}</small>{(!mayRename || !mayDelete) && <small className="taskListReason">{reason}</small>}</div><div className="taskListActions"><button type="button" disabled={!mayRename || busy} onClick={() => { setRenameKey(list.key); setRenameName(list.name); setPreview(null); }}>Pervadinti</button><button type="button" className="dangerButton" disabled={!mayDelete || busy} onClick={() => void loadPreview(list)}>Šalinti</button></div>
+        return <article className="taskListRow" key={list.key}><div><strong>{list.name}</strong><small>{list.account_label ? `${list.account_label} · ` : ""}{providerName(list.source)}</small>{(!mayRename || !mayDelete) && <small className="taskListReason">{reason}</small>}</div><div className="taskListActions"><button type="button" disabled={!mayRename || busy} onClick={() => { setRenameKey(list.key); setRenameName(list.name); setPreview(null); }}>Pervadinti</button><button type="button" className="dangerButton" disabled={!mayDelete || busy} onClick={() => void loadPreview(list)}>Šalinti</button></div>
           {renameKey === list.key && <form className="taskListInlineForm" onSubmit={(event) => void rename(event, list)}><label>Pavadinimas<input value={renameName} onChange={(event) => setRenameName(event.target.value)} required maxLength={255} disabled={busy}/></label><div><button type="button" disabled={busy} onClick={() => setRenameKey(null)}>Atšaukti</button><button className="newButton" disabled={busy}>{renaming ? "Saugoma…" : "Išsaugoti"}</button></div></form>}
         </article>;
       })}

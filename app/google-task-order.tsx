@@ -6,7 +6,7 @@ import type {GoogleTaskOrderSnapshot,Task} from "@/lib/task-service";
 class OrderError extends Error {constructor(message:string,readonly status:number){super(message);}}
 function referenceFor(task:Task){
   if(!task.account_id||!task.list_id)throw new Error("Trūksta Google Tasks užduoties nuorodos. Atnaujink užduočių sąrašą.");
-  return {source:"google" as const,account_id:task.account_id,list_id:task.list_id,id:String(task.id)};
+  return {source:"google" as const,account_id:task.account_id,...(task.connection_id?{connection_id:String(task.connection_id)}:{}),list_id:task.list_id,id:String(task.id)};
 }
 function message(value:unknown,fallback:string){return value&&typeof value==="object"&&"error" in value&&typeof value.error==="string"?value.error:fallback;}
 async function readSnapshot(response:Response):Promise<GoogleTaskOrderSnapshot>{

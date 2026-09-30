@@ -10,7 +10,7 @@ const weekdayLabels:Record<typeof recurrenceWeekdays[number],string>={monday:"Pr
 
 function referenceFor(task:Task) {
   if(!task.account_id||!task.list_id)throw new Error("Trūksta Microsoft To Do užduoties nuorodos. Atnaujink užduočių sąrašą.");
-  return {source:"microsoft" as const,account_id:task.account_id,list_id:task.list_id,id:String(task.id)};
+  return {source:"microsoft" as const,account_id:task.account_id,...(task.connection_id?{connection_id:String(task.connection_id)}:{}),list_id:task.list_id,id:String(task.id)};
 }
 function message(value:unknown,fallback:string){return value&&typeof value==="object"&&"error" in value&&typeof value.error==="string"?value.error:fallback;}
 async function readSnapshot(response:Response):Promise<Snapshot>{

@@ -1,6 +1,6 @@
 # Kelių Google ir Microsoft paskyrų įgyvendinimo planas
 
-Atnaujinta: 2026-09-29. Būsena: **prioritetinis etapas prieš PWA**, duomenų ir OAuth paslaugos pagrindas įgyvendintas.
+Atnaujinta: 2026-09-29. Būsena: **MA-7 baigtas** — visi kelių paskyrų Calendar + Tasks keliai įgyvendinti; liko MA-8 testavimas ir patikra.
 
 ## Įgyvendinimo būsena
 
@@ -9,11 +9,13 @@ Atnaujinta: 2026-09-29. Būsena: **prioritetinis etapas prieš PWA**, duomenų i
 - [x] **MA-2a:** OAuth servisas moka išvardyti jungtis bei rasti jas pagal ID ar tiekėjo paskyrą; tas pats account atnaujinamas vietoje, kita paskyra sukuriama kaip atskira eilutė, o senas vienos paskyros metodas kelių aktyvių jungčių atveju sustoja su aiškia klaida.
 - [x] **MA-2b:** OAuth operacijoje serveryje saugomas `add` arba `reconsent` režimas ir laukiamas jungties ID; callback tikrina tikrą tiekėjo paskyrą, statusas grąžina saugų `connections` sąrašą, o viena jungtis atjungiama pagal konkretų ID.
 - [x] **Backup / restore pagrindas:** pilna kopija apima naujas lenteles ir schemos versiją, sena kopija normalizuojama atkūrimo transakcijoje, tikrinami išoriniai raktai ir neatkuriamos senos naršyklės sesijos.
-- [x] **Patikra:** `npm run typecheck`, 305/305 vienetiniai bei integraciniai testai ir `npm run build` praėjo 2026-09-29.
-- [ ] **Kitas žingsnis — MA-3:** nustatymų UI parodyti visas jungtis su atskirais pridėjimo, leidimo atnaujinimo ir atjungimo veiksmais.
-- [ ] **Po jo — MA-4:** agreguotas kelių paskyrų kalendorių katalogas ir realus checkbox skaitymas iš normalizuotų pasirinkimų.
-
-Svarbi tarpinė riba: DB ir OAuth pridėjimo / atjungimo maršrutai jau saugiai priima kelias paskyras, tačiau dabartiniai katalogo, įvykių, užduočių ir UI keliai vis dar skirti vienai jungčiai. Produkcijoje antros to paties tiekėjo paskyros dar nejungti, kol nebaigti MA-3, MA-4a ir atitinkami MA-6/7 jungčiai priskirti keliai.
+- [x] **MA-3:** nustatymų UI rodo visas jungtis su atskirais pridėjimo, atnaujinimo ir atjungimo veiksmais (`IntegrationAccounts.tsx`); `/api/auth/me` grąžina `identities` ir `activeSessionCount`.
+- [x] **MA-4a/b:** agreguotas kelių paskyrų kalendorių katalogas (`/api/google/calendars`, `/api/microsoft/calendars`) su normalizuotais pasirinkimais; įvykių GET agregavimas per `allSettledLimited` su dalinėmis klaidomis UI.
+- [x] **MA-5:** vieninga spalvų sistema — `calendarColor` ant įvykių per visus rodinius (dienos, savaitės, mėnesio, visos dienos blokai); primary/default kalendoriaus atsarginė spalva neeksplicitiniam pasirinkimui.
+- [x] **MA-6:** jungčiai priskirtas įvykių kūrimas ir visos mutacijos (PATCH/PUT/DELETE) tikrina `connectionId`; `ExistingEventEditor` rodo kalendoriaus pavadinimą.
+- [x] **MA-7:** visi užduočių maršrutai naudoja jungčiai priskirtus gateway; sąrašų paskirtys rodo paskyros etiketę; mutacijos tikrina account ir connection ID; Outlook blokui pasirenkama Microsoft paskyra, o blokas kuriamas jos numatytajame kalendoriuje.
+- [x] **Patikra:** `npm run typecheck`, 310/310 testų ir `npm run build` praėjo po MA-7 (2026-09-29).
+- [ ] **Kitas žingsnis — MA-8:** pilna automatinė regresija, Docker bei backup roundtrip, gyvų paskyrų priėmimas.
 
 ## Produkto tikslas
 
@@ -299,13 +301,13 @@ Kiekvienas užbaigtas žingsnis yra atskiras patikrintas commit ir push. Pilnas 
 2. [x] **MA-1b:** `calendar_preferences`, `mirror_connection_id`, backup / restore sutartis.
 3. [x] **MA-2a:** jungčiai priskirtas OAuth service API ir senos vienos jungties apsauga.
 4. [x] **MA-2b:** OAuth add / re-consent režimai ir kelių jungčių sintetinė patikra.
-5. **MA-3:** paskyrų sąrašo API ir naujas nustatymų ekranas.
-6. **MA-4a:** kelių paskyrų kalendorių katalogas bei checkbox saugojimas.
-7. **MA-4b:** agreguotas įvykių skaitymas ir dalinės klaidos.
-8. **MA-5:** vieninga spalvų sistema visuose kalendoriaus rodiniuose.
-9. **MA-6:** jungčiai priskirtas įvykių kūrimas ir visos mutacijos.
-10. **MA-7a:** kelių paskyrų užduočių skaitymas ir paskirties pasirinkimas.
-11. **MA-7b:** užduočių mutacijos, Google Tasks consent ir Outlook blokai.
+5. [x] **MA-3:** paskyrų sąrašo API ir naujas nustatymų ekranas.
+6. [x] **MA-4a:** kelių paskyrų kalendorių katalogas bei checkbox saugojimas.
+7. [x] **MA-4b:** agreguotas įvykių skaitymas ir dalinės klaidos.
+8. [x] **MA-5:** vieninga spalvų sistema visuose kalendoriaus rodiniuose.
+9. [x] **MA-6:** jungčiai priskirtas įvykių kūrimas ir visos mutacijos.
+10. [x] **MA-7a:** kelių paskyrų užduočių skaitymas ir paskirties pasirinkimas.
+11. [x] **MA-7b:** užduočių mutacijos, Google Tasks consent ir Outlook blokai.
 12. **MA-8a:** pilna automatinė regresija, Docker bei backup roundtrip.
 13. **MA-8b:** kontroliuojama gyvų paskyrų patikra ir dokumentacija.
 

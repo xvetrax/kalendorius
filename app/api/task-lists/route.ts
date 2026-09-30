@@ -1,14 +1,10 @@
-import { db, requireUserContext } from "@/lib/db-multi";
-import { createTaskService, TaskError } from "@/lib/task-service";
+import { TaskError } from "@/lib/task-service";
 import { apiError, assertSameOrigin } from "@/lib/http";
-import { makeMicrosoftTaskGateway, makeGoogleTaskGateway } from "@/lib/task-gateway";
+import { taskServiceForRequest } from "@/lib/task-request-service";
 
 export const runtime = "nodejs";
 
-function getTaskService(request: Request) {
-  const user = requireUserContext(request);
-  return createTaskService(db, user.id, makeMicrosoftTaskGateway(user.id), makeGoogleTaskGateway(user.id));
-}
+const getTaskService = taskServiceForRequest;
 
 function failure(error: unknown) {
   if (error instanceof TaskError)

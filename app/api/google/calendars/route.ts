@@ -22,8 +22,9 @@ export async function googleCalendarCatalogForConnection(userId: number, connect
   }
   const current = getConnectionById(userId, connection.id, "google");
   if (!current || current.status !== "active" || current.provider_account_id !== connection.provider_account_id) throw Object.assign(new Error("Google paskyra pasikeitė. Atnaujink kalendorius."), { status: 409 });
-  const overlay = resolveLegacyCalendarSelection(userId, connection.id, connection.provider_account_id, "google");
-  const selection = overlay?.selection ?? getCalendarSelection(userId, connection.id), live = new Set(items.map(item => item.id));
+  const normalized=getCalendarSelection(userId,connection.id);
+  const overlay=!normalized.explicit&&listConnections(userId,"google").filter(item=>item.status==="active").length===1?resolveLegacyCalendarSelection(userId, connection.id, connection.provider_account_id, "google"):null;
+  const selection = overlay?.selection ?? normalized, live = new Set(items.map(item => item.id));
   const enabled = selection.explicit ? selection.items.filter(item => item.enabled && live.has(item.calendar_id)).map(item => item.calendar_id) : items.filter(item => item.primary).map(item => item.id);
   return { provider: "google" as const, connectionId: String(connection.id), accountId: connection.provider_account_id, email: connection.provider_email, label: calendarAccountLabel(connection), colorKey: connection.color_key, items, enabled, explicit: selection.explicit, version: calendarSelectionVersion("google", connection.provider_account_id, String(connection.id),selection) };
 }

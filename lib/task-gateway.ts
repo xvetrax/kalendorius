@@ -82,13 +82,19 @@ export function makeMicrosoftTaskGatewayForConnection(userId: number, conn: OAut
       const c = getConnectionById(userId, conn.id, "microsoft");
       return Boolean(c && c.status === "active" && c.encrypted_refresh_token);
     },
-    cachedAccountId: () => conn.provider_account_id,
+    cachedAccountId: () => {
+      const current = getConnectionById(userId, conn.id, "microsoft");
+      return current?.status === "active" ? current.provider_account_id : null;
+    },
     connectionId: () => conn.id,
-    label: () => conn.provider_email || conn.provider_account_id,
+    label: () => {
+      const current = getConnectionById(userId, conn.id, "microsoft");
+      return current?.provider_email || current?.provider_account_id || conn.provider_email || conn.provider_account_id;
+    },
     accountId: async () => {
       const c = getConnectionById(userId, conn.id, "microsoft");
       if (!c || c.status !== "active") throw new Error("Microsoft neprijungtas");
-      return conn.provider_account_id;
+      return c.provider_account_id;
     },
     defaultListId: async () => {
       const c = getConnectionById(userId, conn.id, "microsoft");
@@ -114,10 +120,20 @@ export function makeGoogleTaskGatewayForConnection(userId: number, conn: OAuthCo
       if (!c || c.status !== "active" || !c.encrypted_refresh_token) return false;
       return (c.scopes ?? "").split(" ").includes(TASKS_SCOPE);
     },
-    cachedAccountId: () => conn.provider_account_id,
+    cachedAccountId: () => {
+      const current = getConnectionById(userId, conn.id, "google");
+      return current?.status === "active" ? current.provider_account_id : null;
+    },
     connectionId: () => conn.id,
-    label: () => conn.provider_email || conn.provider_account_id,
-    accountId: async () => conn.provider_account_id,
+    label: () => {
+      const current = getConnectionById(userId, conn.id, "google");
+      return current?.provider_email || current?.provider_account_id || conn.provider_email || conn.provider_account_id;
+    },
+    accountId: async () => {
+      const current = getConnectionById(userId, conn.id, "google");
+      if (!current || current.status !== "active") throw new Error("Google Tasks neprijungta");
+      return current.provider_account_id;
+    },
     request: (path: string, init?: RequestInit) => {
       const c = getConnectionById(userId, conn.id, "google");
       if (!c) throw new Error("Google Tasks neprijungta");

@@ -74,6 +74,20 @@ test("actual task-list route catalogs management metadata and protects mutations
   assert.equal((await route.POST(new Request(api,{method:"POST",headers:{Origin:"https://attacker.example","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({source:"google",account_id:"google-account",name:"Blokuota"})}))).status,403);
 });
 
+test("actual task-list route keeps two accounts routable and labels identical lists",async()=>{
+  for(const source of ["google","microsoft"]){
+    const scopes=source==="google"?"https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/tasks offline_access":"offline_access User.Read Calendars.ReadWrite Tasks.ReadWrite";
+    multiDb.prepare(`INSERT INTO oauth_connections (user_id,provider,provider_account_id,provider_email,encrypted_refresh_token,scopes,generation,status,connected_at) VALUES (?,?,?,?,?,?,1,'active',CURRENT_TIMESTAMP)`)
+      .run(testUserId,source,`${source}-second`,`second@${source}.example`,encrypt(`${source}-second-refresh`),scopes);
+  }
+  const response=await catalog();assert.equal(response.status,200);const result=await response.json();
+  assert.equal(result.accounts.length,4);assert.equal(result.lists.length,4);
+  assert.deepEqual(new Set(result.accounts.map(account=>account.label)),new Set(["google@example.com","microsoft@example.com","second@google.example","second@microsoft.example"]));
+  assert.ok(result.lists.every(list=>typeof list.account_label==="string"&&list.account_label.length>0&&Number.isSafeInteger(list.connection_id)));
+  const created=await route.POST(request("POST",{source:"google",account_id:"google-second",name:"Antros paskyros sąrašas"}));
+  assert.equal(created.status,201);assert.equal((await created.json()).account_id,"google-second");
+});
+
 test("actual task-list route creates, renames, rejects stale versions, previews and deletes provider lists",async()=>{
   for(const source of ["microsoft","google"]){
     const account_id=`${source}-account`;

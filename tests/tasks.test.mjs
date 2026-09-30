@@ -19,11 +19,12 @@ function schema(db) {
 function gateway() {
   const calls = []; const events = new Map(); const transactions = new Map();
   const remote = new Map([["1", { id:"1", title:"Microsoft užduotis", status:"notStarted", importance:"normal", dueDateTime:{dateTime:"2026-10-30T12:00:00.0000000",timeZone:"UTC"} }]]);
-  const state = { connected:true, account:"account-a", offline:false, uncertainCreate:false };
+  const state = { connected:true, account:"account-a", connection:11, offline:false, uncertainCreate:false };
   return {
     calls, events, remote, state,
     connected:() => state.connected,
     cachedAccountId:() => state.account,
+    connectionId:() => state.connection,
     accountId:async () => state.account,
     defaultListId:async () => "list-a",
     async request(url, init = {}) {
@@ -215,6 +216,31 @@ test("Microsoft multi-list discovery and creation use selected account-bound lis
   assert.equal(writes.length,1);const locked=result.items.find(t=>t.list_id==="flagged");
   await assert.rejects(service.update({...ref(locked),completed:true}),e=>e.status===403);
   assert.equal((await service.update({...ref(locked),scheduled_at:start})).scheduled_at,start);
+});
+
+test("multiple Microsoft accounts create only in the explicitly selected account",async t=>{
+  const db=new DatabaseSync(":memory:");schema(db);migrateTaskPlanning(db);t.after(()=>db.close());
+  const first=gateway(),second=gateway();second.state.account="account-b";second.state.connection=22;
+  const service=createTaskService(db,TEST_USER_ID,[first,second]);
+  const result=await service.list();assert.equal(new Set(result.items.map(item=>item.key)).size,2);
+  const selected=result.items.find(item=>item.account_id==="account-b");assert.equal(selected.connection_id,22);
+  await assert.rejects(service.update({...ref(selected),connection_id:999,scheduled_at:start}),error=>error.status===409);
+  first.calls.length=0;second.calls.length=0;
+  const created=await service.create({source:"microsoft",account_id:"account-b",list_id:"list-a",title:"Antroje paskyroje"});
+  assert.equal(created.account_id,"account-b");assert.equal(first.calls.filter(call=>call.method==="POST").length,0);assert.equal(second.calls.filter(call=>call.method==="POST").length,1);
+});
+
+test("multiple Microsoft accounts create Outlook blocks only in the selected connection",async t=>{
+  const db=new DatabaseSync(":memory:");schema(db);migrateTaskPlanning(db);t.after(()=>db.close());
+  const first=gateway(),second=gateway();second.state.account="account-b";second.state.connection=22;
+  const service=createTaskService(db,TEST_USER_ID,[first,second]);
+  let task=(await service.list()).items.find(item=>item.account_id==="account-b");
+  await assert.rejects(service.update({...ref(task),scheduled_at:start,mirror_requested:true}),error=>error.status===409);
+  task=await service.update({...ref(task),scheduled_at:start,mirror_requested:true,mirror_account_id:"account-b",mirror_connection_id:22});
+  assert.equal(task.mirror_account_id,"account-b");assert.equal(task.mirror_connection_id,22);
+  assert.equal(first.events.size,0);assert.equal(second.events.size,1);
+  await assert.rejects(service.update({...ref(task),mirror_requested:true,mirror_account_id:"account-a",mirror_connection_id:11}),error=>error.status===409);
+  assert.equal(first.events.size,0);assert.equal(second.events.size,1);
 });
 
 test("source completion marks an existing Outlook block for explicit cleanup and retries safely",async t=>{

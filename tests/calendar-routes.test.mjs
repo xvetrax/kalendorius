@@ -156,6 +156,7 @@ for(const provider of ["google","microsoft"]){
     } finally {
       if(previous===undefined)db.prepare("DELETE FROM user_settings WHERE user_id=? AND key=?").run(testUserId,key);
       else saveUserSetting(testUserId,key,previous);
+      setSelection(provider,[provider==="google"?"primary":"opaque-default"]);
     }
   });
   test(`${provider} actual routes: invalid and all-day timezones never create`,async()=>{
@@ -175,34 +176,14 @@ for(const provider of ["google","microsoft"]){
   });
 }
 
-test("Google legacy calendar selections migrate without losing explicit empty or secondary calendars",async()=>{
-  const key="google_enabled_calendars",previous=userSetting(testUserId,key),url="http://localhost:3000/api/google/events";
-  try {
-    saveUserSetting(testUserId,key,JSON.stringify([]));
-    let catalog=await (await calendarCatalogs.google.GET(new Request("http://localhost:3000/api/google/calendars",{headers:{Cookie:sessionCookie}}))).json();assert.deepEqual(catalog.enabled,[]);assert.equal(catalog.explicit,true);
-    assert.deepEqual(JSON.parse(userSetting(testUserId,key)),{accountId:"fixture-account",items:[]});
-    assert.deepEqual((await (await routes.google.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items,[]);
-    saveUserSetting(testUserId,key,JSON.stringify([{id:"other/calendar",name:"Senas antrinis"}]));
-    catalog=await (await calendarCatalogs.google.GET(new Request("http://localhost:3000/api/google/calendars",{headers:{Cookie:sessionCookie}}))).json();assert.deepEqual(catalog.enabled,["other/calendar"]);assert.equal(catalog.explicit,true);
-    assert.deepEqual(JSON.parse(userSetting(testUserId,key)),{accountId:"fixture-account",items:[{id:"other/calendar",name:"Senas antrinis"}]});
-    const items=(await (await routes.google.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items;assert.ok(items.length);assert.ok(items.every(item=>item.calendarId==="other/calendar"));
-  } finally {
-    if(previous===undefined)db.prepare("DELETE FROM user_settings WHERE user_id=? AND key=?").run(testUserId,key);
-    else saveUserSetting(testUserId,key,previous);
-  }
+test("Google normalized selection preserves explicit empty and secondary calendars",async()=>{
+  const url="http://localhost:3000/api/google/events";setSelection("google",[]);
+  let catalog=await (await calendarCatalogs.google.GET(new Request("http://localhost:3000/api/google/calendars",{headers:{Cookie:sessionCookie}}))).json();assert.deepEqual(catalog.enabled,[]);assert.equal(catalog.explicit,true);assert.deepEqual((await (await routes.google.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items,[]);
+  setSelection("google",["other/calendar"]);catalog=await (await calendarCatalogs.google.GET(new Request("http://localhost:3000/api/google/calendars",{headers:{Cookie:sessionCookie}}))).json();assert.deepEqual(catalog.enabled,["other/calendar"]);const items=(await (await routes.google.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items;assert.ok(items.length);assert.ok(items.every(item=>item.calendarId==="other/calendar"));setSelection("google",["primary"]);
 });
 
-test("Microsoft legacy primary selection creates in the live opaque default calendar",async()=>{
-  const key="microsoft_enabled_calendars",previous=userSetting(testUserId,key),url="http://localhost:3000/api/microsoft/events",before=calendarUpstreamWrites.length;
-  try {
-    saveUserSetting(testUserId,key,JSON.stringify({accountId:"fixture-account",items:[{id:"primary"}]}));
-    const catalog=await (await calendarCatalogs.microsoft.GET(new Request("http://localhost:3000/api/microsoft/calendars",{headers:{Cookie:sessionCookie}}))).json();assert.deepEqual(catalog.enabled,["opaque-default"]);assert.equal(catalog.defaultAlias,true);
-    const response=await routes.microsoft.POST(new Request(url,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({operationId:operationId(),calendarId:"opaque-default",calendarVersion:catalog.version,summary:"Legacy numatytasis",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));
-    assert.equal(response.status,201);assert.equal(calendarUpstreamWrites.length,before+1);assert.equal(calendarUpstreamWrites.at(-1).path,"/v1.0/me/calendars/opaque-default/events");
-  } finally {
-    if(previous===undefined)db.prepare("DELETE FROM user_settings WHERE user_id=? AND key=?").run(testUserId,key);
-    else saveUserSetting(testUserId,key,previous);
-  }
+test("Microsoft normalized default selection creates in the live opaque default calendar",async()=>{
+  const url="http://localhost:3000/api/microsoft/events",before=calendarUpstreamWrites.length;setSelection("microsoft",["opaque-default"]);const catalog=await (await calendarCatalogs.microsoft.GET(new Request("http://localhost:3000/api/microsoft/calendars",{headers:{Cookie:sessionCookie}}))).json();assert.deepEqual(catalog.enabled,["opaque-default"]);const response=await routes.microsoft.POST(new Request(url,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({operationId:operationId(),calendarId:"opaque-default",calendarVersion:catalog.version,summary:"Numatytasis",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));assert.equal(response.status,201);assert.equal(calendarUpstreamWrites.length,before+1);assert.equal(calendarUpstreamWrites.at(-1).path,"/v1.0/me/calendars/opaque-default/events");
 });
 for(const provider of ["google","microsoft"])test(`${provider} actual route submits an account-bound RSVP and reloads its status`,async()=>{
   const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
@@ -232,9 +213,9 @@ test("actual Outlook route protects non-organizer events and requires participan
 for(const provider of ["google","microsoft"]) test(`${provider}: same-ID events in different calendars update and delete independently`,async()=>{
   const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
   const selected=[{id:"primary"},{id:"other/calendar",name:"Kitas",color:"#123456"}];
-  saveUserSetting(testUserId,`${provider}_enabled_calendars`,JSON.stringify({accountId:"fixture-account",items:selected}));
+  setSelection(provider,selected.map(item=>provider==="microsoft"&&item.id==="primary"?"opaque-default":item.id));
   const items=(await (await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items;
-  const target=items.find(e=>e.calendarId==="other/calendar"),original=items.find(e=>e.calendarId==="primary"&&e.id===target.id);
+  const target=items.find(e=>e.calendarId==="other/calendar"),defaultCalendar=provider==="microsoft"?"opaque-default":"primary",original=items.find(e=>e.calendarId===defaultCalendar&&e.id===target.id);
   assert.ok(original);assert.notEqual(target.key,original.key);
   const response=await route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({...inputFor(target),summary:"Tik antrinis"})}));
   assert.equal(response.status,200);const updated=await response.json();assert.equal(updated.key,target.key);assert.equal(updated.calendarId,"other/calendar");
@@ -251,7 +232,7 @@ for(const provider of ["google","microsoft"]) test(`${provider}: same-ID events 
   assert.equal((await route.DELETE(new Request(url+"?"+query,{method:"DELETE",headers}))).status,200);
   const remaining=(await (await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items;
   assert.ok(remaining.some(e=>e.key===original.key));assert.ok(!remaining.some(e=>e.key===target.key));
-  const primary=[{id:"primary"}];saveUserSetting(testUserId,`${provider}_enabled_calendars`,JSON.stringify({accountId:"fixture-account",items:primary}));
+  setSelection(provider,[provider==="google"?"primary":"opaque-default"]);
 });
 
 for(const provider of ["google","microsoft"])test(`${provider}: explicit empty calendar selection lists no events and remains account-bound`,async()=>{
@@ -263,11 +244,11 @@ for(const provider of ["google","microsoft"])test(`${provider}: explicit empty c
   const staleCreate=await route.POST(new Request(eventsUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({operationId:operationId(),calendarId:"primary",calendarVersion:snapshot.version,summary:"Nekurti kitoje paskyroje",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));assert.equal(staleCreate.status,409);
   multiDb.prepare("UPDATE oauth_connections SET provider_account_id=? WHERE user_id=? AND provider=?").run("fixture-account",testUserId,provider);
   const response=await catalog.PATCH(new Request(catalogUrl,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({enabled:[],version:snapshot.version})}));
-  assert.equal(response.status,200);assert.deepEqual(JSON.parse(userSetting(testUserId,`${provider}_enabled_calendars`)),{accountId:"fixture-account",items:[]});
+  assert.equal(response.status,200);assert.deepEqual(multiDb.prepare("SELECT calendar_id FROM calendar_preferences WHERE user_id=? AND connection_id=?").all(testUserId,Number(connIds[provider])),[]);
   const listed=await route.GET(new Request(eventsUrl,{headers:{Cookie:sessionCookie}}));assert.equal(listed.status,200);assert.deepEqual((await listed.json()).items,[]);
   const before=calendarUpstreamWrites.length,created=await route.POST(new Request(eventsUrl,{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({operationId:operationId(),calendarId:"primary",calendarVersion:snapshot.version,summary:"Nekurti",start:"2026-10-24T07:00:00Z",end:"2026-10-24T08:00:00Z",timeZone:"UTC"})}));
   assert.equal(created.status,409);assert.equal(calendarUpstreamWrites.length,before);
-  saveUserSetting(testUserId,`${provider}_enabled_calendars`,JSON.stringify({accountId:"fixture-account",items:[{id:"primary"}]}));
+  setSelection(provider,[provider==="google"?"primary":"opaque-default"]);
 });
 
 test("Outlook route confirms mirror identity by account and transaction, never by event ID alone",async()=>{
@@ -275,15 +256,15 @@ test("Outlook route confirms mirror identity by account and transaction, never b
   const mirror={...structuredClone(source),id:"mirror-shared",showAs:"free",transactionId:"created-by-this-plan",subject:"✓ Darbas",
     bodyPreview:"Dienos planas: pasirenkamas užduoties darbo laikas.",body:{contentType:"text",content:"Dienos planas: pasirenkamas užduoties darbo laikas."},
     isReminderOn:false,isOnlineMeeting:false,onlineMeeting:null,location:{displayName:""},sensitivity:"normal",importance:"normal",hasAttachments:false,categories:[],recurrence:null};
-  const defaultCalendar=new Map([[mirror.id,mirror]]),other=calendarUpstream.outlook.get("other/calendar");
+  const defaultCalendar=new Map([[mirror.id,mirror]]),other=calendarUpstream.outlook.get("other/calendar"),previousDefault=calendarUpstream.outlook.get("opaque-default");
   calendarUpstream.outlook.set("opaque-default",defaultCalendar);other.set(mirror.id,structuredClone(mirror));
   const catalogResponse=await microsoftCalendars.GET(new Request("http://localhost:3000/api/microsoft/calendars",{headers:{Cookie:sessionCookie}}));assert.equal(catalogResponse.status,200);const catalog=await catalogResponse.json();
   assert.ok(catalog.items.some(calendar=>calendar.id==="opaque-default"&&calendar.isDefault));
   // microsoft_default_calendar_identity now stored per-user: [accountId, String(conn.id), calendarId]
-  assert.deepEqual(JSON.parse(userSetting(testUserId,"microsoft_default_calendar_identity")),["fixture-account",connIds.microsoft,"opaque-default"]);
+  const defaultIdentityKey=`microsoft_default_calendar_identity:${connIds.microsoft}`;assert.deepEqual(JSON.parse(userSetting(testUserId,defaultIdentityKey)),["fixture-account",connIds.microsoft,"opaque-default"]);
   const selection=await microsoftCalendars.PATCH(new Request("http://localhost:3000/api/microsoft/calendars",{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({enabled:[{id:"opaque-default"},{id:"other/calendar"}],version:catalog.version})}));
-  assert.equal(selection.status,200);assert.equal(JSON.parse(userSetting(testUserId,"microsoft_enabled_calendars")).accountId,"fixture-account");
-  db.prepare("DELETE FROM user_settings WHERE user_id=? AND key=?").run(testUserId,"microsoft_default_calendar_identity");
+  assert.equal(selection.status,200);
+  db.prepare("DELETE FROM user_settings WHERE user_id=? AND key=?").run(testUserId,defaultIdentityKey);
   // task_plans in multi-user schema has user_id NOT NULL — include it in all inserts.
   const insert=db.prepare(`INSERT INTO task_plans(user_id,task_key,scheduled_at,mirror_requested,mirror_account_id,mirror_connection_id,mirror_event_id,mirror_transaction_id) VALUES (?,?,?,1,?,?,?,?)`);
   insert.run(testUserId,"mirror-test",source.start.dateTime+"Z","fixture-account",Number(connIds.microsoft),mirror.id,mirror.transactionId);
@@ -297,7 +278,7 @@ test("Outlook route confirms mirror identity by account and transaction, never b
     assert.ok(events.every(e=>!("transactionId" in e)));
     // Simulate account swap: change provider_account_id in oauth_connections
     multiDb.prepare("UPDATE oauth_connections SET provider_account_id=? WHERE user_id=? AND provider=?").run("different-account",testUserId,"microsoft");
-    assert.deepEqual(await list(),[]);
+    assert.ok((await list()).every(event=>event.mirrorTaskKey===null));
     multiDb.prepare("UPDATE oauth_connections SET provider_account_id=? WHERE user_id=? AND provider=?").run("fixture-account",testUserId,"microsoft");
     // Simulate token refresh: increment generation. conn.id is unchanged so
     // connectionId (String(conn.id)) stays the same — mirror identity persists.
@@ -305,7 +286,7 @@ test("Outlook route confirms mirror identity by account and transaction, never b
     events=await list();
     assert.equal(events.find(e=>e.calendarId==="opaque-default").mirrorTaskKey,"mirror-test");
     // After catalog GET the stored identity still uses the same conn.id
-    assert.deepEqual(JSON.parse(userSetting(testUserId,"microsoft_default_calendar_identity")),["fixture-account",connIds.microsoft,"opaque-default"]);
+    assert.deepEqual(JSON.parse(userSetting(testUserId,defaultIdentityKey)),["fixture-account",connIds.microsoft,"opaque-default"]);
     // Restore generation
     multiDb.prepare("UPDATE oauth_connections SET generation=generation-1 WHERE user_id=? AND provider=?").run(testUserId,"microsoft");
     for (const change of [{transactionId:undefined},{showAs:"busy"},{isOrganizer:false},{isAllDay:true},{type:"occurrence"},{attendees:[{emailAddress:{address:"guest@example.test"}}]},
@@ -327,10 +308,26 @@ test("Outlook route confirms mirror identity by account and transaction, never b
     const response=await routes.microsoft.PATCH(new Request("http://localhost:3000/api/microsoft/events",{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify(inputFor(linked))}));
     assert.equal(response.status,200);assert.equal((await response.json()).mirrorTaskKey,null);
   } finally {
-    calendarUpstream.outlook.delete("opaque-default");other.delete(mirror.id);
+    if(previousDefault)calendarUpstream.outlook.set("opaque-default",previousDefault);else calendarUpstream.outlook.delete("opaque-default");other.delete(mirror.id);
     db.prepare("DELETE FROM task_plans WHERE task_key IN ('mirror-test','mirror-ambiguous') AND user_id=?").run(testUserId);
-    db.prepare("DELETE FROM user_settings WHERE user_id=? AND key=?").run(testUserId,"microsoft_default_calendar_identity");
+    db.prepare("DELETE FROM user_settings WHERE user_id=? AND key=?").run(testUserId,defaultIdentityKey);
     multiDb.prepare("UPDATE oauth_connections SET provider_account_id=? WHERE user_id=? AND provider=?").run("fixture-account",testUserId,"microsoft");
-    saveUserSetting(testUserId,"microsoft_enabled_calendars",JSON.stringify({accountId:"fixture-account",items:[{id:"primary"}]}));
+    setSelection("microsoft",["opaque-default"]);
   }
+});
+
+for(const provider of ["google","microsoft"])test(`${provider}: two accounts keep catalog selection and event identity separate`,async()=>{
+  const scopes=provider==="google"?"https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/tasks offline_access":"offline_access User.Read Calendars.ReadWrite Tasks.ReadWrite";
+  const inserted=multiDb.prepare(`INSERT INTO oauth_connections(user_id,provider,provider_account_id,provider_email,encrypted_refresh_token,scopes,generation,status,connected_at,color_key) VALUES (?,?,?,?,?,?,1,'active',CURRENT_TIMESTAMP,?)`).run(testUserId,provider,`${provider}-second`,`second@${provider}.example`,encrypt("second-refresh"),scopes,`${provider}:second`),secondId=String(inserted.lastInsertRowid);
+  const catalogUrl=`http://localhost:3000/api/${provider}/calendars`,eventsUrl=`http://localhost:3000/api/${provider}/events`,catalogRoute=calendarCatalogs[provider],eventsRoute=routes[provider];
+  try{
+    const first=await catalogRoute.GET(new Request(catalogUrl,{headers:{Cookie:sessionCookie}})),snapshot=await first.json();assert.equal(first.status,200);assert.equal(snapshot.accounts.length,2);assert.deepEqual(snapshot.items,[]);assert.deepEqual(snapshot.enabled,[]);
+    const primary=provider==="google"?"primary":"opaque-default",second=snapshot.accounts.find(account=>account.connectionId===secondId),original=snapshot.accounts.find(account=>account.connectionId===connIds[provider]);assert.ok(second);assert.ok(original.enabled.includes(primary));assert.ok(second.enabled.includes(primary));
+    const hidden=await catalogRoute.PATCH(new Request(catalogUrl,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({connectionId:secondId,enabled:[],version:second.version})}));assert.equal(hidden.status,200);
+    assert.equal((await catalogRoute.PATCH(new Request(catalogUrl,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({connectionId:secondId,enabled:[{id:primary}],version:second.version})}))).status,409);
+    let listed=await (await eventsRoute.GET(new Request(eventsUrl,{headers:{Cookie:sessionCookie}}))).json();assert.ok(listed.items.length);assert.ok(listed.items.every(item=>item.connectionId===connIds[provider]));
+    const refreshed=await (await catalogRoute.GET(new Request(catalogUrl,{headers:{Cookie:sessionCookie}}))).json(),secondFresh=refreshed.accounts.find(account=>account.connectionId===secondId);
+    const shown=await catalogRoute.PATCH(new Request(catalogUrl,{method:"PATCH",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({connectionId:secondId,enabled:[{id:primary}],version:secondFresh.version})}));assert.equal(shown.status,200);
+    listed=await (await eventsRoute.GET(new Request(eventsUrl,{headers:{Cookie:sessionCookie}}))).json();assert.deepEqual(new Set(listed.loadedConnectionIds),new Set([connIds[provider],secondId]));const byId=new Map();for(const item of listed.items){const values=byId.get(item.id)||[];values.push(item);byId.set(item.id,values);}const duplicates=[...byId.values()].find(values=>new Set(values.map(item=>item.connectionId)).size===2);assert.ok(duplicates);assert.notEqual(duplicates[0].key,duplicates[1].key);
+  }finally{multiDb.prepare("DELETE FROM oauth_connections WHERE user_id=? AND id=?").run(testUserId,Number(secondId));}
 });

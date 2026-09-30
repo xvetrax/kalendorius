@@ -11,9 +11,10 @@ import { resolveLegacyCalendarSelection, writeLegacyCalendarSelection } from "@/
 export const runtime = "nodejs";
 const colors: Record<string,string>={lightBlue:"#74b7e8",lightGreen:"#57a55a",lightOrange:"#e8975b",lightGray:"#9e9e9e",lightYellow:"#e8c85b",lightTeal:"#4db6ac",lightPink:"#e87494",lightBrown:"#a07850",lightRed:"#e85b5b",lightMagenta:"#b04db6",auto:"#0078d4"};
 type Item={id:string;name:string;color?:string;isDefault?:boolean;writable:boolean};
-// The identity value already carries the connection id ([accountId, connId,
-// calendarId]) and is validated against it, so a single unsuffixed key is safe.
-export const outlookDefaultCalendarSetting=(_connectionId?:string)=>`microsoft_default_calendar_identity`;
+// Each account needs its own default-calendar slot. A single shared setting is
+// racy when two account catalogs load concurrently: the last response would
+// otherwise make mirror recognition fail for every sibling connection.
+export const outlookDefaultCalendarSetting=(connectionId:string)=>`microsoft_default_calendar_identity:${connectionId}`;
 
 export async function microsoftCalendarCatalogForConnection(userId:number,connection:OAuthConnectionRow){
   const items:Item[]=[],visited=new Set<string>();let next:string|null="/me/calendars?$top=50&$select=id,name,color,isDefaultCalendar,canEdit";
@@ -22,8 +23,9 @@ export async function microsoftCalendarCatalogForConnection(userId:number,connec
   const connectionId=String(connection.id),primary=items.find(item=>item.isDefault);if(primary)saveUserSetting(userId,outlookDefaultCalendarSetting(connectionId),JSON.stringify([connection.provider_account_id,connectionId,primary.id]));
   // Legacy selections stored "primary" for the default calendar; map it onto the
   // live opaque default id so the overlay references a real calendar.
-  const overlay=resolveLegacyCalendarSelection(userId,connection.id,connection.provider_account_id,"microsoft",id=>id==="primary"&&primary?primary.id:id);
-  const selection=overlay?.selection??getCalendarSelection(userId,connection.id),live=new Set(items.map(item=>item.id));
+  const normalized=getCalendarSelection(userId,connection.id);
+  const overlay=!normalized.explicit&&listConnections(userId,"microsoft").filter(item=>item.status==="active").length===1?resolveLegacyCalendarSelection(userId,connection.id,connection.provider_account_id,"microsoft",id=>id==="primary"&&primary?primary.id:id):null;
+  const selection=overlay?.selection??normalized,live=new Set(items.map(item=>item.id));
   const enabled=selection.explicit?selection.items.filter(item=>item.enabled&&live.has(item.calendar_id)).map(item=>item.calendar_id):items.filter(item=>item.isDefault).map(item=>item.id);
   return {provider:"microsoft" as const,connectionId,accountId:connection.provider_account_id,email:connection.provider_email,label:calendarAccountLabel(connection),colorKey:connection.color_key,items,enabled,explicit:selection.explicit,defaultAlias:overlay?.defaultAlias??false,version:calendarSelectionVersion("microsoft",connection.provider_account_id,connectionId,selection)};
 }
