@@ -7,7 +7,7 @@ export type CalendarVisibility = "default" | "public" | "private" | "personal" |
 export type CalendarReminder = {mode:"default"|"none"|"minutes"|"custom";minutes?:number};
 export type CalendarEvent = {
   id:string; key:string; provider:CalendarProvider; connectionId:string; version:string;
-  calendarId:string; calendarName?:string; calendarColor?:string;
+  calendarId:string; calendarName?:string; calendarColor?:string; accountLabel?:string; accountEmail?:string;
   mirrorTaskKey?:string|null;
   summary:string; description?:string; location?:string; start:{dateTime?:string;date?:string}; end:{dateTime?:string;date?:string};
   htmlLink?:string; hangoutLink?:string; editable:boolean; readOnlyReason:string;

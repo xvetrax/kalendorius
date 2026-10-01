@@ -6,6 +6,7 @@ import { getCalendarSelection, replaceCalendarSelection, CalendarPreferenceError
 import { listConnections, getConnectionById, type OAuthConnectionRow } from "@/lib/oauth-service";
 import { allSettledLimited, calendarAccountError, calendarAccountLabel } from "@/lib/calendar-multi";
 import { resolveLegacyCalendarSelection, writeLegacyCalendarSelection } from "@/lib/calendar-legacy";
+import { resolveCalendarAccountColors } from "@/lib/calendar-colors";
 
 export const runtime = "nodejs";
 type Item = { id: string; name: string; color?: string; primary?: boolean; writable: boolean };
@@ -25,8 +26,10 @@ export async function googleCalendarCatalogForConnection(userId: number, connect
   const normalized=getCalendarSelection(userId,connection.id);
   const overlay=!normalized.explicit&&listConnections(userId,"google").filter(item=>item.status==="active").length===1?resolveLegacyCalendarSelection(userId, connection.id, connection.provider_account_id, "google"):null;
   const selection = overlay?.selection ?? normalized, live = new Set(items.map(item => item.id));
+  const overrides = new Map(selection.items.flatMap(item => item.color_override ? [[item.calendar_id, item.color_override] as const] : []));
+  const coloredItems = items.map(item => ({...item, color:overrides.get(item.id) ?? item.color}));
   const enabled = selection.explicit ? selection.items.filter(item => item.enabled && live.has(item.calendar_id)).map(item => item.calendar_id) : items.filter(item => item.primary).map(item => item.id);
-  return { provider: "google" as const, connectionId: String(connection.id), accountId: connection.provider_account_id, email: connection.provider_email, label: calendarAccountLabel(connection), colorKey: connection.color_key, items, enabled, explicit: selection.explicit, version: calendarSelectionVersion("google", connection.provider_account_id, String(connection.id),selection) };
+  return { provider: "google" as const, connectionId: String(connection.id), accountId: connection.provider_account_id, email: connection.provider_email, label: calendarAccountLabel(connection), colorKey: connection.color_key, items:coloredItems, enabled, explicit: selection.explicit, version: calendarSelectionVersion("google", connection.provider_account_id, String(connection.id),selection) };
 }
 
 export async function googleCalendarCatalog(userId: number) {
@@ -40,7 +43,7 @@ export async function GET(request: Request) {
     const user = requireUserContext(request), connections = listConnections(user.id, "google").filter(c => c.status === "active");
     if (!connections.length) return Response.json({ accounts: [], items: [], enabled: [], errors: [], version: "" });
     const settled = await allSettledLimited(connections, 3, connection => googleCalendarCatalogForConnection(user.id, connection));
-    const accounts = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+    const accounts = resolveCalendarAccountColors(settled.flatMap(result => result.status === "fulfilled" ? [result.value] : []));
     const errors = settled.flatMap((result, index) => result.status === "rejected" ? [calendarAccountError(connections[index], result.reason)] : []);
     if (!accounts.length && connections.length === 1) throw (settled[0] as PromiseRejectedResult).reason;
     const sole = accounts.length === 1 ? accounts[0] : null;

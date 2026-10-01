@@ -88,6 +88,8 @@ button svg{flex-shrink:0}
 .currentTime span{background:var(--surface);color:var(--error-text)}
 .monthGrid>button{background:var(--surface);color:var(--ink)}.monthGrid>button.outside{background:var(--panel);color:var(--muted)}
 .monthGrid>button span{background:var(--accent-soft);color:var(--accent-text)}.monthGrid>button small{color:var(--muted)}
+.monthGrid>button span.monthEvent{border-left:3px solid;padding-left:5px;color:var(--ink)}
+.eventSource{display:flex;align-items:center;gap:10px;border-left:4px solid;border-radius:9px;padding:10px 12px;margin:0 0 15px}.eventSource>span{width:9px;height:9px;border-radius:50%;background:currentColor;flex:0 0 auto}.eventSource small,.eventSource strong{display:block}.eventSource small{font-size:.68rem;color:var(--muted);line-height:1.45}.eventSource strong{font-size:.8rem;margin:2px 0;overflow-wrap:anywhere}
 .board,.focus{flex:1;height:auto;min-height:0;padding:26px;background:var(--panel)}
 .board h2,.focus h2{font-size:1.5rem;letter-spacing:-.035em}
 .columns{grid-template-columns:repeat(3,minmax(180px,1fr));gap:12px}

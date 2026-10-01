@@ -15,6 +15,7 @@ import { calendarSelectionVersion } from "@/lib/calendar-selection";
 import { getConnection, getConnectionById, listConnections, type OAuthConnectionRow } from "@/lib/oauth-service";
 import { googleCalendarCatalogForConnection } from "../calendars/route.ts";
 import { allSettledLimited, calendarAccountError } from "@/lib/calendar-multi";
+import { resolveCalendarAccountColors } from "@/lib/calendar-colors";
 
 export const runtime = "nodejs";
 
@@ -53,17 +54,23 @@ export async function GET(request: Request) {
     }
     const connections=listConnections(user.id,"google").filter(conn=>conn.status==="active");
     if(!connections.length)return Response.json({items:[],errors:[],loadedConnectionIds:[]});
-    const settled=await allSettledLimited(connections,3,async conn=>{
-      const catalog=await googleCalendarCatalogForConnection(user.id,conn),enabled=new Set(catalog.enabled);
+    const catalogResults=await allSettledLimited(connections,3,conn=>googleCalendarCatalogForConnection(user.id,conn));
+    const catalogErrors=catalogResults.flatMap((result,index)=>result.status==="rejected"?[calendarAccountError(connections[index],result.reason)]:[]);
+    const available=catalogResults.flatMap((result,index)=>result.status==="fulfilled"?[{connection:connections[index],catalog:result.value}]:[]);
+    if(!available.length&&connections.length===1)throw (catalogResults[0] as PromiseRejectedResult).reason;
+    const colored=resolveCalendarAccountColors(available.map(entry=>entry.catalog));
+    const ready=available.map((entry,index)=>({...entry,catalog:colored[index]}));
+    const settled=await allSettledLimited(ready,3,async ({connection:conn,catalog})=>{
+      const enabled=new Set(catalog.enabled);
       const calendars=catalog.explicit?catalog.items.filter(item=>enabled.has(item.id)).map(item=>({id:item.id,name:item.name,color:item.color})):undefined;
       const primaryColor=!catalog.explicit?catalog.items.find(item=>item.primary)?.color:undefined;
       const rawItems=await makeGoogleCalendarService(user.id,conn).list(input.get("timeMin")||new Date().toISOString(),input.get("timeMax")||new Date(Date.now()+7*864e5).toISOString(),calendars,String(conn.id));
-      const items=primaryColor?rawItems.map(event=>event.calendarColor?event:{...event,calendarColor:primaryColor}):rawItems;
+      const items=rawItems.map(event=>({...event,...(!event.calendarColor&&primaryColor?{calendarColor:primaryColor}:{}),accountLabel:catalog.label,...(catalog.email?{accountEmail:catalog.email}:{})}));
       if(!getConnectionById(user.id,conn.id,"google"))throw new CalendarError("Google paskyra pasikeitė. Atnaujink kalendorių.",409);
       return {connectionId:String(conn.id),items};
     });
-    const loaded=settled.flatMap(result=>result.status==="fulfilled"?[result.value]:[]),errors=settled.flatMap((result,index)=>result.status==="rejected"?[calendarAccountError(connections[index],result.reason)]:[]);
-    if(!loaded.length&&connections.length===1)throw (settled[0] as PromiseRejectedResult).reason;
+    const loaded=settled.flatMap(result=>result.status==="fulfilled"?[result.value]:[]),errors=[...catalogErrors,...settled.flatMap((result,index)=>result.status==="rejected"?[calendarAccountError(ready[index].connection,result.reason)]:[])];
+    if(!loaded.length&&connections.length===1&&settled[0]?.status==="rejected")throw settled[0].reason;
     return Response.json({items:loaded.flatMap(result=>result.items),errors,loadedConnectionIds:loaded.map(result=>result.connectionId),activeConnectionIds:connections.map(conn=>String(conn.id))},{headers:{"Cache-Control":"no-store"}});
   } catch (error) {
     if (error instanceof Response) return error;

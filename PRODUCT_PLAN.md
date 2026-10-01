@@ -181,10 +181,10 @@ Galutinis tikslas laikomas pasiektu tik tada, kai nėra žinomų P0/P1 klaidų p
 Detalus saugios schemos migracijos, kelių OAuth jungčių, visų kalendorių agregavimo, checkbox matomumo, spalvų, užduočių ir gyvų paskyrų patikros planas aprašytas [MULTI_ACCOUNT_PLAN.md](MULTI_ACCOUNT_PLAN.md).
 
 - [x] **MA-1:** išplėstas OAuth, kalendorių pasirinkimų ir Outlook blokų duomenų modelis išsaugant dabartines jungtis; patikrintas backup / restore.
-- [ ] **MA-2/3:** OAuth kelių jungčių servisas, `add` / `re-consent` callback eiga ir tikslus atjungimas baigti; liko aiškus kelių paskyrų nustatymų ekranas.
-- [ ] **MA-4/5:** agreguoti visų paskyrų kalendorius, išsaugoti kiekvieno checkbox būseną ir visur taikyti nuoseklias spalvas bei tekstinę kilmę.
-- [ ] **MA-6/7:** visas įvykių ir užduočių mutacijas bei Outlook blokus pririšti prie konkrečios jungties.
-- [ ] **MA-8:** pilna automatinė, Docker, backup / restore ir kontroliuojama gyvų Google bei Microsoft paskyrų patikra.
+- [x] **MA-2/3:** OAuth kelių jungčių servisas, `add` / `re-consent` callback eiga, tikslus atjungimas ir kelių paskyrų nustatymų ekranas baigti.
+- [x] **MA-4/5:** agreguoti visų paskyrų kalendorius, išsaugoti kiekvieno checkbox būseną ir visur taikyti nuoseklias spalvas bei tekstinę kilmę. Gyvas kelių Google paskyrų bandymas 2026-10-01 patvirtino ankstesnę vienodo fono spragą; pataisyta stabili pasikartojančių spalvų sklaida ir paskyros / kalendoriaus kilmė įvykio redaktoriuje.
+- [x] **MA-6/7:** visos įvykių ir užduočių mutacijos bei Outlook blokai pririšti prie konkrečios jungties.
+- [ ] **MA-8:** automatinė, Docker ir backup / restore patikra baigta; vykdoma kontroliuojama gyvų Google bei Microsoft paskyrų patikra.
 
 Šis etapas vykdomas prieš PWA. Antra tos pačios rūšies paskyra produkcijoje nejungiama, kol nebaigta OAuth expand migracija ir jungčiai priskirta skaitymo eiga.
 

@@ -1,6 +1,6 @@
 # Kelių Google ir Microsoft paskyrų įgyvendinimo planas
 
-Atnaujinta: 2026-09-30. Būsena: **MA-8a baigtas** — automatinė regresija, Docker ir backup roundtrip praėjo; liko MA-8b gyvų paskyrų priėmimas.
+Atnaujinta: 2026-10-01. Būsena: **MA-8a baigtas, MA-8b vykdomas** — automatinė regresija, Docker ir backup roundtrip praėjo; gyvas kelių paskyrų priėmimas pradėtas.
 
 ## Įgyvendinimo būsena
 
@@ -11,10 +11,10 @@ Atnaujinta: 2026-09-30. Būsena: **MA-8a baigtas** — automatinė regresija, Do
 - [x] **Backup / restore pagrindas:** pilna kopija apima naujas lenteles ir schemos versiją, sena kopija normalizuojama atkūrimo transakcijoje, tikrinami išoriniai raktai ir neatkuriamos senos naršyklės sesijos.
 - [x] **MA-3:** nustatymų UI rodo visas jungtis su atskirais pridėjimo, atnaujinimo ir atjungimo veiksmais (`IntegrationAccounts.tsx`); `/api/auth/me` grąžina `identities` ir `activeSessionCount`.
 - [x] **MA-4a/b:** agreguotas kelių paskyrų kalendorių katalogas (`/api/google/calendars`, `/api/microsoft/calendars`) su normalizuotais pasirinkimais; įvykių GET agregavimas per `allSettledLimited` su dalinėmis klaidomis UI.
-- [x] **MA-5:** vieninga spalvų sistema — `calendarColor` ant įvykių per visus rodinius (dienos, savaitės, mėnesio, visos dienos blokai); primary/default kalendoriaus atsarginė spalva neeksplicitiniam pasirinkimui.
+- [x] **MA-5:** vieninga spalvų sistema — tiekėjo spalva naudojama, kai ji unikali, o trūkstama arba tarp paskyrų pasikartojanti spalva deterministiškai išvedama iš paskyros ir kalendoriaus tapatybės. Dienos, savaitės, mėnesio ir visos dienos kortelės spalvina visą foną bei kraštą; kortelė ir redaktorius tekstu rodo paskyrą bei kalendorių. Gyvo bandymo metu rasta ankstesnė tik kraštelio / tiekėjo fono spraga ištaisyta 2026-10-01.
 - [x] **MA-6:** jungčiai priskirtas įvykių kūrimas ir visos mutacijos (PATCH/PUT/DELETE) tikrina `connectionId`; `ExistingEventEditor` rodo kalendoriaus pavadinimą.
 - [x] **MA-7:** visi užduočių maršrutai naudoja jungčiai priskirtus gateway; sąrašų paskirtys rodo paskyros etiketę; mutacijos tikrina account ir connection ID; Outlook blokui pasirenkama Microsoft paskyra, o blokas kuriamas jos numatytajame kalendoriuje.
-- [x] **MA-8a:** `npm run typecheck`, 310/310 Node testų, produkcinis build, smoke, Calendar / Tasks HTTP patikros ir 45/45 Playwright scenarijai praėjo. `npm run test:docker` patvirtino image build, health, keturių OAuth jungčių pilnos kopijos atkūrimą ir pakartotinį paleidimą su tais pačiais duomenimis (2026-09-30).
+- [x] **MA-8a:** `npm run typecheck`, 312/312 Node testų, produkcinis build, smoke, Calendar / Tasks HTTP patikros ir 46/46 Playwright scenarijai praėjo. `npm run test:docker` patvirtino image build, health, keturių OAuth jungčių pilnos kopijos atkūrimą ir pakartotinį paleidimą su tais pačiais duomenimis (Docker patikra 2026-09-30; spalvų regresija 2026-10-01).
 - [ ] **Kitas žingsnis — MA-8b:** kontroliuojamas priėmimas su gyvomis Google ir Microsoft paskyromis bei rezultato dokumentavimas.
 
 ## Produkto tikslas

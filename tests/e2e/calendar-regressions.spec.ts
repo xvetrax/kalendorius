@@ -1,8 +1,8 @@
 import {expect,test,type Page} from "@playwright/test";
 
 const day="2026-09-23";
-function event(provider:"google"|"outlook",id:string,summary:string,hour:number){
-  return {id,calendarId:"primary",provider,connectionId:`${provider}-connection`,key:JSON.stringify([provider,`${provider}-connection`,"primary",id]),version:provider==="google"?'"google-v1"':'W/"outlook-v1"',summary,editable:true,readOnlyReason:"",attendeeCount:0,allDay:false,recurring:false,canRespond:false,showAs:"busy",visibility:"default",reminder:{mode:provider==="google"?"default":"minutes",...(provider==="outlook"?{minutes:15}:{})},timeZone:"UTC",start:{dateTime:`${day}T${String(hour).padStart(2,"0")}:00:00Z`},end:{dateTime:`${day}T${String(hour+1).padStart(2,"0")}:00:00Z`}};
+function event(provider:"google"|"outlook",id:string,summary:string,hour:number,overrides:Record<string,unknown>={}){
+  return {id,calendarId:"primary",provider,connectionId:`${provider}-connection`,key:JSON.stringify([provider,`${provider}-connection`,"primary",id]),version:provider==="google"?'"google-v1"':'W/"outlook-v1"',summary,editable:true,readOnlyReason:"",attendeeCount:0,allDay:false,recurring:false,canRespond:false,showAs:"busy",visibility:"default",reminder:{mode:provider==="google"?"default":"minutes",...(provider==="outlook"?{minutes:15}:{})},timeZone:"UTC",start:{dateTime:`${day}T${String(hour).padStart(2,"0")}:00:00Z`},end:{dateTime:`${day}T${String(hour+1).padStart(2,"0")}:00:00Z`},...overrides};
 }
 function task(overrides:Record<string,unknown>={}){
   return {id:"task-1",key:'["google","account","list","task-1"]',source:"google",account_id:"account",list_id:"list",list_name:"Darbai",title:"Google dienos užduotis",notes:"",completed:0,due_date:day,due_at:null,scheduled_at:null,duration_minutes:45,mirror_requested:0,mirror_event_id:null,mirror_error:null,project:"Google Tasks",priority:"normal",energy:"medium",tags:"",schedule_version:0,legacy_schedule:0,...overrides};
@@ -30,6 +30,22 @@ test("Google and Outlook events keep distinct colors and open from month view",a
   await expect(page.getByRole("dialog",{name:"Kalendoriaus įvykis"}).getByLabel("Pavadinimas")).toHaveValue("Outlook spalva");
   await page.getByRole("dialog",{name:"Kalendoriaus įvykis"}).getByRole("button",{name:"Uždaryti"}).click();googleItems=[];
   await page.getByRole("button",{name:"Atnaujinti duomenis"}).click();await expect(page.locator(".monthGrid span").filter({hasText:"Google spalva"})).toHaveCount(0);
+});
+
+test("two Google accounts use different full card colors and show event origin",async({page})=>{
+  await page.clock.setFixedTime(new Date(`${day}T09:00:00Z`));
+  const items=[
+    event("google","personal-event","Asmeninis",8,{connectionId:"google-personal",calendarColor:"#1a73e8",calendarName:"Asmeninis kalendorius",accountLabel:"asmeninis@gmail.com",accountEmail:"asmeninis@gmail.com"}),
+    event("google","work-event","Darbinis",10,{connectionId:"google-work",calendarColor:"#d93025",calendarName:"Darbo kalendorius",accountLabel:"darbas@example.com",accountEmail:"darbas@example.com"}),
+  ];
+  await mockTasks(page);await page.route("**/api/google/events**",route=>route.fulfill({json:{items}}));await page.route("**/api/microsoft/events**",route=>route.fulfill({json:{items:[]}}));
+  await page.goto("/");await page.getByRole("button",{name:"Diena",exact:true}).click();
+  const cards=page.locator(".eventBlock.google"),colors=await cards.evaluateAll(elements=>elements.map(element=>getComputedStyle(element).backgroundColor));
+  expect(new Set(colors).size).toBe(2);
+  await page.getByRole("button",{name:/Redaguoti įvykį: Darbinis/}).click();
+  const dialog=page.getByRole("dialog",{name:"Kalendoriaus įvykis"});
+  await expect(dialog.locator(".eventSource")).toContainText("darbas@example.com");
+  await expect(dialog.locator(".eventSource")).toContainText("Kalendorius: Darbo kalendorius");
 });
 
 test("Google and Outlook events can be deleted with identity and version",async({page})=>{
