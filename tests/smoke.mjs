@@ -43,6 +43,23 @@ try {
     await delay(200);
   }
   assert.ok(ready, "Serveris turi pasileisti");
+  const publicPwaAssets = [
+    ["/manifest.webmanifest", "application/manifest+json"],
+    ["/pwa/icon-192.png", "image/png"],
+    ["/pwa/icon-512.png", "image/png"],
+    ["/pwa/icon-maskable-512.png", "image/png"],
+    ["/pwa/apple-touch-icon.png", "image/png"],
+  ];
+  for (const [asset, expectedType] of publicPwaAssets) {
+    const response = await nativeFetch(new URL(asset, origin), { redirect: "manual" });
+    assert.equal(response.status, 200, `${asset} turi būti viešas prieš prisijungimą`);
+    assert.ok((response.headers.get("content-type") || "").startsWith(expectedType), `${asset} MIME tipas`);
+  }
+  assert.equal(
+    (await nativeFetch(`${origin}/api/tasks`)).status,
+    401,
+    "PWA vieši failai negali atverti privataus API",
+  );
   const html = await (await fetch(origin)).text();
   assert.match(html, /aria-label="Kraunamas kalendorius"/, "SSR neturi įrašyti build dienos datos į kalendorių");
   assert.ok(!html.includes('class="calendarToolbar"'), "Datos rodinys atsiranda tik žinant naršyklės laiką");

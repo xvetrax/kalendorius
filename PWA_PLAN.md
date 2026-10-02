@@ -1,6 +1,12 @@
 # „Dienos planas“ PWA įgyvendinimo planas
 
-Atnaujinta: 2026-09-27. Būsena: planas paruoštas, įgyvendinimas nepradėtas. Pagal produkto prioritetą PWA pradedama tik užbaigus [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
+Atnaujinta: 2026-10-02. Būsena: PWA-1 pradėtas; manifestas, bazinis ikonų rinkinys ir platformų metaduomenys įgyvendinti. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
+
+## Įgyvendinimo eiga
+
+- [x] **PWA-1a:** manifestas, 192×192, 512×512, maskable ir Apple Touch ikonos, šviesios / tamsios temos naršyklės spalvos bei vieša prieiga prieš prisijungimą.
+- [ ] **PWA-1b:** diegimo sąsaja, standalone ir safe-area išdėstymas, OAuth bei atsijungimo patikra įdiegtoje programėlėje.
+- [ ] **PWA-2:** saugus service worker, ryšio būsena ir programos atnaujinimo eiga.
 
 ## Tikslas
 
