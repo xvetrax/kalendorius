@@ -7,6 +7,8 @@ Atnaujinta: 2026-10-03. Būsena: PWA-1a užbaigtas; PWA-1b kodas ir automatinė 
 - [x] **PWA-1a:** manifestas, 192×192, 512×512, maskable ir Apple Touch ikonos, šviesios / tamsios temos naršyklės spalvos bei vieša prieiga prieš prisijungimą.
 - [ ] **PWA-1b:** diegimo sąsaja, standalone ir safe-area išdėstymas įgyvendinti; liko gyva OAuth, atsijungimo ir realaus macOS / Android įdiegimo patikra.
 - [ ] **PWA-2:** saugus service worker, ryšio būsena ir programos atnaujinimo eiga.
+- [x] **PWA-2a:** saugus service worker, tik viešų failų podėlis, bendras offline puslapis, griežtos antraštės ir seno podėlio valymas. Praėjo 319 testų, build, HTTP ir Docker smoke, realus Playwright offline scenarijus bei nepriklausoma peržiūra.
+- [ ] **PWA-2b:** ryšio būsena, rašymo veiksmų blokavimas ir valdomas programėlės atnaujinimas.
 
 ### PWA-1b perdavimo būsena
 

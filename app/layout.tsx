@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./planner-shell.css";
 import {themeBootstrap} from "@/lib/ui-preferences";
+import {PwaRuntimeProvider} from "@/app/pwa-runtime";
 
 export const metadata: Metadata = {
   title: "Dienos planas",
@@ -29,5 +30,5 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="lt" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{__html:themeBootstrap}}/></head><body>{children}</body></html>;
+  return <html lang="lt" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{__html:themeBootstrap}}/></head><body><PwaRuntimeProvider>{children}</PwaRuntimeProvider></body></html>;
 }

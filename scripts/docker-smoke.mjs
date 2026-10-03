@@ -92,6 +92,9 @@ try {
   await waitForHealth();
   for (const [asset, expectedType] of [
     ["/manifest.webmanifest", "application/manifest+json"],
+    ["/sw.js", "application/javascript"],
+    ["/offline.html", "text/html"],
+    ["/pwa/offline.css", "text/css"],
     ["/pwa/icon-192.png", "image/png"],
     ["/pwa/icon-512.png", "image/png"],
     ["/pwa/icon-maskable-512.png", "image/png"],
@@ -101,6 +104,9 @@ try {
     assert.equal(response.status, 200, `${asset} turi būti Docker image`);
     assert.ok((response.headers.get("content-type") || "").startsWith(expectedType), `${asset} MIME tipas Docker image`);
   }
+  const workerResponse = await fetch(`${origin}/sw.js`);
+  assert.equal(workerResponse.headers.get("cache-control"), "no-cache, no-store, must-revalidate", "Service worker negali įstrigti HTTP podėlyje");
+  assert.ok((workerResponse.headers.get("content-security-policy") || "").includes("connect-src 'self'"), "Service worker turi ribotą CSP");
   const headers = { Origin: origin, Cookie: `${SESSION_COOKIE}=${rawToken}` };
   const backupResponse = await fetch(`${origin}/api/backup`, {
     method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ type: "full" }),

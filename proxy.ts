@@ -10,6 +10,8 @@ export function proxy(request: NextRequest) {
     pathname === "/login" ||
     pathname === "/api/health" ||
     pathname === "/manifest.webmanifest" ||
+    pathname === "/sw.js" ||
+    pathname === "/offline.html" ||
     pathname === "/favicon.svg" ||
     pathname.startsWith("/pwa/") ||
     pathname.startsWith("/api/auth/")

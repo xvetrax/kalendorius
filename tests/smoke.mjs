@@ -45,6 +45,9 @@ try {
   assert.ok(ready, "Serveris turi pasileisti");
   const publicPwaAssets = [
     ["/manifest.webmanifest", "application/manifest+json"],
+    ["/sw.js", "application/javascript"],
+    ["/offline.html", "text/html"],
+    ["/pwa/offline.css", "text/css"],
     ["/pwa/icon-192.png", "image/png"],
     ["/pwa/icon-512.png", "image/png"],
     ["/pwa/icon-maskable-512.png", "image/png"],
@@ -55,6 +58,12 @@ try {
     assert.equal(response.status, 200, `${asset} turi būti viešas prieš prisijungimą`);
     assert.ok((response.headers.get("content-type") || "").startsWith(expectedType), `${asset} MIME tipas`);
   }
+  const workerResponse = await nativeFetch(new URL("/sw.js", origin));
+  assert.equal(workerResponse.headers.get("cache-control"), "no-cache, no-store, must-revalidate");
+  assert.match(workerResponse.headers.get("content-security-policy") || "", /connect-src 'self'/);
+  assert.match(workerResponse.headers.get("x-content-type-options") || "", /nosniff/);
+  const workerSource = await workerResponse.text();
+  assert.ok(!workerSource.includes("/api/tasks"), "Service worker negali turėti privataus API podėlio taisyklės");
   assert.equal(
     (await nativeFetch(`${origin}/api/tasks`)).status,
     401,
