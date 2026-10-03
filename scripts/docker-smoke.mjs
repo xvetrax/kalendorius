@@ -90,6 +90,17 @@ try {
 
   runContainer();
   await waitForHealth();
+  for (const [asset, expectedType] of [
+    ["/manifest.webmanifest", "application/manifest+json"],
+    ["/pwa/icon-192.png", "image/png"],
+    ["/pwa/icon-512.png", "image/png"],
+    ["/pwa/icon-maskable-512.png", "image/png"],
+    ["/pwa/apple-touch-icon.png", "image/png"],
+  ]) {
+    const response = await fetch(`${origin}${asset}`, { redirect: "manual" });
+    assert.equal(response.status, 200, `${asset} turi būti Docker image`);
+    assert.ok((response.headers.get("content-type") || "").startsWith(expectedType), `${asset} MIME tipas Docker image`);
+  }
   const headers = { Origin: origin, Cookie: `${SESSION_COOKIE}=${rawToken}` };
   const backupResponse = await fetch(`${origin}/api/backup`, {
     method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ type: "full" }),

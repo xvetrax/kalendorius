@@ -1,12 +1,20 @@
 # „Dienos planas“ PWA įgyvendinimo planas
 
-Atnaujinta: 2026-10-02. Būsena: PWA-1 pradėtas; manifestas, bazinis ikonų rinkinys ir platformų metaduomenys įgyvendinti. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
+Atnaujinta: 2026-10-03. Būsena: PWA-1a užbaigtas; PWA-1b kodas ir automatinė patikra užbaigti, liko realių įrenginių ir gyvos OAuth sesijos priėmimo patikra. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
 
 ## Įgyvendinimo eiga
 
 - [x] **PWA-1a:** manifestas, 192×192, 512×512, maskable ir Apple Touch ikonos, šviesios / tamsios temos naršyklės spalvos bei vieša prieiga prieš prisijungimą.
-- [ ] **PWA-1b:** diegimo sąsaja, standalone ir safe-area išdėstymas, OAuth bei atsijungimo patikra įdiegtoje programėlėje.
+- [ ] **PWA-1b:** diegimo sąsaja, standalone ir safe-area išdėstymas įgyvendinti; liko gyva OAuth, atsijungimo ir realaus macOS / Android įdiegimo patikra.
 - [ ] **PWA-2:** saugus service worker, ryšio būsena ir programos atnaujinimo eiga.
+
+### PWA-1b perdavimo būsena
+
+- Praėjo `npm run typecheck`, 315 vienetinių / integracinių testų, produkcinis `npm run build`, HTTP smoke ir Docker smoke patikros.
+- PWA diegimo bei mobiliojo išdėstymo Playwright scenarijai praėjo 8/8; į juos įtrauktas priimtas ir atmestas naršyklės diegimo dialogas, `appinstalled`, standalone bei iOS standalone būsenos.
+- Pirmo nepriklausomo vertinimo pastabos dėl horizontalaus telefono `safe-area` ir vienkartinio atmesto diegimo įvykio sutvarkytos bei padengtos testais.
+- Pakartotinis nepriklausomas vertinimas neįvyko, nes vertinimo agento workspace baigėsi kreditai. Prieš pažymint PWA-1b užbaigtu reikia peržiūrėti galutinį diff ir atlikti žemiau nurodytą gyvą patikrą.
+- Gyvai patikrinti: diegimą ir paleidimą macOS bei Android, prisijungimą ir atsijungimą standalone lange, Google ir Microsoft OAuth grįžimą bei pasibaigusios sesijos nukreipimą į `/login`.
 
 ## Tikslas
 
