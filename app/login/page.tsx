@@ -1,12 +1,14 @@
 "use client";
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { usePwaRuntime } from "@/app/pwa-runtime";
 
 // ---------------------------------------------------------------------------
 // Login form — OIDC provider choice
 // ---------------------------------------------------------------------------
 
 function LoginForm() {
+  const {online}=usePwaRuntime();
   return (
     <div className="loginBox">
       <h1 className="loginTitle">Dienos planas</h1>
@@ -16,6 +18,8 @@ function LoginForm() {
       <div className="loginForm" style={{ gap: 12 }}>
         <a
           href="/api/auth/google-oidc/authorize"
+          aria-disabled={!online}
+          onClick={event=>{if(!online)event.preventDefault();}}
           className="loginBtn"
           style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, textDecoration: "none", textAlign: "center" }}
         >
@@ -23,6 +27,8 @@ function LoginForm() {
         </a>
         <a
           href="/api/auth/microsoft-oidc/authorize"
+          aria-disabled={!online}
+          onClick={event=>{if(!online)event.preventDefault();}}
           className="loginBtn"
           style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, textDecoration: "none", textAlign: "center", background: "#0078d4" }}
         >

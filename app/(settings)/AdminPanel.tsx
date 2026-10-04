@@ -15,6 +15,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import {usePwaRuntime} from "@/app/pwa-runtime";
 
 interface UserEntry {
   id: number;
@@ -30,6 +31,7 @@ interface UserEntry {
 }
 
 export function AdminPanel({ currentUserId }: { currentUserId: number }) {
+  const {online}=usePwaRuntime();
   const [users, setUsers] = useState<UserEntry[]>([]);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -55,6 +57,7 @@ export function AdminPanel({ currentUserId }: { currentUserId: number }) {
   }
 
   async function patchUser(userId: number, patch: Record<string, unknown>) {
+    if(!online){flash("Nėra interneto ryšio.",false);return;}
     const key = `patch-${userId}`;
     setBusy(key);
     try {
@@ -137,7 +140,7 @@ export function AdminPanel({ currentUserId }: { currentUserId: number }) {
                     type="button"
                     className="ghostButton"
                     style={{ fontSize: ".7rem", padding: "5px 9px" }}
-                    disabled={busy !== null}
+                    disabled={!online||busy !== null}
                     onClick={() => patchUser(user.id, { role: user.role === "admin" ? "member" : "admin" })}
                     title={user.role === "admin" ? "Pažeminti į narį" : "Paaukštinti į administratorių"}
                   >
@@ -150,7 +153,7 @@ export function AdminPanel({ currentUserId }: { currentUserId: number }) {
                     type="button"
                     className="ghostButton"
                     style={{ fontSize: ".7rem", padding: "5px 9px", color: user.status === "active" ? "#9a4d5c" : "#1a6b35" }}
-                    disabled={busy !== null}
+                    disabled={!online||busy !== null}
                     onClick={() => patchUser(user.id, { status: user.status === "active" ? "disabled" : "active" })}
                   >
                     {user.status === "active" ? "Išjungti" : "Įjungti"}

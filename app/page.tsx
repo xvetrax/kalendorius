@@ -23,6 +23,7 @@ import {UserAccountPanel} from "@/app/(settings)/UserAccountPanel";
 import {AdminPanel} from "@/app/(settings)/AdminPanel";
 import {IntegrationAccounts, type IntegrationConnection, type IntegrationStatus} from "@/app/(settings)/IntegrationAccounts";
 import {InstallAppPanel, usePwaInstall} from "@/app/(settings)/InstallAppPanel";
+import {usePwaRuntime} from "@/app/pwa-runtime";
 
 type View = "calendar" | "tasks" | "focus";
 type Mode = "day" | "workweek" | "week" | "month";
@@ -61,6 +62,7 @@ export default function Planner() {
   const loadVersion = useRef(0);
   const {theme,chooseTheme,collapsed,collapse}=usePreferences();
   const pwaInstall=usePwaInstall();
+  const pwaRuntime=usePwaRuntime();
   const searchInput=useRef<HTMLInputElement>(null);
   const [settingsOpen,setSettingsOpen]=useState(false);
   const [taskListManagerOpen,setTaskListManagerOpen]=useState(false);
@@ -219,7 +221,9 @@ export default function Planner() {
   },[focusTask,seconds,running,focusStartedAt,focusEndsAt,focusRestored]);
 
   function report(error: unknown) { setToast(error instanceof Error ? error.message : "Veiksmo atlikti nepavyko."); }
+  function requireOnline() {if(!pwaRuntime.online)throw new Error("Nėra interneto ryšio. Prisijungus keitimą galėsi pakartoti.");}
   async function createTask(data: Record<string, unknown>) {
+    requireOnline();
     const destination=taskLists.find(list=>list.key === taskDestination);
     if(taskDestination !== "local" && (!destination || !destination.writable || destination.stale)) throw new Error("Pasirink prieinamą užduočių sąrašą. Jei sąrašas pasenęs, atnaujink duomenis.");
     const target=destination ? {source:destination.source,account_id:destination.account_id,connection_id:destination.connection_id,list_id:destination.list_id} : {source:"local"};
@@ -227,6 +231,7 @@ export default function Planner() {
     setTasks((current) => [...current, task]); await load();
   }
   async function patchTask(task: Task, patch: Record<string, unknown>) {
+    requireOnline();
     ++loadVersion.current;
     const updated = await responseJson<Task>(await fetch("/api/tasks", {method:"PATCH",headers:{"content-type":"application/json"},
       body:JSON.stringify({id:task.id,source:task.source,account_id:task.account_id,connection_id:task.connection_id,list_id:task.list_id,schedule_version:task.schedule_version,...patch})}));
@@ -236,6 +241,7 @@ export default function Planner() {
     return updated;
   }
   async function deleteTask(task:Task) {
+    requireOnline();
     ++loadVersion.current;
     const query=new URLSearchParams({id:String(task.id),source:task.source,...(task.account_id ? {account_id:task.account_id,...(task.connection_id?{connection_id:String(task.connection_id)}:{}),list_id:task.list_id!} : {})});
     await responseJson(await fetch(`/api/tasks?${query}`,{method:"DELETE"}));
@@ -243,6 +249,7 @@ export default function Planner() {
     setEditingTask(null);setToast("Užduotis ištrinta.");await load();
   }
   async function cleanupMirror(item:MirrorCleanup) {
+    if(!pwaRuntime.online){setToast("Nėra interneto ryšio. Prisijungus valymą galėsi pakartoti.");return;}
     if(cleanupBusy)return;setCleanupBusy(item.task_key);
     try {
       await responseJson(await fetch("/api/tasks/mirror-cleanup",{method:"POST",headers:{"content-type":"application/json"},
@@ -251,6 +258,7 @@ export default function Planner() {
     } catch(error) {report(error);await load().catch(()=>{});} finally {setCleanupBusy(null);}
   }
   async function saveEvent(event:CalEvent,patch:Record<string,unknown>) {
+    requireOnline();
     ++loadVersion.current;
     try {
       const updated=await responseJson<CalEvent>(await fetch(`/api/${event.provider==="outlook"?"microsoft":"google"}/events`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:event.id,calendarId:event.calendarId,connectionId:event.connectionId,version:event.version,...patch})}));
@@ -259,6 +267,7 @@ export default function Planner() {
     } catch(error) {await load();throw error;}
   }
   async function respondEvent(event:CalEvent,responseStatus:Exclude<CalendarResponseStatus,"needsAction">) {
+    requireOnline();
     ++loadVersion.current;
     try {
       await responseJson(await fetch(`/api/${event.provider==="outlook"?"microsoft":"google"}/events`,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({id:event.id,calendarId:event.calendarId,connectionId:event.connectionId,version:event.version,responseStatus})}));
@@ -314,6 +323,7 @@ export default function Planner() {
     setFocusTask(task);setSeconds(remaining);setFocusStartedAt(seconds>0?focusStartedAt??now:now);setFocusEndsAt(now+remaining*1000);setRunning(true);
   }
   async function disconnect(provider: "microsoft" | "google", connection:IntegrationConnection) {
+    requireOnline();
     const name = provider === "microsoft" ? "Microsoft" : "Google";
     const account=connection.label||connection.email||`${name} paskyra`;
     if (!window.confirm(`Atjungti „${account}“ nuo šios programėlės visuose įrenginiuose? Google / Microsoft paskyra ir joje esantys duomenys nebus ištrinti.`)) return;
@@ -334,40 +344,41 @@ export default function Planner() {
       <header className="topHeader">
         <div className="pageHeading"><span className="eyebrow">DIENOS PLANAS</span><h1>{view==="calendar" ? "Laikas tavo dienai" : view==="tasks" ? "Visi tavo darbai" : "Erdvė susikaupti"}</h1></div>
         <div className="search"><Icon name="search"/><input ref={searchInput} aria-label="Ieškoti užduočių ir įvykių" value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>{if(e.key==="Escape")setSearch("");}} placeholder="Ieškoti užduočių ir įvykių"/>{search ? <button aria-label="Išvalyti paiešką" onClick={()=>{setSearch("");searchInput.current?.focus();}}>×</button> : <kbd>⌘ / Ctrl K</kbd>}</div>
-        <div className="headerActions"><button className="iconButton" aria-label="Atnaujinti duomenis" title="Atnaujinti duomenis" disabled={loading} onClick={()=>{setLoading(true);void load().catch(error=>{setLoading(false);report(error);});}}>↻</button><button className="iconButton" aria-label="Išvaizdos nustatymai" title="Išvaizdos nustatymai" onClick={()=>setSettingsOpen(true)}><Icon name={theme==="dark" ? "moon" : "sun"}/></button>{view==="calendar" && <button className="iconButton panelToggle" aria-label={panelOpen ? "Slėpti užduočių juostą" : "Rodyti užduočių juostą"} title={panelOpen ? "Slėpti užduočių juostą" : "Rodyti užduočių juostą"} aria-expanded={panelOpen} aria-controls="task-panel" onClick={()=>{if(isMobile)setMobilePanelOpen(!mobilePanelOpen);else collapse(!collapsed);}}><Icon name="panel"/></button>}<button className="newButton" aria-label={view==="calendar" ? "Naujas įvykis" : "Nauja užduotis"} onClick={()=>view==="calendar" ? setEventDate(new Date()) : setTaskModal(true)}><Icon name="plus"/><span>{view==="calendar" ? "Įvykis" : "Užduotis"}</span></button></div>
+        <div className="headerActions"><button className="iconButton" aria-label="Atnaujinti duomenis" title="Atnaujinti duomenis" disabled={loading||!pwaRuntime.online} onClick={()=>{setLoading(true);void load().catch(error=>{setLoading(false);report(error);});}}>↻</button><button className="iconButton" aria-label="Išvaizdos nustatymai" title="Išvaizdos nustatymai" onClick={()=>setSettingsOpen(true)}><Icon name={theme==="dark" ? "moon" : "sun"}/></button>{view==="calendar" && <button className="iconButton panelToggle" aria-label={panelOpen ? "Slėpti užduočių juostą" : "Rodyti užduočių juostą"} title={panelOpen ? "Slėpti užduočių juostą" : "Rodyti užduočių juostą"} aria-expanded={panelOpen} aria-controls="task-panel" onClick={()=>{if(isMobile)setMobilePanelOpen(!mobilePanelOpen);else collapse(!collapsed);}}><Icon name="panel"/></button>}<button className="newButton" disabled={!pwaRuntime.online} aria-label={view==="calendar" ? "Naujas įvykis" : "Nauja užduotis"} onClick={()=>view==="calendar" ? setEventDate(new Date()) : setTaskModal(true)}><Icon name="plus"/><span>{view==="calendar" ? "Įvykis" : "Užduotis"}</span></button></div>
       </header>
       {toast && <button role="status" className="toast" onClick={() => setToast("")}>{toast}<span>×</span></button>}
       {view === "calendar" && !clock && <div className="loading" role="status" aria-label="Kraunamas kalendorius"><i/><i/><i/></div>}
-      {view === "calendar" && clock && <Calendar mode={mode} setMode={changeMode} anchor={anchor} setAnchor={setAnchor} days={days} monthDays={monthDays} events={calendarEvents} tasks={calendarTasks} loading={loading} move={move} onDrop={dropTask} onCreate={setEventDate} dragHint={dragHint}/>}
-      {view === "tasks" && <TaskBoard tasks={tasks.filter((task) => `${task.title} ${task.notes || ""}`.toLowerCase().includes(search.toLowerCase()))} onDone={(task) => { void patchTask(task, { completed: !task.completed }).catch(report); }} onFocus={startFocus} onAdd={() => setTaskModal(true)}/>} 
+      {view === "calendar" && clock && <Calendar mode={mode} setMode={changeMode} anchor={anchor} setAnchor={setAnchor} days={days} monthDays={monthDays} events={calendarEvents} tasks={calendarTasks} loading={loading} move={move} onDrop={dropTask} onCreate={(date)=>{if(pwaRuntime.online)setEventDate(date);else setToast("Nėra interneto ryšio — naujo įvykio sukurti negalima.");}} dragHint={dragHint}/>}
+      {view === "tasks" && <TaskBoard tasks={tasks.filter((task) => `${task.title} ${task.notes || ""}`.toLowerCase().includes(search.toLowerCase()))} onDone={(task) => { void patchTask(task, { completed: !task.completed }).catch(report); }} onFocus={startFocus} onAdd={() => setTaskModal(true)}/>}
       {view === "focus" && <Focus
         task={focusTask || openTasks[0]} tasks={openTasks} seconds={seconds} running={running} startedAt={focusStartedAt}
         onToggle={() => toggleFocus(focusTask||openTasks[0])} onReset={resetFocus} onSelect={startFocus}
-        onDone={async () => { const task=focusTask||openTasks[0];if(task)await patchTask(task,{completed:true});setFocusTask(null);resetFocus(); }}/>
+        onDone={() => { const task=focusTask||openTasks[0];if(!task)return;void patchTask(task,{completed:true}).then(()=>{setFocusTask(null);resetFocus();}).catch(report); }}/>
       }
     </section>
     <aside className="taskPanel" id="task-panel" aria-label="Neplanuotos užduotys" hidden={!panelOpen}>
-      <header className="panelHeader"><div><span className="eyebrow">DARBŲ DĖŽUTĖ</span><h1>{clock ? clock.toLocaleDateString("lt-LT", { weekday: "long", day: "numeric", month: "long" }) : "Šiandien"}</h1></div><button className="roundButton" aria-label="Nauja užduotis" onClick={() => setTaskModal(true)}><Icon name="plus"/></button></header>
+      <header className="panelHeader"><div><span className="eyebrow">DARBŲ DĖŽUTĖ</span><h1>{clock ? clock.toLocaleDateString("lt-LT", { weekday: "long", day: "numeric", month: "long" }) : "Šiandien"}</h1></div><button className="roundButton" disabled={!pwaRuntime.online} aria-label="Nauja užduotis" onClick={() => setTaskModal(true)}><Icon name="plus"/></button></header>
       <section className="dayLoad"><div><strong>{durationLabel(todayMinutes)}</strong><span>suplanuota darbams</span></div><div className="progress"><i style={{ width: `${Math.min(100, todayMinutes / 480 * 100)}%` }}/></div><small>{todayEvents.length} įvykiai · {todayTasks.length} užduotys</small></section>
-      <form className="quickAdd" onSubmit={quickAdd}><span>＋</span><input value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} placeholder="Pridėti užduotį…"/><kbd>↵</kbd></form>
+      <form className="quickAdd" onSubmit={quickAdd}><span>＋</span><input disabled={!pwaRuntime.online} value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} placeholder={pwaRuntime.online?"Pridėti užduotį…":"Prisijunk prie interneto…"}/><kbd>↵</kbd></form>
       <div className="filters"><button className={project === "Visi" ? "active" : ""} onClick={() => setProject("Visi")}>Visos</button>{projects.map((name) => <button className={project === name ? "active" : ""} onClick={() => setProject(name)} key={name}>{name}</button>)}</div>
       <div className="listTitle"><span>NEPLANUOTA</span><b>{unplanned.length}</b></div>
-      <div className="taskListDestination"><TaskDestination lists={taskLists} value={taskDestination} onChange={setTaskDestination}/><button type="button" onClick={()=>setTaskListManagerOpen(true)}><Icon name="settings"/>Tvarkyti užduočių sąrašus</button></div><section className="taskList" onDragOver={(e) => e.preventDefault()} onDrop={unscheduleDrop}>{unplanned.map((task) => <TaskCard task={task} onDone={() => { void patchTask(task, { completed: true }).catch(report); }} onFocus={() => startFocus(task)} key={task.key}/>)}{!unplanned.length && <div className="emptyState"><b>✓</b><strong>Viskas suplanuota</strong><span>Naują užduotį pridėk aukščiau</span></div>}</section>
+      <div className="taskListDestination"><TaskDestination lists={taskLists} value={taskDestination} onChange={setTaskDestination} disabled={!pwaRuntime.online}/><button type="button" onClick={()=>setTaskListManagerOpen(true)}><Icon name="settings"/>Tvarkyti užduočių sąrašus</button></div><section className="taskList" onDragOver={(e) => e.preventDefault()} onDrop={unscheduleDrop}>{unplanned.map((task) => <TaskCard task={task} onDone={() => { void patchTask(task, { completed: true }).catch(report); }} onFocus={() => startFocus(task)} key={task.key}/>)}{!unplanned.length && <div className="emptyState"><b>✓</b><strong>Viskas suplanuota</strong><span>Naują užduotį pridėk aukščiau</span></div>}</section>
       <p className="panelHint">{isMobile ? "Paspausk užduotį ir pasirink suplanuotą pradžią." : "Tempk užduotį į kalendorių."}<br/>Terminas ir darbo laikas – atskirai.</p>
 
     </aside>
-    {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div>{!pwaInstall.standalone&&!pwaInstall.installed&&<><h3>Įdiegti programėlę</h3><InstallAppPanel install={pwaInstall}/></>}<h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><IntegrationAccounts google={googleIntegration} microsoft={microsoftIntegration} busy={disconnecting} onDisconnect={disconnect}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href={`/api/google/connect?mode=reconsent&connectionId=${googleIntegration.connections?.find(connection=>connection.status==="active"&&!connection.tasksConnected)?.id??""}`}>Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p>{mirrorCleanups.length>0&&<><h3>Likę Outlook blokai</h3><section className="settingsBlock" aria-label="Likusių Outlook blokų valymas">{mirrorCleanups.map(item=><div className="connection" key={item.task_key}><b className="blue">O</b><div><strong>{item.title}</strong><small>{item.source==="google"?"Google Tasks":"Microsoft To Do"} užduotis pašalinta šaltinyje</small></div><button disabled={!item.can_retry||cleanupBusy===item.task_key} onClick={()=>void cleanupMirror(item)}>{cleanupBusy===item.task_key?"Valoma…":item.can_retry?"Pašalinti bloką":"Prijunk paskyrą"}</button></div>)}</section></>}<h3>Programėlės paskyra ir prisijungimo būdai</h3><UserAccountPanel/>{me && me !== "loading" && me.role === "admin" && <><h3>Administravimas</h3><AdminPanel currentUserId={me.id}/></>}<LogoutButton/>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p><h3>Duomenys</h3><BackupPanel/></section></Modal>}
+    {settingsOpen && <Modal eyebrow="DARBO ERDVĖ" title="Nustatymai" onClose={()=>setSettingsOpen(false)}><section className="preferences"><h3>Išvaizda</h3><p>Pasirink patogią temą. Nustatymas saugomas šioje naršyklėje.</p><div className="themeChoices" role="group" aria-label="Spalvų tema">{(["light","dark","system"] as const).map(value=><button key={value} aria-pressed={theme===value} onClick={()=>chooseTheme(value)}>{value==="light" ? "Šviesi" : value==="dark" ? "Tamsi" : "Pagal įrenginį"}</button>)}</div>{!pwaInstall.standalone&&!pwaInstall.installed&&<><h3>Įdiegti programėlę</h3><InstallAppPanel install={pwaInstall}/></>}<h3>Paskyros ir planavimas</h3><section className="settingsBlock"><label className="freeToggle"><input type="checkbox" checked={mirrorFree} onChange={(e) => { setMirrorFree(e.target.checked); try {localStorage.setItem("mirror-free", String(e.target.checked));} catch {} }}/><i/><span><strong>Rodyti Outlook kalendoriuje</strong><small>Kaip laisvą laiką — ne „Busy“</small></span></label><IntegrationAccounts google={googleIntegration} microsoft={microsoftIntegration} busy={disconnecting} onDisconnect={disconnect}/></section>{google && googleTasksStatus === "api_unavailable" ? <p className="formHint" role="status">Google Tasks API nepasiekiama. Google Cloud projekte patikrink, ar įjungta Tasks API, ir atnaujink duomenis. Pakartotinis sutikimas API neįjungia.</p> : google && !googleTasks ? <p className="formHint" role="status">Google Tasks reikia papildomo leidimo. Prisijunk prie tos pačios paskyros ir sutikimo lange leisk tvarkyti užduotis. <a href={`/api/google/connect?mode=reconsent&connectionId=${googleIntegration.connections?.find(connection=>connection.status==="active"&&!connection.tasksConnected)?.id??""}`} aria-disabled={!pwaRuntime.online} onClick={event=>{if(!pwaRuntime.online)event.preventDefault();}}>Suteikti Tasks leidimą →</a></p> : googleTasks ? <p className="formHint">Google Tasks leidimas suteiktas.</p> : null}<p className="formHint">Užduotims naudojami Google Tasks ir Microsoft To Do sąrašai. <button type="button" className="settingsListButton" onClick={()=>{setSettingsOpen(false);setTaskListManagerOpen(true);}}>Tvarkyti sąrašus</button> Paskyros prijungimas nesuteikia pačios programėlės prieigos apsaugos.</p>{mirrorCleanups.length>0&&<><h3>Likę Outlook blokai</h3><section className="settingsBlock" aria-label="Likusių Outlook blokų valymas">{mirrorCleanups.map(item=><div className="connection" key={item.task_key}><b className="blue">O</b><div><strong>{item.title}</strong><small>{item.source==="google"?"Google Tasks":"Microsoft To Do"} užduotis pašalinta šaltinyje</small></div><button disabled={!pwaRuntime.online||!item.can_retry||cleanupBusy===item.task_key} onClick={()=>void cleanupMirror(item)}>{cleanupBusy===item.task_key?"Valoma…":item.can_retry?"Pašalinti bloką":"Prijunk paskyrą"}</button></div>)}</section></>}<h3>Programėlės paskyra ir prisijungimo būdai</h3><UserAccountPanel/>{me && me !== "loading" && me.role === "admin" && <><h3>Administravimas</h3><AdminPanel currentUserId={me.id}/></>}<LogoutButton/>{(google||outlook)&&<><h3>Kalendoriai</h3><CalendarSelector google={google} outlook={outlook} onSaved={load}/></>}<h3>Klaviatūra</h3><p><kbd>⌘ / Ctrl K</kbd> paieška · <kbd>Esc</kbd> uždaryti langą / išvalyti paiešką.</p><h3>Duomenys</h3><BackupPanel/></section></Modal>}
     {taskListManagerOpen && <Modal eyebrow="UŽDUOTYS" title="Tvarkyti sąrašus" onClose={()=>setTaskListManagerOpen(false)}><TaskListManager onChanged={load} onDeleted={(key)=>setTaskDestination(current=>current===key ? "local" : current)} onListCreated={setTaskDestination}/></Modal>}
-    {editingEvent && <ExistingEventEditor key={editingEvent.event.key} value={editingEvent} onClose={()=>setEditingEvent(null)} onSave={async(patch)=>{await saveEvent(editingEvent.event,patch);setEditingEvent(null);}} onRespond={async status=>{await respondEvent(editingEvent.event,status);setEditingEvent(null);}} onRefresh={()=>{void load();setEditingEvent(null);}} onDelete={async()=>{const ev=editingEvent.event;await responseJson(await fetch(`/api/${ev.provider==="outlook"?"microsoft":"google"}/events?`+new URLSearchParams({id:ev.id,calendarId:ev.calendarId,connectionId:ev.connectionId,version:ev.version}),{method:"DELETE"}));setEvents(current=>current.filter(item=>item.key!==ev.key));setEditingEvent(null);setToast(`„${ev.summary}" ištrinta.`);await load();}}/>}
+    {editingEvent && <ExistingEventEditor key={editingEvent.event.key} value={editingEvent} onClose={()=>setEditingEvent(null)} onSave={async(patch)=>{await saveEvent(editingEvent.event,patch);setEditingEvent(null);}} onRespond={async status=>{await respondEvent(editingEvent.event,status);setEditingEvent(null);}} onRefresh={()=>{void load();setEditingEvent(null);}} onDelete={async()=>{requireOnline();const ev=editingEvent.event;await responseJson(await fetch(`/api/${ev.provider==="outlook"?"microsoft":"google"}/events?`+new URLSearchParams({id:ev.id,calendarId:ev.calendarId,connectionId:ev.connectionId,version:ev.version}),{method:"DELETE"}));setEvents(current=>current.filter(item=>item.key!==ev.key));setEditingEvent(null);setToast(`„${ev.summary}" ištrinta.`);await load();}}/>}
     {editingTask && <TaskEditor task={editingTask} outlook={outlook} microsoftAccounts={(microsoftIntegration.connections??[]).filter(connection=>connection.status==="active")} taskLists={taskLists} onDelete={()=>deleteTask(editingTask)} onClose={() => setEditingTask(null)} onSave={async (patch) => { await patchTask(editingTask, patch); setEditingTask(null); }} onProviderChanged={()=>{setToast("Google Tasks hierarchija atnaujinta.");void load();}} onMoved={(moved)=>{setTasks(current=>current.map(item=>item.key===editingTask.key?moved:item));setFocusTask(current=>current?.key===editingTask.key?moved:current);setToast("Užduotis perkelta.");void load();}}/>}
-    {taskModal && <TaskModal lists={taskLists} destination={taskDestination} onDestination={setTaskDestination} onClose={() => setTaskModal(false)} onSave={async (data) => { await createTask(data); setTaskModal(false); setToast("Užduotis sukurta"); }}/>} 
-    {eventDate && <EventModal initial={eventDate} outlook={outlook} google={google} outlookReady={outlookReady} googleReady={googleReady} onClose={() => setEventDate(null)} onSave={async () => { setEventDate(null); setToast("Įvykis sukurtas"); await load(); }}/>} 
+    {taskModal && <TaskModal lists={taskLists} destination={taskDestination} onDestination={setTaskDestination} onClose={() => setTaskModal(false)} onSave={async (data) => { await createTask(data); setTaskModal(false); setToast("Užduotis sukurta"); }}/>}
+    {eventDate && <EventModal initial={eventDate} outlook={outlook} google={google} outlookReady={outlookReady} googleReady={googleReady} onClose={() => setEventDate(null)} onSave={async () => { setEventDate(null); setToast("Įvykis sukurtas"); await load(); }}/>}
   </main></TaskActions.Provider></EventActions.Provider>;
 }
 
 function Rail({active,icon,label,badge,onClick}:{active:boolean;icon:IconName;label:string;badge?:number;onClick:()=>void}) {return <button className={active ? "active" : ""} onClick={onClick} title={label} aria-label={label} aria-current={active ? "page" : undefined}><Icon name={icon}/><span className="navLabel">{label}</span>{badge ? <i>{badge}</i> : null}</button>;}
 function TaskCard({task,onDone,onFocus}:{task:Task;onDone:()=>void;onFocus:()=>void}) {
   const actions=useContext(TaskActions);
+  const {online}=usePwaRuntime();
   const pointer=useRef<{x:number;y:number}|null>(null),moved=useRef(false);
   const [ghost,setGhost]=useState<{x:number;y:number}|null>(null),[saving,setSaving]=useState(false);
   return <article className={`taskCard priority-${task.priority || "normal"}`} style={{opacity:ghost || saving ? .5 : 1}}
@@ -375,7 +386,7 @@ function TaskCard({task,onDone,onFocus}:{task:Task;onDone:()=>void;onFocus:()=>v
     onPointerDown={event=>{
       moved.current=false;
       const button=(event.target as HTMLElement).closest("button");
-      if(saving || event.button!==0 || event.pointerType==="touch" || (button && !button.classList.contains("taskDetailsButton")))return;
+      if(!online || saving || event.button!==0 || event.pointerType==="touch" || (button && !button.classList.contains("taskDetailsButton")))return;
       pointer.current={x:event.clientX,y:event.clientY};
     }}
     onPointerMove={event=>{const p=pointer.current;if(!p)return;if(moved.current || Math.hypot(event.clientX-p.x,event.clientY-p.y)>5){if(!moved.current)event.currentTarget.setPointerCapture(event.pointerId);moved.current=true;setGhost({x:event.clientX,y:event.clientY});const lane=document.elementsFromPoint(event.clientX,event.clientY).find(el=>el instanceof HTMLElement&&el.classList.contains("dayLane")) as HTMLElement|undefined;if(lane){try{actions.setDragHint(taskDropHint(lane,event.clientY,0,task.duration_minutes));}catch{actions.setDragHint(null);}}else actions.setDragHint(null);}}}
@@ -387,7 +398,7 @@ function TaskCard({task,onDone,onFocus}:{task:Task;onDone:()=>void;onFocus:()=>v
       if(!lane?.dataset.day)return;
       try {const date=dateAtMinute(new Date(lane.dataset.day+"T00:00:00"),event.clientY-lane.getBoundingClientRect().top);setSaving(true);void actions.move(task,date).finally(()=>setSaving(false));} catch(error) {actions.report(error);}
     }}>
-    <button className="check" disabled={saving || Boolean(task.readonly_reason)} aria-label={`Užbaigti: ${task.title}`} onClick={onDone}/>
+    <button className="check" disabled={!online || saving || Boolean(task.readonly_reason)} aria-label={`Užbaigti: ${task.title}`} onClick={onDone}/>
     <button className="taskDetailsButton" disabled={saving} onClick={event=>{if(event.detail===0 || !moved.current)actions.edit(task);}}><strong>{task.title}</strong><span>{taskSourceLabel(task)}{task.stale ? " · pasenę duomenys" : ""}</span><span>{task.project} · {durationLabel(task.duration_minutes)}{task.due_at ? ` · terminas ${new Date(task.due_at).toLocaleDateString("lt-LT")}` : task.due_date ? ` · Google diena ${task.due_date}` : ""}</span></button>
     <button className="playMini" disabled={saving} aria-label={`Fokusuotis: ${task.title}`} title="Pradėti fokusavimo sesiją" onClick={onFocus}><span aria-hidden="true">▶</span> Fokusas</button>
     {ghost && createPortal(<div className="taskDragPreview" style={{left:ghost.x+12,top:ghost.y+12}}><strong>{task.title}</strong><small>{durationLabel(task.duration_minutes)} · Paleisk kalendoriuje</small></div>,document.body)}
@@ -444,6 +455,7 @@ function TimeGrid({ days, events, tasks, onDrop, onCreate, dragHint }: { days: D
 }
 function TaskBlock({ task, segment }: { task: Task; segment:DaySegment }) {
   const start = new Date(task.scheduled_at!); const actions = useContext(TaskActions);
+  const {online}=usePwaRuntime();
   const [preview,setPreview] = useState<number | null>(null); const [saving,setSaving] = useState(false);
   const gesture = useRef<{y:number;duration:number;next:number} | null>(null);
   const moveGesture = useRef<{x:number;y:number;grab:number} | null>(null); const moved = useRef(false);
@@ -453,8 +465,8 @@ function TaskBlock({ task, segment }: { task: Task; segment:DaySegment }) {
   return <div className="eventBlock taskTime" data-short={segment.height<45 || undefined} data-tiny={segment.height<24 || undefined} style={{...segmentStyle(segment,preview),...(crossedDay ? {opacity:0,pointerEvents:"none"} : offset ? {transform:`translate(${offset.x}px,${offset.y}px)`,zIndex:10,pointerEvents:"none"} : {})}}>
     <button className="taskBlockEdit" disabled={saving} aria-label={`Redaguoti planą: ${task.title}`} title={segment.gestureSafe ? "Tempk į kitą dieną arba paspausk redaguoti. Shift+←→ — diena, Shift+↑↓ — laikas." : "Kelių dienų ar laiko keitimo dienos planą keisk paspaudęs redaguoti"}
       onClick={(e) => {if (e.detail===0 || !moved.current) actions.edit(task);}}
-      onKeyDown={(e) => {if(!segment.gestureSafe||!e.shiftKey)return;const steps:Record<string,number>={ArrowDown:15,ArrowUp:-15,ArrowRight:1440,ArrowLeft:-1440};const step=steps[e.key];if(!step)return;e.preventDefault();const ns=new Date(start.getTime()+step*60000);setSaving(true);void actions.move(task,ns).finally(()=>setSaving(false));}}
-      onPointerDown={(e) => {moved.current=false;if (!segment.gestureSafe || e.button !== 0) return;moveGesture.current={x:e.clientX,y:e.clientY,grab:e.clientY-e.currentTarget.closest(".eventBlock")!.getBoundingClientRect().top};moved.current=false;e.currentTarget.setPointerCapture(e.pointerId);}}
+      onKeyDown={(e) => {if(!online||!segment.gestureSafe||!e.shiftKey)return;const steps:Record<string,number>={ArrowDown:15,ArrowUp:-15,ArrowRight:1440,ArrowLeft:-1440};const step=steps[e.key];if(!step)return;e.preventDefault();const ns=new Date(start.getTime()+step*60000);setSaving(true);void actions.move(task,ns).finally(()=>setSaving(false));}}
+      onPointerDown={(e) => {moved.current=false;if (!online || !segment.gestureSafe || e.button !== 0) return;moveGesture.current={x:e.clientX,y:e.clientY,grab:e.clientY-e.currentTarget.closest(".eventBlock")!.getBoundingClientRect().top};moved.current=false;e.currentTarget.setPointerCapture(e.pointerId);}}
       onPointerMove={(e) => {const g=moveGesture.current;if (!g) return;const dx=e.clientX-g.x,dy=e.clientY-g.y;if (moved.current || Math.hypot(dx,dy)>5) {moved.current=true;setOffset({x:dx,y:dy});const hintLane=document.elementsFromPoint(e.clientX,e.clientY).find(el=>el instanceof HTMLElement && el.classList.contains("dayLane")) as HTMLElement|undefined;const sourceLane=e.currentTarget.closest(".dayLane") as HTMLElement|undefined;if(hintLane?.dataset.day){try{actions.setDragHint(taskDropHint(hintLane,e.clientY,g.grab,task.duration_minutes));setCrossedDay(hintLane.dataset.day!==sourceLane?.dataset.day);}catch{actions.setDragHint(null);setCrossedDay(false);}}else{actions.setDragHint(null);setCrossedDay(false);}}}}
       onPointerCancel={() => {moveGesture.current=null;setOffset(null);setCrossedDay(false);actions.setDragHint(null);}}
       onPointerUp={(e) => {
@@ -468,8 +480,8 @@ function TaskBlock({ task, segment }: { task: Task; segment:DaySegment }) {
         if (lane?.dataset.day) {try {const date=dateAtMinute(new Date(lane.dataset.day+"T00:00:00"),e.clientY-lane.getBoundingClientRect().top-grab);setSaving(true);void actions.move(task,date).finally(() => setSaving(false));} catch(error) {actions.report(error);}}
         else if (unplanned) {setSaving(true);void actions.move(task,null).finally(() => setSaving(false));}
       }}><span>{segment.continuesBefore ? "← Tęsinys · " : ""}{start.toLocaleTimeString("lt-LT",{hour:"2-digit",minute:"2-digit"})} · {durationLabel(preview ?? task.duration_minutes)}{segment.continuesAfter ? " →" : ""}</span><strong>✓ {task.title}</strong></button>
-    <button className="taskBlockDone" aria-label={`Užbaigti: ${task.title}`} onClick={() => actions.complete(task)}>✓</button>
-    {segment.gestureSafe && <button className="taskResize" disabled={saving} aria-label={`Keisti trukmę: ${task.title}`} title="Tempk trukmei keisti; rodyklės keičia po 15 min." onDragStart={(e) => {e.preventDefault();e.stopPropagation();}}
+    <button className="taskBlockDone" disabled={!online} aria-label={`Užbaigti: ${task.title}`} onClick={() => actions.complete(task)}>✓</button>
+    {segment.gestureSafe && <button className="taskResize" disabled={!online||saving} aria-label={`Keisti trukmę: ${task.title}`} title="Tempk trukmei keisti; rodyklės keičia po 15 min." onDragStart={(e) => {e.preventDefault();e.stopPropagation();}}
       onPointerDown={(e) => {if (e.button !== 0) return;e.preventDefault();e.stopPropagation();e.currentTarget.setPointerCapture(e.pointerId);gesture.current={y:e.clientY,duration:task.duration_minutes,next:task.duration_minutes};setPreview(task.duration_minutes);}}
       onPointerMove={(e) => {const g=gesture.current;if (!g) return;g.next=Math.min(1440,Math.max(15,Math.round((g.duration+e.clientY-g.y)/15)*15));setPreview(g.next);}}
       onPointerUp={(e) => {const g=gesture.current;if (!g) return;gesture.current=null;e.currentTarget.releasePointerCapture(e.pointerId);if (g.next !== task.duration_minutes) void commit(g.next);else setPreview(null);}}
@@ -481,8 +493,9 @@ function Month({ days, anchor, events, tasks, onCreate }: { days: Date[]; anchor
 
 function TaskBoard({ tasks, onDone, onFocus, onAdd }: { tasks: Task[]; onDone: (t: Task) => void; onFocus: (t: Task) => void; onAdd: () => void }) {
   const actions=useContext(TaskActions);
+  const {online}=usePwaRuntime();
   const groups = [{ name: "Toliau", list: tasks.filter((t) => !t.completed && !t.scheduled_at) }, { name: "Suplanuota", list: tasks.filter((t) => !t.completed && t.scheduled_at) }, { name: "Atlikta", list: tasks.filter((t) => t.completed) }];
-  return <div className="board"><header><div><span className="eyebrow">UŽDUOTYS</span><h2>Darbų srautas</h2></div><button className="newButton" onClick={onAdd}>＋ Nauja užduotis</button></header><div className="columns">{groups.map((group) => <section key={group.name}><h3>{group.name}<b>{group.list.length}</b></h3>{group.list.map((task) => <article
+  return <div className="board"><header><div><span className="eyebrow">UŽDUOTYS</span><h2>Darbų srautas</h2></div><button className="newButton" disabled={!online} onClick={onAdd}>＋ Nauja užduotis</button></header><div className="columns">{groups.map((group) => <section key={group.name}><h3>{group.name}<b>{group.list.length}</b></h3>{group.list.map((task) => <article
     className={`boardTaskCard${task.completed ? " done" : ""}`}
     key={task.key}
     title="Atidaryti užduotį"
@@ -490,9 +503,9 @@ function TaskBoard({ tasks, onDone, onFocus, onAdd }: { tasks: Task[]; onDone: (
       if (event.target instanceof Element && event.target.closest("button, a, input, select, textarea, label")) return;
       actions.edit(task);
     }}
-  ><button className="check" disabled={Boolean(task.readonly_reason)} aria-label={`${task.completed ? "Atkurti" : "Užbaigti"}: ${task.title}`} onClick={() => onDone(task)}>✓</button><button className="boardTaskTitle" onClick={()=>actions.edit(task)}>{task.title}</button><small>{taskSourceLabel(task)}{task.stale ? " · pasenę duomenys" : ""}</small><p>{task.notes || "Be papildomų pastabų"}</p><footer><span>{task.project || "Asmeniniai"}</span><small>{durationLabel(task.duration_minutes || 30)}</small>{!task.completed && <button onClick={() => onFocus(task)}>▶ Fokusas</button>}</footer></article>)}{!group.list.length && <div className="columnEmpty">Nieko nėra</div>}</section>)}</div></div>;
+  ><button className="check" disabled={!online||Boolean(task.readonly_reason)} aria-label={`${task.completed ? "Atkurti" : "Užbaigti"}: ${task.title}`} onClick={() => onDone(task)}>✓</button><button className="boardTaskTitle" onClick={()=>actions.edit(task)}>{task.title}</button><small>{taskSourceLabel(task)}{task.stale ? " · pasenę duomenys" : ""}</small><p>{task.notes || "Be papildomų pastabų"}</p><footer><span>{task.project || "Asmeniniai"}</span><small>{durationLabel(task.duration_minutes || 30)}</small>{!task.completed && <button onClick={() => onFocus(task)}>▶ Fokusas</button>}</footer></article>)}{!group.list.length && <div className="columnEmpty">Nieko nėra</div>}</section>)}</div></div>;
 }
-function Focus({ task, tasks, seconds, running, startedAt, onToggle, onReset, onSelect, onDone }: { task?: Task; tasks: Task[]; seconds: number; running: boolean; startedAt:number|null;onToggle: () => void; onReset: () => void; onSelect: (t: Task) => void; onDone: () => void }) { const progress = 1 - seconds / FOCUS_DURATION_SECONDS; return <div className="focus"><header><span className="eyebrow">GILUS DARBAS</span><h2>Vienas darbas. Jokių trukdžių.</h2></header><div className="focusGrid"><section className="timer"><div className="timerRing" style={{ background: `conic-gradient(#a7ff6a ${progress * 360}deg,#293447 0)` }}><div><strong>{String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</strong><span>{running ? "Fokusuojiesi" : startedAt ? "Pristabdyta" : "Pasiruošęs"}</span></div></div><h3>{task?.title || "Pasirink užduotį"}</h3><p>{task?.project || "Užduotis nepasirinkta"}</p>{startedAt&&<small className="focusStarted">Pradėta {new Date(startedAt).toLocaleTimeString("lt-LT",{hour:"2-digit",minute:"2-digit"})}</small>}<div><button aria-label="Atstatyti fokusavimo sesiją" onClick={onReset}>↺</button><button className="play" aria-label={running?"Pristabdyti fokusavimo sesiją":"Pradėti fokusavimo sesiją"} onClick={onToggle}>{running ? "Ⅱ" : "▶"}</button><button aria-label="Užbaigti fokusuojamą užduotį" disabled={!task || Boolean(task.readonly_reason)} onClick={onDone}>✓</button></div></section><aside><h3>Fokusavimo eilė <b>{tasks.length}</b></h3>{tasks.map((item) => <button className={item.key === task?.key ? "active" : ""} onClick={() => onSelect(item)} key={item.key}><i className={item.priority || "normal"}/><span><strong>{item.title}</strong><small>{item.project || "Asmeniniai"} · {durationLabel(item.duration_minutes || 30)}</small></span></button>)}</aside></div></div>; }
+function Focus({ task, tasks, seconds, running, startedAt, onToggle, onReset, onSelect, onDone }: { task?: Task; tasks: Task[]; seconds: number; running: boolean; startedAt:number|null;onToggle: () => void; onReset: () => void; onSelect: (t: Task) => void; onDone: () => void }) { const {online}=usePwaRuntime();const progress = 1 - seconds / FOCUS_DURATION_SECONDS; return <div className="focus"><header><span className="eyebrow">GILUS DARBAS</span><h2>Vienas darbas. Jokių trukdžių.</h2></header><div className="focusGrid"><section className="timer"><div className="timerRing" style={{ background: `conic-gradient(#a7ff6a ${progress * 360}deg,#293447 0)` }}><div><strong>{String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</strong><span>{running ? "Fokusuojiesi" : startedAt ? "Pristabdyta" : "Pasiruošęs"}</span></div></div><h3>{task?.title || "Pasirink užduotį"}</h3><p>{task?.project || "Užduotis nepasirinkta"}</p>{startedAt&&<small className="focusStarted">Pradėta {new Date(startedAt).toLocaleTimeString("lt-LT",{hour:"2-digit",minute:"2-digit"})}</small>}<div><button aria-label="Atstatyti fokusavimo sesiją" onClick={onReset}>↺</button><button className="play" aria-label={running?"Pristabdyti fokusavimo sesiją":"Pradėti fokusavimo sesiją"} onClick={onToggle}>{running ? "Ⅱ" : "▶"}</button><button aria-label="Užbaigti fokusuojamą užduotį" disabled={!online||!task || Boolean(task.readonly_reason)} onClick={onDone}>✓</button></div></section><aside><h3>Fokusavimo eilė <b>{tasks.length}</b></h3>{tasks.map((item) => <button className={item.key === task?.key ? "active" : ""} onClick={() => onSelect(item)} key={item.key}><i className={item.priority || "normal"}/><span><strong>{item.title}</strong><small>{item.project || "Asmeniniai"} · {durationLabel(item.duration_minutes || 30)}</small></span></button>)}</aside></div></div>; }
 
 function Modal({ eyebrow, title, onClose, children }: { eyebrow: string; title: string; onClose: () => void; children: React.ReactNode }) {
   const panel = useRef<HTMLElement>(null); const close = useRef(onClose); close.current = onClose;
@@ -523,10 +536,11 @@ function TaskDestination({lists,value,onChange,disabled=false}:{lists:TaskList[]
   </select></label>;
 }
 function TaskModal({onClose,onSave,lists,destination,onDestination}:{onClose:()=>void;onSave:(data:Record<string,unknown>)=>Promise<void>;lists:TaskList[];destination:string;onDestination:(value:string)=>void}) {
+  const {online}=usePwaRuntime();
   const [saving,setSaving]=useState(false),[error,setError]=useState("");
   const isGoogle=lists.find(list=>list.key===destination)?.source==="google";
   async function submit(event:FormEvent<HTMLFormElement>) {
-    event.preventDefault();setSaving(true);setError("");
+    event.preventDefault();if(!online){setError("Nėra interneto ryšio.");return;}setSaving(true);setError("");
     const data=new FormData(event.currentTarget);
     try {
       await onSave({title:data.get("title"),notes:data.get("notes"),project:data.get("project"),priority:data.get("priority"),duration_minutes:Number(data.get("duration")),tags:data.get("tags"),
@@ -536,18 +550,19 @@ function TaskModal({onClose,onSave,lists,destination,onDestination}:{onClose:()=
   return <Modal eyebrow="UŽDUOTIS" title="Nauja užduotis" onClose={()=>{if(!saving)onClose();}}>
     {error && <p role="alert" className="formError">{error}</p>}
     <form className="modalForm" onSubmit={submit}>
-      <TaskDestination lists={lists} value={destination} onChange={onDestination} disabled={saving}/>
+      <TaskDestination lists={lists} value={destination} onChange={onDestination} disabled={saving||!online}/>
       <label>Pavadinimas<input name="title" required maxLength={1024} placeholder="Ką reikia padaryti?"/></label>
       <label>Pastabos<textarea name="notes" maxLength={8192} placeholder="Kontekstas, nuorodos ar rezultatas…"/></label>
       <div className="formRow"><label>Projektas<select name="project">{projects.map(item=><option key={item}>{item}</option>)}</select></label><label>{isGoogle ? "Prioritetas · tik čia" : "Prioritetas"}<select name="priority"><option value="normal">Normalus</option><option value="high">Aukštas</option><option value="low">Žemas</option></select></label></div>
       <div className="formRow"><label>Trukmė<select name="duration" defaultValue="30"><option value="15">15 min.</option><option value="30">30 min.</option><option value="60">1 val.</option><option value="90">1,5 val.</option></select></label><label>{isGoogle ? "Google užduoties diena" : "Terminas"}<input key={isGoogle ? "date" : "datetime"} name="due" type={isGoogle ? "date" : "datetime-local"}/></label></div>
       {isGoogle && <p className="formHint">Google perduodama tik diena. Darbo valandą planuok kalendoriuje — ji ir prioritetas saugomi tik čia.</p>}
       <label>Žymos<input name="tags" placeholder="pvz. skubiai, namai"/></label>
-      <div className="modalActions"><button type="button" disabled={saving} onClick={onClose}>Atšaukti</button><button className="newButton" disabled={saving}>{saving ? "Saugoma…" : "Sukurti"}</button></div>
+      <div className="modalActions"><button type="button" disabled={saving} onClick={onClose}>Atšaukti</button><button className="newButton" disabled={saving||!online}>{saving ? "Saugoma…" : "Sukurti"}</button></div>
     </form>
   </Modal>;
 }
 function EventModal({ initial, outlook, google, outlookReady, googleReady, onClose, onSave }: { initial: Date; outlook: boolean; google: boolean; outlookReady: boolean; googleReady: boolean; onClose: () => void; onSave: () => void }) {
+  const {online}=usePwaRuntime();
   const start = new Date(initial);
   const initialProvider:"outlook"|"google"=outlook?"outlook":"google";
   const [timed,setTimed]=useState(()=>{const value=Intl.DateTimeFormat().resolvedOptions().timeZone,timeZone=isCalendarTimeZone(value)?value:"UTC";return {timeZone,start:zonedLocalInput(start.toISOString(),timeZone)};});
@@ -589,7 +604,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
   },[outlook,google]);
   useEffect(()=>{setCalendarChoice(current=>providerCalendars.some(cal=>`${cal.connectionId}\u0000${cal.id}`===current)?current:providerCalendars[0]?`${providerCalendars[0].connectionId}\u0000${providerCalendars[0].id}`:"");},[provider,calendars]);
   async function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault(); setSaving(true); setError("");
+    e.preventDefault();if(!online){setError("Nėra interneto ryšio.");return;} setSaving(true); setError("");
     try {
       if(!selectedCalendar||!calendarVersion)throw new Error("Pasirink rašomą kalendorių.");
       const f = new FormData(e.currentTarget);
@@ -611,7 +626,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
   }
   return <Modal eyebrow="KALENDORIUS" title="Naujas įvykis" onClose={onClose}>
     {error && <p className="formError" role="alert">{error}</p>}
-    {!outlook && !google ? <div className="connectPrompt"><p>{outlookReady || googleReady ? "Prijunk kalendorių ir kurk tikrus susitikimus." : "Įrašyk OAuth nustatymus į .env failą pagal README."}</p>{outlookReady && <a href="/api/microsoft/connect">Prijungti Outlook</a>}{googleReady && <a href="/api/google/connect">Prijungti Google</a>}</div> :
+    {!outlook && !google ? <div className="connectPrompt"><p>{outlookReady || googleReady ? "Prijunk kalendorių ir kurk tikrus susitikimus." : "Įrašyk OAuth nustatymus į .env failą pagal README."}</p>{outlookReady && <a href="/api/microsoft/connect" aria-disabled={!online} onClick={event=>{if(!online)event.preventDefault();}}>Prijungti Outlook</a>}{googleReady && <a href="/api/google/connect" aria-disabled={!online} onClick={event=>{if(!online)event.preventDefault();}}>Prijungti Google</a>}</div> :
     <form className="modalForm" onSubmit={submit}>
       <label>Pavadinimas<input name="summary" required autoFocus placeholder="Susitikimo pavadinimas"/></label>
       <div className="formRow"><label>Tiekėjas<select name="provider" value={provider} onChange={event=>setProvider(event.target.value as "outlook"|"google")}>{outlook && <option value="outlook">Outlook Calendar</option>}{google && <option value="google">Google Calendar</option>}</select></label><label>Paskyra ir kalendorius<select name="calendarId" value={calendarChoice} disabled={calendarsLoading||!providerCalendars.length} onChange={event=>setCalendarChoice(event.target.value)}>{providerCalendars.map(cal=>{const value=`${cal.connectionId}\u0000${cal.id}`;return <option key={value} value={value}>{cal.accountLabel} · {cal.name}{cal.primary||cal.isDefault?" · pagrindinis":""}</option>})}</select></label></div>
@@ -626,7 +641,7 @@ function EventModal({ initial, outlook, google, outlookReady, googleReady, onClo
       {!allDay && <label>Dalyviai<input name="attendees" placeholder="el. paštai, atskirti kableliais"/></label>}
       <label>Aprašymas<textarea name="description" placeholder="Darbotvarkė…"/></label>
       {!allDay && <label className="onlineSwitch"><input name="online" type="checkbox" defaultChecked/><i/>Sukurti Teams / Google Meet nuorodą</label>}
-      <div className="modalActions"><button type="button" onClick={onClose}>Atšaukti</button><button className="newButton" disabled={saving||calendarsLoading||!selectedCalendar||!calendarVersion}>{saving ? "Kuriama…" : calendarsLoading?"Kraunami kalendoriai…":"Sukurti įvykį"}</button></div>
+      <div className="modalActions"><button type="button" onClick={onClose}>Atšaukti</button><button className="newButton" disabled={!online||saving||calendarsLoading||!selectedCalendar||!calendarVersion}>{saving ? "Kuriama…" : calendarsLoading?"Kraunami kalendoriai…":"Sukurti įvykį"}</button></div>
     </form>}
   </Modal>;
 }
@@ -683,13 +698,14 @@ function TaskSteps({task,disabled,onBusyChange}:{task:Task;disabled:boolean;onBu
   </section>;
 }
 function TaskEditor({ task, outlook, microsoftAccounts, taskLists, onClose, onSave, onDelete, onMoved, onProviderChanged }: {task:Task;outlook:boolean;microsoftAccounts:IntegrationConnection[];taskLists:TaskList[];onClose:()=>void;onDelete:()=>Promise<void>;onSave:(patch:Record<string,unknown>)=>Promise<void>;onMoved?:(task:Task)=>void;onProviderChanged:()=>void}) {
+  const {online}=usePwaRuntime();
   const [saving,setSaving] = useState(false); const [stepsBusy,setStepsBusy] = useState(false); const [reminderBusy,setReminderBusy] = useState(false); const [recurrenceBusy,setRecurrenceBusy] = useState(false); const [orderBusy,setOrderBusy] = useState(false); const [error,setError] = useState("");
   const [moveTarget,setMoveTarget] = useState(task.list_id||"");
   const [moving,setMoving] = useState(false);
-  const providerBusy=stepsBusy||reminderBusy||recurrenceBusy||orderBusy;
+  const providerBusy=stepsBusy||reminderBusy||recurrenceBusy||orderBusy||!online;
   const googleLists=task.source==="google" ? taskLists.filter(l=>l.source==="google"&&l.account_id===task.account_id&&l.writable&&!l.stale) : [];
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); if (saving || moving || providerBusy) return; const data = new FormData(event.currentTarget); setSaving(true); setError("");
+    event.preventDefault(); if(!online){setError("Nėra interneto ryšio.");return;} if (saving || moving || providerBusy) return; const data = new FormData(event.currentTarget); setSaving(true); setError("");
     try {
       const metadata: Record<string, unknown> = {};
       for (const field of ["title", "notes", "priority"] as const) if (!task.readonly_reason && data.get(field) !== task[field]) metadata[field] = data.get(field);
@@ -745,12 +761,12 @@ function TaskEditor({ task, outlook, microsoftAccounts, taskLists, onClose, onSa
       {(microsoftAccounts.length>0||task.mirror_connection_id)&&<label>Outlook bloko paskyra<select name="mirrorConnection" defaultValue={String(task.mirror_connection_id??microsoftAccounts[0]?.id??"")} disabled={Boolean(task.mirror_event_id)}>{microsoftAccounts.map(connection=><option key={connection.id} value={connection.id}>{connection.label||connection.email||`Microsoft paskyra ${connection.id}`} · numatytasis kalendorius</option>)}</select></label>}
       <div className="modalActions">{task.scheduled_at && <button type="button" disabled={saving || moving || providerBusy} onClick={unschedule}>Pašalinti planavimą</button>}<button className="newButton" disabled={saving || moving || providerBusy}>{saving ? "Saugoma…" : "Išsaugoti"}</button></div>
     </form>
-    {task.source === "microsoft" && <TaskSteps task={task} disabled={saving||reminderBusy||recurrenceBusy} onBusyChange={setStepsBusy}/>}
-    {task.source === "microsoft" && <MicrosoftTaskRecurrence task={task} disabled={saving||stepsBusy||reminderBusy} onBusyChange={setRecurrenceBusy}/>}
+    {task.source === "microsoft" && <TaskSteps task={task} disabled={!online||saving||reminderBusy||recurrenceBusy} onBusyChange={setStepsBusy}/>}
+    {task.source === "microsoft" && <MicrosoftTaskRecurrence task={task} disabled={!online||saving||stepsBusy||reminderBusy} onBusyChange={setRecurrenceBusy}/>}
     {task.source === "microsoft" && (
-      <MicrosoftTaskReminder task={task} disabled={saving||stepsBusy||recurrenceBusy} onBusyChange={setReminderBusy}/>
+      <MicrosoftTaskReminder task={task} disabled={!online||saving||stepsBusy||recurrenceBusy} onBusyChange={setReminderBusy}/>
     )}
-    {task.source === "google" && <GoogleTaskOrder task={task} disabled={saving||moving} onBusyChange={setOrderBusy} onChanged={onProviderChanged}/>}
+    {task.source === "google" && <GoogleTaskOrder task={task} disabled={!online||saving||moving} onBusyChange={setOrderBusy} onChanged={onProviderChanged}/>}
     {googleLists.length>1 && <div className="moveToList"><span className="fieldLabel">Perkelti į sąrašą</span><div className="addAttendee"><select value={moveTarget} onChange={e=>setMoveTarget(e.target.value)} disabled={saving||moving||providerBusy}>{googleLists.map(l=><option key={l.key} value={l.list_id}>{l.name}</option>)}</select><button type="button" disabled={saving||moving||providerBusy||moveTarget===task.list_id} onClick={()=>void moveToList()}>{moving?"Keliama…":"Perkelti"}</button></div></div>}
     <div className="modalActions"><button type="button" disabled={saving || moving || providerBusy || Boolean(task.readonly_reason)} onClick={async()=>{if(saving || moving || providerBusy)return;if(!window.confirm(`Ištrinti „${task.title}“${task.source === "local" ? "" : " ir jos šaltinyje"}?`))return;setSaving(true);setError("");try{await onDelete();}catch(error){setError(error instanceof Error ? error.message : "Nepavyko ištrinti.");}finally{setSaving(false);}}}>Ištrinti užduotį</button></div>
   </Modal>;
@@ -765,6 +781,7 @@ function isCalList(value:unknown):value is CalList {
   return Array.isArray(list.accounts)&&list.accounts.every(account=>account&&Array.isArray(account.items)&&Array.isArray(account.enabled)&&typeof account.connectionId==="string"&&typeof account.version==="string");
 }
 function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boolean;onSaved:()=>void}) {
+  const {online}=usePwaRuntime();
   const [gCals,setGCals]=useState<CalList|null>(null),[mCals,setMCals]=useState<CalList|null>(null),[saving,setSaving]=useState(false),[error,setError]=useState("");
   useEffect(()=>{
     let active=true;setError("");
@@ -785,6 +802,7 @@ function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boole
     return()=>{active=false;};
   },[google,outlook]);
   async function saveAccount(provider:"google"|"microsoft",list:CalList,setList:(v:CalList)=>void,account:CalAccount,next:string[]){
+    if(!online){setError("Nėra interneto ryšio.");return;}
     const previous=list;setList({...list,accounts:list.accounts.map(item=>item.connectionId===account.connectionId?{...item,enabled:next,explicit:true}:item)});setSaving(true);setError("");
     try {
       const enabled=next.map(id=>{const c=account.items.find(x=>x.id===id);return c?{id:c.id,...(c.color?{color_override:c.color}:{})}:{id};});
@@ -801,7 +819,7 @@ function CalendarSelector({google,outlook,onSaved}:{google:boolean;outlook:boole
     if(!list) return <p className="formHint">Kraunama…</p>;
     const accountErrors=list.errors??[];
     if(!list.accounts.length&&!accountErrors.length) return null;
-    return <section className="calendarProviderGroup"><p className="calProviderLabel">{label}</p>{accountErrors.map(err=><p key={err.connectionId} className="formError" role="alert">{err.accountLabel}: {err.message}</p>)}{list.accounts.map(account=><section className="calendarAccountGroup" key={account.connectionId}><div className="calendarAccountHead"><div><strong>{account.label}</strong>{account.email&&account.email!==account.label&&<small>{account.email}</small>}</div><div><button type="button" disabled={saving} onClick={()=>void saveAccount(provider,list,setList,account,account.items.map(item=>item.id))}>Rodyti visus</button><button type="button" disabled={saving} onClick={()=>void saveAccount(provider,list,setList,account,[])}>Slėpti visus</button></div></div><ul className="calendarList">{account.items.map(cal=><li key={`${account.connectionId}:${cal.id}`}><label><input type="checkbox" checked={account.enabled.includes(cal.id)} disabled={saving} onChange={e=>void toggle(provider,list,setList,account,cal,e.target.checked)}/>{cal.color&&<span className="calDot" style={{background:cal.color}}/>}<span className="calName">{cal.name}</span>{(cal.primary||cal.isDefault)&&<span className="calBadge">pagrindinis</span>}</label></li>)}</ul></section>)}</section>;
+    return <section className="calendarProviderGroup"><p className="calProviderLabel">{label}</p>{accountErrors.map(err=><p key={err.connectionId} className="formError" role="alert">{err.accountLabel}: {err.message}</p>)}{list.accounts.map(account=><section className="calendarAccountGroup" key={account.connectionId}><div className="calendarAccountHead"><div><strong>{account.label}</strong>{account.email&&account.email!==account.label&&<small>{account.email}</small>}</div><div><button type="button" disabled={!online||saving} onClick={()=>void saveAccount(provider,list,setList,account,account.items.map(item=>item.id))}>Rodyti visus</button><button type="button" disabled={!online||saving} onClick={()=>void saveAccount(provider,list,setList,account,[])}>Slėpti visus</button></div></div><ul className="calendarList">{account.items.map(cal=><li key={`${account.connectionId}:${cal.id}`}><label><input type="checkbox" checked={account.enabled.includes(cal.id)} disabled={!online||saving} onChange={e=>void toggle(provider,list,setList,account,cal,e.target.checked)}/>{cal.color&&<span className="calDot" style={{background:cal.color}}/>}<span className="calName">{cal.name}</span>{(cal.primary||cal.isDefault)&&<span className="calBadge">pagrindinis</span>}</label></li>)}</ul></section>)}</section>;
   }
   return <div className="calendarSelector">{error&&<p className="formError" role="alert">{error}</p>}{google&&renderList("google",gCals,setGCals,"Google")}{outlook&&renderList("microsoft",mCals,setMCals,"Microsoft / Outlook")}</div>;
 }
@@ -809,11 +827,13 @@ function rsvpIcon(status:string) { return status==="accepted"?"✓":status==="de
 function rsvpLabel(status:CalendarResponseStatus) {return status==="accepted"?"Dalyvausi":status==="declined"?"Nedalyvausi":status==="tentative"?"Galbūt dalyvausi":"Dar neatsakyta";}
 function eventReminderValue(event:CalEvent){return event.reminder.mode==="minutes"?`minutes:${event.reminder.minutes}`:event.reminder.mode;}
 function BackupPanel() {
+  const {online}=usePwaRuntime();
   const [busy,setBusy]=useState<"export"|"backup"|"restore"|null>(null);
   const [msg,setMsg]=useState("");
   const fileRef=useRef<HTMLInputElement>(null);
 
   async function download(type:"export"|"backup") {
+    if(!online){setMsg("Nėra interneto ryšio.");return;}
     setBusy(type);setMsg("");
     try {
       const res=await fetch("/api/backup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:type==="backup"?"full":"export"})});
@@ -829,6 +849,7 @@ function BackupPanel() {
   }
 
   async function restore(e:React.ChangeEvent<HTMLInputElement>) {
+    if(!online){setMsg("Nėra interneto ryšio.");return;}
     const file=e.target.files?.[0];
     if (!file) return;
     setBusy("restore");setMsg("");
@@ -843,15 +864,15 @@ function BackupPanel() {
   return <div className="backupPanel">
     <p className="backupHint">Eksportas neįtraukia OAuth žetonų — tinka duomenų perkėlimui. Pilna kopija — tik saugiam asmeniniam naudojimui.</p>
     <div className="backupButtons">
-      <button className="ghostButton" disabled={!!busy} onClick={()=>download("export")}>
+      <button className="ghostButton" disabled={!online||!!busy} onClick={()=>download("export")}>
         {busy==="export"?"Kuriama…":"⬇ Eksportuoti (be žetonų)"}
       </button>
-      <button className="ghostButton" disabled={!!busy} onClick={()=>download("backup")}>
+      <button className="ghostButton" disabled={!online||!!busy} onClick={()=>download("backup")}>
         {busy==="backup"?"Kuriama…":"⬇ Pilna kopija"}
       </button>
-      <label className={`ghostButton${busy?"":""}`} style={{cursor:busy?"not-allowed":"pointer",opacity:busy?0.55:1}}>
+      <label className={`ghostButton${busy?"":""}`} style={{cursor:busy||!online?"not-allowed":"pointer",opacity:busy||!online?0.55:1}}>
         {busy==="restore"?"Atkuriama…":"⬆ Atkurti iš kopijos"}
-        <input ref={fileRef} type="file" accept=".db" style={{display:"none"}} disabled={!!busy} onChange={restore}/>
+        <input ref={fileRef} type="file" accept=".db" style={{display:"none"}} disabled={!online||!!busy} onChange={restore}/>
       </label>
     </div>
     {msg && <p className="backupMsg" role="status">{msg}</p>}
@@ -859,14 +880,17 @@ function BackupPanel() {
 }
 
 function LogoutButton() {
+  const {online}=usePwaRuntime();
   const [busy,setBusy]=useState(false);
   async function logout() {
+    if(!online)return;
     setBusy(true);
     try { await fetch("/api/auth/logout",{method:"POST"}); window.location.href="/login"; } catch { setBusy(false); }
   }
-  return <button className="logoutBtn" disabled={busy} onClick={logout}>{busy?"Atsijungiama…":"Atsijungti iš programėlės →"}</button>;
+  return <button className="logoutBtn" disabled={!online||busy} onClick={logout}>{busy?"Atsijungiama…":"Atsijungti iš programėlės →"}</button>;
 }
 function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh,onDelete}:{value:{event:CalEvent;start?:string;end?:string};onClose:()=>void;onSave:(patch:Record<string,unknown>)=>Promise<void>;onRespond:(status:Exclude<CalendarResponseStatus,"needsAction">)=>Promise<void>;onRefresh?:()=>void;onDelete?:()=>Promise<void>}) {
+  const {online}=usePwaRuntime();
   const {event}=value;
   const eventTimeZone=event.timeZone||"UTC";
   const eventTimeZones=timeZones.includes(eventTimeZone)?timeZones:[eventTimeZone,...timeZones];
@@ -889,11 +913,12 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh,onDelete}
     setAllDay(next);
   }
   async function respond(status:Exclude<CalendarResponseStatus,"needsAction">) {
+    if(!online){setError("Nėra interneto ryšio.");return;}
     setError("");setConflict(false);setResponding(status);
     try{await onRespond(status);}catch(err){setError(err instanceof Error?err.message:"Nepavyko pateikti dalyvavimo atsakymo.");}finally{setResponding(null);}
   }
   async function submit(e:FormEvent<HTMLFormElement>) {
-    e.preventDefault();const data=new FormData(e.currentTarget);setError("");setSaving(true);
+    e.preventDefault();if(!online){setError("Nėra interneto ryšio.");return;}const data=new FormData(e.currentTarget);setError("");setSaving(true);
     try {
       let startValue:string,endValue:string;
       if(allDay){startValue=String(data.get("startDate"));const lastDate=String(data.get("endDate"));endValue=shiftIsoDate(lastDate,1);}
@@ -931,7 +956,7 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh,onDelete}
     {!event.editable && <p className="formHint">{event.readOnlyReason}</p>}
     {event.recurring && event.editable && <p className="formHint">↻ Viršutiniai laukai keičia tik šį egzempliorių. Visos serijos kartojimo taisyklė valdoma atskirai žemiau.</p>}
     {error && <p className="formError" role="alert">{error}{conflict && onRefresh && <> <button type="button" className="inlineRefreshBtn" onClick={()=>{onRefresh();onClose();}}>Atnaujinti ir uždaryti →</button></>}</p>}
-    {event.canRespond&&event.responseStatus&&<div className="rsvpActions" role="group" aria-label="Dalyvavimo atsakymas"><span>{rsvpLabel(event.responseStatus)}</span><div><button type="button" aria-pressed={event.responseStatus==="accepted"} disabled={!!responding||saving} onClick={()=>void respond("accepted")}>{responding==="accepted"?"Siunčiama…":"Taip"}</button><button type="button" aria-pressed={event.responseStatus==="tentative"} disabled={!!responding||saving} onClick={()=>void respond("tentative")}>{responding==="tentative"?"Siunčiama…":"Galbūt"}</button><button type="button" aria-pressed={event.responseStatus==="declined"} disabled={!!responding||saving} onClick={()=>void respond("declined")}>{responding==="declined"?"Siunčiama…":"Ne"}</button></div></div>}
+    {event.canRespond&&event.responseStatus&&<div className="rsvpActions" role="group" aria-label="Dalyvavimo atsakymas"><span>{rsvpLabel(event.responseStatus)}</span><div><button type="button" aria-pressed={event.responseStatus==="accepted"} disabled={!online||!!responding||saving} onClick={()=>void respond("accepted")}>{responding==="accepted"?"Siunčiama…":"Taip"}</button><button type="button" aria-pressed={event.responseStatus==="tentative"} disabled={!online||!!responding||saving} onClick={()=>void respond("tentative")}>{responding==="tentative"?"Siunčiama…":"Galbūt"}</button><button type="button" aria-pressed={event.responseStatus==="declined"} disabled={!online||!!responding||saving} onClick={()=>void respond("declined")}>{responding==="declined"?"Siunčiama…":"Ne"}</button></div></div>}
     <form className="modalForm" onSubmit={submit}>
       <label>Pavadinimas<input name="summary" required maxLength={1024} defaultValue={event.summary} disabled={!event.editable || saving || !!responding}/></label>
       <label>Vieta<input name="location" maxLength={1000} defaultValue={event.location || ""} disabled={!event.editable || saving || !!responding} placeholder="Kabinetas, miestas arba nuoroda…"/></label>
@@ -949,8 +974,9 @@ function ExistingEventEditor({value,onClose,onSave,onRespond,onRefresh,onDelete}
       </div>
       {event.editable && attendees.length>0 && <label className="confirmAttendees"><input type="checkbox" name="confirm" disabled={saving||!!responding}/>Patvirtinu pakeitimus — bus išsiųsti pranešimai dalyviams, jei laikas pasikeitė</label>}
       <p className="formHint">Keičiami pavadinimas, vieta, aprašymas, laikas arba visos dienos datos, laiko zona, dalyviai, matomumas, laisvo / užimto laiko būsena ir priminimas. Susitikimo nuoroda išsaugoma.</p>
-      {event.recurring&&<CalendarSeriesRecurrence event={event} onChanged={onRefresh}/>}
-      <div className="modalActions">{event.editable && onDelete && <button type="button" disabled={saving||!!responding} onClick={async()=>{if(!window.confirm(`Ištrinti „${event.summary}"?`))return;setSaving(true);setError("");try{await onDelete();}catch(err){setError(err instanceof Error?err.message:"Ištrinti nepavyko.");}finally{setSaving(false);}}}>Ištrinti įvykį</button>}{safeLink && <a className="originalEvent" href={safeLink} target="_blank" rel="noopener noreferrer">Atverti originalą ↗</a>}{event.editable && <button className="newButton" disabled={saving||!!responding}>{saving?"Saugoma…":"Išsaugoti įvykį"}</button>}</div>
+      {event.recurring&&online&&<CalendarSeriesRecurrence event={event} onChanged={onRefresh}/>}
+      {event.recurring&&!online&&<p className="formHint">Kartojimo taisyklę galėsi keisti atkūrus interneto ryšį.</p>}
+      <div className="modalActions">{event.editable && onDelete && <button type="button" disabled={!online||saving||!!responding} onClick={async()=>{if(!window.confirm(`Ištrinti „${event.summary}"?`))return;setSaving(true);setError("");try{await onDelete();}catch(err){setError(err instanceof Error?err.message:"Ištrinti nepavyko.");}finally{setSaving(false);}}}>Ištrinti įvykį</button>}{safeLink && <a className="originalEvent" href={safeLink} target="_blank" rel="noopener noreferrer">Atverti originalą ↗</a>}{event.editable && <button className="newButton" disabled={!online||saving||!!responding}>{saving?"Saugoma…":"Išsaugoti įvykį"}</button>}</div>
     </form>
   </Modal>;
 }

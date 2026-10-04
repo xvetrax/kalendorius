@@ -22,24 +22,35 @@ const PwaRuntimeContext = createContext<PwaRuntimeState>({
 
 export function PwaRuntimeProvider({ children }: { children: React.ReactNode }) {
   const registration = useRef<ServiceWorkerRegistration | null>(null);
-  const waitingWorker = useRef<ServiceWorker | null>(null);
   const reloadForUpdate = useRef(false);
+  const initialAssetVersion = useRef("");
   const [supported, setSupported] = useState(false);
   const [online, setOnline] = useState(true);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
+    initialAssetVersion.current = assetVersion(document);
     setOnline(navigator.onLine);
-    const wentOnline = () => setOnline(true);
+    const wentOnline = () => {
+      setOnline(true);
+      void checkForUpdate();
+    };
     const wentOffline = () => setOnline(false);
+    const becameVisible = () => {
+      if (document.visibilityState === "visible") void checkForUpdate();
+    };
     window.addEventListener("online", wentOnline);
     window.addEventListener("offline", wentOffline);
+    window.addEventListener("focus", becameVisible);
+    document.addEventListener("visibilitychange", becameVisible);
 
     if (!("serviceWorker" in navigator)) {
       return () => {
         window.removeEventListener("online", wentOnline);
         window.removeEventListener("offline", wentOffline);
+        window.removeEventListener("focus", becameVisible);
+        document.removeEventListener("visibilitychange", becameVisible);
       };
     }
 
@@ -47,7 +58,6 @@ export function PwaRuntimeProvider({ children }: { children: React.ReactNode }) 
     let cancelled = false;
     const offerUpdate = (worker: ServiceWorker | null) => {
       if (!worker || !navigator.serviceWorker.controller) return;
-      waitingWorker.current = worker;
       setUpdateAvailable(true);
     };
     const controllerChanged = () => {
@@ -66,6 +76,7 @@ export function PwaRuntimeProvider({ children }: { children: React.ReactNode }) 
             if (installing.state === "installed") offerUpdate(nextRegistration.waiting || installing);
           });
         });
+        void checkForUpdate();
       })
       .catch(() => {
         // PWA support is optional. The regular web application keeps working.
@@ -75,30 +86,63 @@ export function PwaRuntimeProvider({ children }: { children: React.ReactNode }) 
       cancelled = true;
       window.removeEventListener("online", wentOnline);
       window.removeEventListener("offline", wentOffline);
+      window.removeEventListener("focus", becameVisible);
+      document.removeEventListener("visibilitychange", becameVisible);
       navigator.serviceWorker.removeEventListener("controllerchange", controllerChanged);
     };
   }, []);
 
   async function checkForUpdate() {
-    if (!online) return;
+    if (!navigator.onLine) return;
     await registration.current?.update().catch(() => undefined);
+    try {
+      const response = await fetch("/", { cache: "no-store", credentials: "same-origin" });
+      if (!response.ok || !(response.headers.get("content-type") || "").includes("text/html")) return;
+      const latest = assetVersion(new DOMParser().parseFromString(await response.text(), "text/html"));
+      if (latest && initialAssetVersion.current && latest !== initialAssetVersion.current) setUpdateAvailable(true);
+    } catch {
+      // Ryšio juostą valdo naršyklės online/offline įvykiai.
+    }
   }
 
   function applyUpdate() {
-    const worker = waitingWorker.current || registration.current?.waiting;
-    if (!worker || updating) return;
+    if (!online || updating) return;
+    if (document.querySelector('[role="dialog"] form') && !window.confirm("Atidarytas redagavimo langas. Atnaujinus programėlę neįrašyti pakeitimai bus prarasti. Tęsti?")) return;
+    // registration.waiting is authoritative. A worker remembered earlier may
+    // already have been activated by another open tab; posting to that stale
+    // worker would never produce another controllerchange event in this tab.
+    const worker = registration.current?.waiting || null;
     reloadForUpdate.current = true;
     setUpdating(true);
-    worker.postMessage({ type: "SKIP_WAITING" });
+    if (worker?.state === "installed") worker.postMessage({ type: "SKIP_WAITING" });
+    else window.location.reload();
   }
 
   return (
     <PwaRuntimeContext.Provider value={{ supported, online, updateAvailable, updating, checkForUpdate, applyUpdate }}>
       {children}
+      <PwaRuntimeStatus />
     </PwaRuntimeContext.Provider>
   );
 }
 
 export function usePwaRuntime() {
   return useContext(PwaRuntimeContext);
+}
+
+function assetVersion(root: Document) {
+  return [...root.querySelectorAll<HTMLScriptElement | HTMLLinkElement>('script[src^="/_next/static/"],link[href^="/_next/static/"]')]
+    .map((element) => element.getAttribute("src") || element.getAttribute("href") || "")
+    .map((value) => new URL(value, window.location.origin).pathname)
+    .sort()
+    .join("|");
+}
+
+function PwaRuntimeStatus() {
+  const runtime = usePwaRuntime();
+  if (!runtime.online) {
+    return <aside className="pwaRuntimeStatus offline" role="status"><span><strong>Nėra interneto.</strong> Rodomi jau atidaryti duomenys. Keitimai serveryje išjungti.</span></aside>;
+  }
+  if (!runtime.updateAvailable) return null;
+  return <aside className="pwaRuntimeStatus update" role="status"><span><strong>Yra nauja programėlės versija.</strong></span><button type="button" disabled={runtime.updating} onClick={runtime.applyUpdate}>{runtime.updating ? "Atnaujinama…" : "Atnaujinti programėlę"}</button></aside>;
 }

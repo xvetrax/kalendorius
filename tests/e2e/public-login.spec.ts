@@ -10,6 +10,16 @@ test("public URL offers self-service Google and Microsoft login without invite l
     await expect(page.getByRole("link", { name: "Prisijungti su Microsoft" })).toHaveAttribute("href", "/api/auth/microsoft-oidc/authorize");
     await expect(page.getByText(/kvietimo/i)).toHaveCount(0);
 
+    await context.setOffline(true);
+    const loginUrl = page.url();
+    for (const name of ["Prisijungti su Google", "Prisijungti su Microsoft"]) {
+      const link = page.getByRole("link", { name });
+      await expect(link).toHaveAttribute("aria-disabled", "true");
+      await link.evaluate((element: HTMLAnchorElement) => element.click());
+      await expect(page).toHaveURL(loginUrl);
+    }
+    await context.setOffline(false);
+
     const api = await context.request.get(`${baseURL}/api/tasks`);
     expect(api.status()).toBe(401);
   } finally {

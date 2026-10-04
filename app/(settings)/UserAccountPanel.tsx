@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import {usePwaRuntime} from "@/app/pwa-runtime";
 
 interface Identity {
   provider: "google" | "microsoft";
@@ -29,6 +30,7 @@ interface MeResponse extends MeData {
 }
 
 export function UserAccountPanel() {
+  const {online}=usePwaRuntime();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [activeSessionCount, setActiveSessionCount] = useState<number | null>(null);
@@ -55,6 +57,7 @@ export function UserAccountPanel() {
   useEffect(() => { load(); }, [load]);
 
   async function logout(all: boolean) {
+    if (!online) { setMsg("Nėra interneto ryšio."); return; }
     setBusy(true); setMsg("");
     try {
       const res = await fetch(`/api/auth/logout${all ? "?all=1" : ""}`, {
@@ -72,6 +75,7 @@ export function UserAccountPanel() {
   }
 
   async function deleteAccount() {
+    if (!online) { setMsg("Nėra interneto ryšio."); return; }
     if (deleteInput !== me?.displayName) {
       setMsg("Įvestas vardas nesutampa.");
       return;
@@ -137,12 +141,12 @@ export function UserAccountPanel() {
         ))}
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
           {!identities.some((id) => id.provider === "google") && (
-            <a href="/api/auth/google-oidc/authorize" style={{ fontSize: ".75rem", color: "#6247d8", fontWeight: 700, textDecoration: "none" }}>
+            <a href="/api/auth/google-oidc/authorize" aria-disabled={!online} onClick={event=>{if(!online)event.preventDefault();}} style={{ fontSize: ".75rem", color: "#6247d8", fontWeight: 700, textDecoration: "none" }}>
               + Susieti Google paskyrą
             </a>
           )}
           {!identities.some((id) => id.provider === "microsoft") && (
-            <a href="/api/auth/microsoft-oidc/authorize" style={{ fontSize: ".75rem", color: "#0078d4", fontWeight: 700, textDecoration: "none" }}>
+            <a href="/api/auth/microsoft-oidc/authorize" aria-disabled={!online} onClick={event=>{if(!online)event.preventDefault();}} style={{ fontSize: ".75rem", color: "#0078d4", fontWeight: 700, textDecoration: "none" }}>
               + Susieti Microsoft paskyrą
             </a>
           )}
@@ -154,7 +158,7 @@ export function UserAccountPanel() {
         <button
           type="button"
           className="logoutBtn"
-          disabled={busy}
+          disabled={!online||busy}
           onClick={() => logout(false)}
         >
           Atsijungti
@@ -162,7 +166,7 @@ export function UserAccountPanel() {
         <button
           type="button"
           className="logoutBtn"
-          disabled={busy}
+          disabled={!online||busy}
           onClick={() => logout(true)}
           style={{ color: "#9a4d5c" }}
         >
@@ -194,7 +198,7 @@ export function UserAccountPanel() {
           <div style={{ display: "flex", gap: 8 }}>
             <button
               type="button"
-              disabled={busy || deleteInput !== me.displayName}
+              disabled={!online||busy || deleteInput !== me.displayName}
               onClick={deleteAccount}
               style={{ background: "#a42d43", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontSize: ".8rem" }}
             >

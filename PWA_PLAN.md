@@ -1,14 +1,14 @@
 # „Dienos planas“ PWA įgyvendinimo planas
 
-Atnaujinta: 2026-10-03. Būsena: PWA-1a užbaigtas; PWA-1b kodas ir automatinė patikra užbaigti, liko realių įrenginių ir gyvos OAuth sesijos priėmimo patikra. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
+Atnaujinta: 2026-10-04. Būsena: PWA-1a bei PWA-2 įgyvendinimas ir automatinė patikra užbaigti; PWA-1b liko realių įrenginių, gyvos OAuth sesijos ir gyvo kelių kortelių atnaujinimo priėmimo patikra. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
 
 ## Įgyvendinimo eiga
 
 - [x] **PWA-1a:** manifestas, 192×192, 512×512, maskable ir Apple Touch ikonos, šviesios / tamsios temos naršyklės spalvos bei vieša prieiga prieš prisijungimą.
 - [ ] **PWA-1b:** diegimo sąsaja, standalone ir safe-area išdėstymas įgyvendinti; liko gyva OAuth, atsijungimo ir realaus macOS / Android įdiegimo patikra.
-- [ ] **PWA-2:** saugus service worker, ryšio būsena ir programos atnaujinimo eiga.
+- [x] **PWA-2:** saugus service worker, ryšio būsena ir programos atnaujinimo eiga. Įgyvendinimas bei automatinė priėmimo patikra užbaigti; gyvas įdiegtos programos atnaujinimas tikrinamas kartu su PWA-1b.
 - [x] **PWA-2a:** saugus service worker, tik viešų failų podėlis, bendras offline puslapis, griežtos antraštės ir seno podėlio valymas. Praėjo 319 testų, build, HTTP ir Docker smoke, realus Playwright offline scenarijus bei nepriklausoma peržiūra.
-- [ ] **PWA-2b:** ryšio būsena, rašymo veiksmų blokavimas ir valdomas programėlės atnaujinimas.
+- [x] **PWA-2b:** ryšio būsena, visų aptiktų rašymo veiksmų ir OAuth nuorodų blokavimas, neįrašytų formų apsauga bei valdomas programėlės atnaujinimas. Praėjo 319 testų, 57 E2E scenarijai, build, HTTP ir Docker smoke bei nepriklausoma `ship` peržiūra.
 
 ### PWA-1b perdavimo būsena
 
@@ -17,6 +17,14 @@ Atnaujinta: 2026-10-03. Būsena: PWA-1a užbaigtas; PWA-1b kodas ir automatinė 
 - Pirmo nepriklausomo vertinimo pastabos dėl horizontalaus telefono `safe-area` ir vienkartinio atmesto diegimo įvykio sutvarkytos bei padengtos testais.
 - Pakartotinis nepriklausomas vertinimas neįvyko, nes vertinimo agento workspace baigėsi kreditai. Prieš pažymint PWA-1b užbaigtu reikia peržiūrėti galutinį diff ir atlikti žemiau nurodytą gyvą patikrą.
 - Gyvai patikrinti: diegimą ir paleidimą macOS bei Android, prisijungimą ir atsijungimą standalone lange, Google ir Microsoft OAuth grįžimą bei pasibaigusios sesijos nukreipimą į `/login`.
+- Po naujo Docker leidimo su dviem atidarytomis programos kortelėmis gyvai patikrinti, kad atnaujinimo kvietimas neužstringa, išsaugo nebaigtą formą iki patvirtinimo ir po naudotojo veiksmo abi kortelės gauna naują versiją.
+
+### PWA-2b patikros būsena
+
+- Ryšio juosta rodoma visoje programoje ir prisijungimo puslapyje; offline režime rašymo, tempimo, dydžio keitimo, paskyrų, OAuth, atsarginių kopijų ir administravimo veiksmai išjungiami bei papildomai tikrinami funkcijų lygiu.
+- Nauja versija aptinkama pagal service worker ir pasikeitusius Next statinių failų adresus. Perkrovimas vyksta tik naudotojui paspaudus atnaujinimo mygtuką, o atidaryta forma prieš tai reikalauja patvirtinimo.
+- Praėjo `npm run typecheck`, 319/319 vienetinių ir integracinių testų, produkcinis `npm run build`, 57/57 Playwright scenarijų, HTTP smoke ir Docker smoke.
+- Du ankstesni `fix-first` peržiūrų radinių rinkiniai pataisyti ir padengti regresiniais testais; galutinė nepriklausoma peržiūra grąžino `ship` be naujų radinių.
 
 ## Tikslas
 
@@ -28,7 +36,7 @@ PWA nepakeičia serverio: naudotojų paskyros, Google / Microsoft integracijos, 
 
 - Programėlė naudoja Next.js 16 App Router ir produkcinį `standalone` Docker build.
 - Viešas diegimas jau pateikiamas per HTTPS.
-- `public/` šiuo metu turi tik `favicon.svg`; nėra PWA manifest'o, PNG ikonų ar service worker.
+- `public/` turi PWA ikonas, bendrą offline puslapį ir saugų viešų resursų service worker; manifestas generuojamas per App Router.
 - Autentifikuoti kalendorių ir užduočių API atsakymai turi `Cache-Control: no-store`. Šios apsaugos negalima apeiti service worker podėliu.
 - Programėlė turi fokusavimo laikmatį, tačiau uždarius programą patikimam pranešimui reikės Web Push ir serverio suplanuotų darbų, o ne vien naršyklės `setTimeout`.
 

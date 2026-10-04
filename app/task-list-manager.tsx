@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import {usePwaRuntime} from "@/app/pwa-runtime";
 
 type Source = "google" | "microsoft";
 export type ManagedTaskList = {
@@ -38,6 +39,7 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
   onDeleted: (key: string) => void;
   onListCreated: (key: string) => void;
 }) {
+  const {online}=usePwaRuntime();
   const [lists, setLists] = useState<ManagedTaskList[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -87,6 +89,7 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
 
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if(!online){setError("Nėra interneto ryšio.");return;}
     const selected = accounts.find((item) => accountKey(item) === account);
     if (busy || createNeedsRefresh || !selected || !newName.trim()) return;
     setCreating(true); setError("");
@@ -110,6 +113,7 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
 
   async function rename(event: FormEvent<HTMLFormElement>, list: ManagedTaskList) {
     event.preventDefault();
+    if(!online){setError("Nėra interneto ryšio.");return;}
     if (busy) return;
     if (!renameName.trim() || renameName.trim() === list.name) { setRenameKey(null); return; }
     setRenaming(true); setError("");
@@ -142,6 +146,7 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
   }
 
   async function remove() {
+    if(!online){setError("Nėra interneto ryšio.");return;}
     if (busy || !preview || preview.blocked_reason || !preview.confirmation || typedName !== preview.list.name) return;
     setDeleting(true); setError("");
     const deletingPreview = preview;
@@ -167,15 +172,15 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
 
   return <section className="taskListManager" aria-busy={busy || undefined}>
     <p className="formHint">Vietinės užduotys lieka vietinėje kolekcijoje — čia tvarkomi tik Google Tasks ir Microsoft To Do sąrašai.</p>
-    <div className="modalActions"><button type="button" disabled={busy} onClick={() => void refresh()}>Atnaujinti sąrašus</button></div>
+    <div className="modalActions"><button type="button" disabled={!online||busy} onClick={() => void refresh()}>Atnaujinti sąrašus</button></div>
     {createNeedsRefresh && <p className="formHint" role="status">Kūrimą galėsi kartoti po sėkmingo sąrašų atnaujinimo.</p>}
     {error && <p className="formError" role="alert">{error}</p>}
     {warnings.map((warning) => <p className="formHint" role="status" key={warning}>{warning}</p>)}
     <form className="modalForm taskListCreate" onSubmit={create}>
       <h3>Kurti sąrašą</h3>
-      <div className="formRow"><label>Paskyra<select value={account} onChange={(event) => setAccount(event.target.value)} disabled={busy || createNeedsRefresh || !accounts.length}>{accounts.length ? accounts.map((item) => <option value={accountKey(item)} key={accountKey(item)}>{item.label} · {providerName(item.source)}</option>) : <option>Nėra prijungtų paskyrų</option>}</select></label><label>Pavadinimas<input value={newName} onChange={(event) => setNewName(event.target.value)} required maxLength={255} disabled={busy || createNeedsRefresh || !accounts.length} placeholder="Pvz., Namų darbai"/></label></div>
-      <label className="taskListChoice"><input type="checkbox" checked={useNewList} onChange={(event) => setUseNewList(event.target.checked)} disabled={busy || createNeedsRefresh || !accounts.length}/>Naudoti šį sąrašą naujoms užduotims</label>
-      <div className="modalActions"><button className="newButton" disabled={busy || createNeedsRefresh || !accounts.length}>{creating ? "Kuriama…" : "Sukurti sąrašą"}</button></div>
+      <div className="formRow"><label>Paskyra<select value={account} onChange={(event) => setAccount(event.target.value)} disabled={!online||busy || createNeedsRefresh || !accounts.length}>{accounts.length ? accounts.map((item) => <option value={accountKey(item)} key={accountKey(item)}>{item.label} · {providerName(item.source)}</option>) : <option>Nėra prijungtų paskyrų</option>}</select></label><label>Pavadinimas<input value={newName} onChange={(event) => setNewName(event.target.value)} required maxLength={255} disabled={!online||busy || createNeedsRefresh || !accounts.length} placeholder="Pvz., Namų darbai"/></label></div>
+      <label className="taskListChoice"><input type="checkbox" checked={useNewList} onChange={(event) => setUseNewList(event.target.checked)} disabled={!online || busy || createNeedsRefresh || !accounts.length}/>Naudoti šį sąrašą naujoms užduotims</label>
+      <div className="modalActions"><button className="newButton" disabled={!online||busy || createNeedsRefresh || !accounts.length}>{creating ? "Kuriama…" : "Sukurti sąrašą"}</button></div>
     </form>
     <section className="taskListRows" aria-label="Prijungti užduočių sąrašai">
       <h3>Prijungti sąrašai</h3>
@@ -183,13 +188,13 @@ export function TaskListManager({ onChanged, onDeleted, onListCreated }: {
         const mayRename = list.can_rename === true && !list.stale;
         const mayDelete = list.can_delete === true && !list.stale;
         const reason = list.management_reason || (list.stale ? "Sąrašo duomenys pasenę — atnaujink prieš tvarkydamas." : !list.writable ? "Šis sąrašas skirtas tik skaitymui." : "Šio sąrašo tvarkyti negalima.");
-        return <article className="taskListRow" key={list.key}><div><strong>{list.name}</strong><small>{list.account_label ? `${list.account_label} · ` : ""}{providerName(list.source)}</small>{(!mayRename || !mayDelete) && <small className="taskListReason">{reason}</small>}</div><div className="taskListActions"><button type="button" disabled={!mayRename || busy} onClick={() => { setRenameKey(list.key); setRenameName(list.name); setPreview(null); }}>Pervadinti</button><button type="button" className="dangerButton" disabled={!mayDelete || busy} onClick={() => void loadPreview(list)}>Šalinti</button></div>
-          {renameKey === list.key && <form className="taskListInlineForm" onSubmit={(event) => void rename(event, list)}><label>Pavadinimas<input value={renameName} onChange={(event) => setRenameName(event.target.value)} required maxLength={255} disabled={busy}/></label><div><button type="button" disabled={busy} onClick={() => setRenameKey(null)}>Atšaukti</button><button className="newButton" disabled={busy}>{renaming ? "Saugoma…" : "Išsaugoti"}</button></div></form>}
+        return <article className="taskListRow" key={list.key}><div><strong>{list.name}</strong><small>{list.account_label ? `${list.account_label} · ` : ""}{providerName(list.source)}</small>{(!mayRename || !mayDelete) && <small className="taskListReason">{reason}</small>}</div><div className="taskListActions"><button type="button" disabled={!online||!mayRename || busy} onClick={() => { setRenameKey(list.key); setRenameName(list.name); setPreview(null); }}>Pervadinti</button><button type="button" className="dangerButton" disabled={!online||!mayDelete || busy} onClick={() => void loadPreview(list)}>Šalinti</button></div>
+          {renameKey === list.key && <form className="taskListInlineForm" onSubmit={(event) => void rename(event, list)}><label>Pavadinimas<input value={renameName} onChange={(event) => setRenameName(event.target.value)} required maxLength={255} disabled={!online || busy}/></label><div><button type="button" disabled={busy} onClick={() => setRenameKey(null)}>Atšaukti</button><button className="newButton" disabled={!online || busy}>{renaming ? "Saugoma…" : "Išsaugoti"}</button></div></form>}
         </article>;
       })}
     </section>
     {(previewLoading || preview) && <section className="taskListDelete" aria-live="polite">
-      {previewLoading ? <p>Ruošiama šalinimo peržiūra…</p> : preview && <><h3>Pašalinti „{preview.list.name}“</h3>{preview.blocked_reason || !preview.confirmation ? <p className="formHint">{preview.blocked_reason || "Šios peržiūros patvirtinti negalima. Atnaujink sąrašus ir bandyk dar kartą."}</p> : <><p>Bus pašalintas sąrašas ir {preview.task_count} {preview.task_count === 1 ? "užduotis" : "užduotys"}, taip pat vietiniai jų planai.</p><label>Įrašyk „{preview.list.name}“, kad patvirtintum<input value={typedName} onChange={(event) => setTypedName(event.target.value)} disabled={busy} autoComplete="off"/></label><div className="modalActions"><button type="button" disabled={busy} onClick={() => { setPreview(null); setTypedName(""); }}>Atšaukti</button><button type="button" className="dangerButton" disabled={busy || typedName !== preview.list.name} onClick={() => void remove()}>{deleting ? "Šalinama…" : "Pašalinti sąrašą"}</button></div></>}</>}
+      {previewLoading ? <p>Ruošiama šalinimo peržiūra…</p> : preview && <><h3>Pašalinti „{preview.list.name}“</h3>{preview.blocked_reason || !preview.confirmation ? <p className="formHint">{preview.blocked_reason || "Šios peržiūros patvirtinti negalima. Atnaujink sąrašus ir bandyk dar kartą."}</p> : <><p>Bus pašalintas sąrašas ir {preview.task_count} {preview.task_count === 1 ? "užduotis" : "užduotys"}, taip pat vietiniai jų planai.</p><label>Įrašyk „{preview.list.name}“, kad patvirtintum<input value={typedName} onChange={(event) => setTypedName(event.target.value)} disabled={!online||busy} autoComplete="off"/></label><div className="modalActions"><button type="button" disabled={busy} onClick={() => { setPreview(null); setTypedName(""); }}>Atšaukti</button><button type="button" className="dangerButton" disabled={!online||busy || typedName !== preview.list.name} onClick={() => void remove()}>{deleting ? "Šalinama…" : "Pašalinti sąrašą"}</button></div></>}</>}
     </section>}
   </section>;
 }
