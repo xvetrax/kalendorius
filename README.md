@@ -30,8 +30,9 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 - valdyti projektus, prioritetus, trukmę, terminus, žymas ir pastabas;
 - naudoti Kanban užduočių lentą bei 25 minučių fokusavimo laikmatį;
 - matyti dienos suplanuoto darbo krūvį ir ieškoti užduočių;
-- veikti vietoje arba viename neprivilegijuotame „Docker“ konteineryje su išliekančiu duomenų tomu;
+- veikti vietoje arba dviejuose neprivilegijuotuose „Docker“ servisuose — web programoje ir pranešimų workeryje — su bendru išliekančiu duomenų tomu;
 - įdiegti kaip PWA ir kiekviename palaikomame įrenginyje atskirai įjungti, išbandyti arba pašalinti Web Push prenumeratą;
+- pasirinktinai gauti privatų fokusavimo sesijos pabaigos pranešimą net uždarius PWA; patvarus workeris po perkrovimo nebekartoja neaiškios jau pradėtos siuntos;
 - užšifruoti „Google“ ir „Microsoft“ atnaujinimo žetonus prieš išsaugant SQLite bazėje;
 - aiškiai rodyti abiejų integracijų būseną ir saugiai pašalinti vietoje saugomus OAuth žetonus mygtuku „Atjungti“;
 - kurti atskiras paskyras pirmo Google arba Microsoft OIDC prisijungimo metu, saugoti atšaukiamas DB sesijas ir izoliuoti kiekvieno naudotojo duomenis;
@@ -45,8 +46,8 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 3. Nukopijuok `.env.example` į `.env`, įrašyk Microsoft Client ID, Client Secret, `INITIAL_ADMIN_EMAIL` ir 64 simbolių šifravimo raktą (`openssl rand -hex 32`).
    Pranešimams vieną kartą paleisk `npm run vapid:generate` ir įrašyk `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` bei `VAPID_SUBJECT=mailto:tavo-adresas@example.com`. Tų pačių VAPID raktų nekeisk tarp konteinerio atnaujinimų.
 4. Jei nori Google, „Google Cloud Console“ tame pačiame projekte įjunk Calendar API ir Tasks API, sukurk Web OAuth klientą ir registruok abu URI: `http://localhost:3000/api/auth/google-oidc/callback` prisijungimui ir `http://localhost:3000/api/google/callback` integracijai.
-5. Vietiniam darbui paleisk `npm ci`, tada `npm run dev`. Produkcinei kopijai naudok `npm run build && npm start`.
-6. „Docker“ paleidimui naudok `docker compose up --build`.
+5. Vietiniam darbui paleisk `npm ci`, tada `npm run dev`. Produkcinei kopijai naudok `npm run build`, po to dviejuose terminaluose paleisk `npm start` ir `npm run worker`.
+6. „Docker“ paleidimui naudok `docker compose up --build`. Compose paleidžia `app` ir atskirą `notifications` workerį; abu naudoja tą patį SQLite tomą ir tuos pačius stabilius VAPID raktus.
 7. Atidaryk `http://localhost:3000`.
 
 `APP_ORIGIN`, integracijų redirect URI ir abu OIDC callback URI turi naudoti tą pačią kilmę. HTTP leidžiamas tik `localhost` / `127.0.0.1`; viešam adresui naudok HTTPS. `PUBLIC_SIGNUP=true` leidžia bet kam, turinčiam Google arba Microsoft paskyrą, susikurti savo izoliuotą erdvę. Nustačius `false`, naujų paskyrų kūrimas sustabdomas, o esami naudotojai prisijungia toliau. Jei `INITIAL_ADMIN_EMAIL` nenustatytas, pirmoji sukurta paskyra tampa administratoriaus paskyra.
@@ -67,9 +68,10 @@ npm run test:tasks
 npm run test:e2e
 npm run test:docker
 npm start
+npm run worker
 ```
 
-`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-09-30 pilnas ciklas baigtas su 310/310 Node testų ir 45/45 Playwright scenarijų.
+`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo pranešimų workerį, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-05 pilnas ciklas baigtas su 340/340 Node testų ir 62/62 Playwright scenarijais.
 
 `test:smoke` paleidžia tik lokalią produkcinę kopiją su laikina DB ir neprijungtomis integracijomis. Tikrina CSS / JS / favicon, OAuth klaidas, CSRF, atjungimo API bei užduoties sukūrimą, planavimą, perkėlimą, trukmę, išplanavimą ir užbaigimą. Tikrina, kad terminas nekinta ir pasenusi plano versija atmetama. Užbaigęs pašalina savo testinę DB.
 
@@ -79,11 +81,11 @@ npm start
 
 `test:e2e` po produkcinio build parenka laisvą vietinį prievadą, sukuria unikalią laikiną SQLite bazę ir paleidžia atskirą produkcinį serverį. Testai niekada neperima jau veikiančio `:3000` serverio. Baigus ar testams nepraėjus laikinas katalogas su DB pašalinamas. Rinkinys tikrina vietinių užduočių pilną CRUD ir išlikimą, nesėkmingo kūrimo rollback, matomus tinklo klaidų pranešimus, lėtą atsakymą, tikrą vienos dienos mobilų tinklelį, prieinamus formų laukus ir konkrečią 2026-03-29 Vilniaus 23 valandų DST dieną. Tiesioginis `playwright test` sąmoningai atmetamas; naudok npm komandą, kad testai negalėtų paliesti naudotojo DB.
 
-`test:docker` sukuria laikiną produkcinį image ir duomenų katalogą, įrašo dvi Google bei dvi Microsoft jungtis, patikrina health endpoint, pilnos kopijos atsisiuntimą, duomenų pakeitimo rollback per atkūrimą ir antrą konteinerio paleidimą su ta pačia baze. Testas nenaudoja `.env` paslapčių ar veikiančio `:3000` serverio ir pabaigoje pašalina savo konteinerį, image bei laikinus duomenis. Jam reikia veikiančio Docker daemon.
+`test:docker` sukuria laikiną produkcinį image ir duomenų katalogą, įrašo dvi Google bei dvi Microsoft jungtis, patikrina web ir pranešimų workerio health būsenas, pilnos kopijos atsisiuntimą, duomenų pakeitimo rollback per atkūrimą ir antrą paleidimą su ta pačia baze. Testas nenaudoja `.env` paslapčių ar veikiančio `:3000` serverio ir pabaigoje pašalina savo konteinerius, image bei laikinus duomenis. Jam reikia veikiančio Docker daemon.
 
 ## Atsarginės kopijos ir atkūrimas
 
-Atverk **Nustatymai → Duomenys**. Administratoriaus **Pilna kopija** išsaugo visą kelių naudotojų DB: paskyras, savininkams priskirtas užduotis ir planus, tiekėjų talpyklą, sesijų būseną, kalendoriaus kūrimo operacijų registrą, užšifruotus OAuth atnaujinimo žetonus bei užšifruotas push prenumeratas. Failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju naudotojai turi iš naujo prijungti paskyras. Atkūrimas tyčia pašalina push prenumeratas, kad nukopijuotas diegimas nepradėtų siųsti į seno serverio įrenginius. Paprasto naudotojo **Eksportuoti (be žetonų)** įtraukia tik jo darbo duomenis, be OAuth ar push paslapčių ir kitų naudotojų eilučių.
+Atverk **Nustatymai → Duomenys**. Administratoriaus **Pilna kopija** išsaugo visą kelių naudotojų DB: paskyras, savininkams priskirtas užduotis ir planus, tiekėjų talpyklą, sesijų būseną, pranešimų nuostatas, kalendoriaus kūrimo operacijų registrą, užšifruotus OAuth atnaujinimo žetonus bei užšifruotas push prenumeratas. Failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju naudotojai turi iš naujo prijungti paskyras. Atkūrimas pristabdo workerį ir tyčia pašalina push prenumeratas bei laukiančių pranešimų eilę, kad nukopijuotas diegimas nepradėtų siųsti į seno serverio įrenginius. Paprasto naudotojo **Eksportuoti (be žetonų)** įtraukia tik jo darbo duomenis, be OAuth ar push paslapčių ir kitų naudotojų eilučių.
 
 **Atkurti iš kopijos** priima iki 100 MB SQLite failą. Prieš pakeisdama duomenis programa patikrina failo vientisumą, lenteles ir stulpelius, tada vienoje transakcijoje pakeičia visų programos lentelių duomenis. Klaidinga ar naujesnės nepalaikomos schemos kopija esamų duomenų nekeičia. Po sėkmingo atkūrimo puslapis persikrauna. Prieš programos atnaujinimą parsisiųsk pilną kopiją.
 

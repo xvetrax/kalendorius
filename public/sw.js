@@ -41,12 +41,18 @@ self.addEventListener("message", (event) => {
 self.addEventListener("push", (event) => {
   let payload = {};
   try { payload = event.data?.json() || {}; } catch { /* Use privacy-safe defaults. */ }
-  const isTest = payload.type === "test";
+  const messages = {
+    test: { body: "Pranešimai šiame įrenginyje veikia.", tag: "dienos-planas-test" },
+    focus_end: { body: "Fokusavimo sesija baigėsi — metas atsikvėpti.", tag: "dienos-planas-focus-end" },
+  };
+  const message = payload?.v === 1 && payload.type === "focus_end"
+    ? messages.focus_end
+    : payload?.type === "test" ? messages.test : { body: "Turi naują priminimą.", tag: "dienos-planas-reminder" };
   event.waitUntil(self.registration.showNotification("Dienos planas", {
-    body: isTest ? "Pranešimai šiame įrenginyje veikia." : "Turi naują priminimą.",
+    body: message.body,
     icon: "/pwa/icon-192.png",
     badge: "/pwa/icon-192.png",
-    tag: isTest ? "dienos-planas-test" : "dienos-planas-reminder",
+    tag: message.tag,
     data: { url: "/" },
   }));
 });

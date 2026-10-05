@@ -1,6 +1,7 @@
 import { db, SESSION_COOKIE, revokeSession, revokeAllUserSessions } from "@/lib/db-multi";
 import { createHash } from "node:crypto";
 import { assertSameOrigin } from "@/lib/http";
+import { cancelPendingNotificationsForUser } from "@/lib/notification-jobs";
 
 export const runtime = "nodejs";
 
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
         // Revoke all sessions for this user
         revokeAllUserSessions(session.user_id);
         db.prepare("DELETE FROM push_subscriptions WHERE user_id = ?").run(session.user_id);
+        cancelPendingNotificationsForUser(session.user_id);
 
         // Log security event
         try {

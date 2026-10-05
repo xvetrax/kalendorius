@@ -1,6 +1,6 @@
 # „Dienos planas“ PWA įgyvendinimo planas
 
-Atnaujinta: 2026-10-05. Būsena: PWA-1a, PWA-2 ir PWA-3a įgyvendinimas bei automatinė patikra užbaigti; PWA-1b liko realių įrenginių, gyvos OAuth sesijos ir gyvo kelių kortelių atnaujinimo priėmimo patikra. PWA-3b liko suplanuoti priminimai ir atskiras patvarus worker. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
+Atnaujinta: 2026-10-05. Būsena: PWA-1a, PWA-2, PWA-3a ir PWA-3b1 įgyvendinimas bei automatinė patikra užbaigti; PWA-1b liko realių įrenginių, gyvos OAuth sesijos ir gyvo kelių kortelių atnaujinimo priėmimo patikra. PWA-3b2 liko užduočių pradžios bei ryto / vakaro ritualų priminimai. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
 
 ## Įgyvendinimo eiga
 
@@ -10,7 +10,8 @@ Atnaujinta: 2026-10-05. Būsena: PWA-1a, PWA-2 ir PWA-3a įgyvendinimas bei auto
 - [x] **PWA-2a:** saugus service worker, tik viešų failų podėlis, bendras offline puslapis, griežtos antraštės ir seno podėlio valymas. Praėjo 319 testų, build, HTTP ir Docker smoke, realus Playwright offline scenarijus bei nepriklausoma peržiūra.
 - [x] **PWA-2b:** ryšio būsena, visų aptiktų rašymo veiksmų ir OAuth nuorodų blokavimas, neįrašytų formų apsauga bei valdomas programėlės atnaujinimas. Praėjo 319 testų, 57 E2E scenarijai, build, HTTP ir Docker smoke bei nepriklausoma `ship` peržiūra.
 - [x] **PWA-3a:** VAPID konfigūracija, užšifruotos naudotojo įrenginių prenumeratos, aiškus leidimo prašymas, bandomasis privatumo neatskleidžiantis pranešimas, įrenginių sąrašas ir prenumeratos panaikinimas. Praėjo 328 testai, 61 E2E scenarijus, build, HTTP ir Docker smoke bei produkcinių priklausomybių auditas; liko gyva realių įrenginių priėmimo patikra.
-- [ ] **PWA-3b:** scenarijų nuostatos, patvarus `notification_jobs` registras ir atskiras Docker worker fokusavimo, užduočių bei dienos ritualų priminimams.
+- [x] **PWA-3b1:** scenarijų nuostatų ir patvaraus `notification_jobs` registro pagrindas, per įrenginį atskirtos pristatymo būsenos, atskiras Docker worker ir fokusavimo pabaigos priminimas.
+- [ ] **PWA-3b2:** užduoties pradžios bei ryto / vakaro ritualų priminimai su naudotojo IANA laiko zona ir aiškia DST taisykle.
 
 ### PWA-1b perdavimo būsena
 
@@ -36,6 +37,18 @@ Atnaujinta: 2026-10-05. Būsena: PWA-1a, PWA-2 ir PWA-3a įgyvendinimas bei auto
 - Vienam naudotojui leidžiama iki 10 įrenginių ir taikomas bendras 30 sekundžių bandomojo siuntimo ribojimas; siuntimas turi 10 sekundžių tinklo timeout. 404 / 410 atsakas pašalina nebegaliojančią prenumeratą, laikina klaida išlaiko ją pakartojimui.
 - Atsijungus pašalinama dabartinio įrenginio prenumerata, atsijungus visuose įrenginiuose arba išjungus paskyrą pašalinamos visos naudotojo prenumeratos. Atkūrus pilną DB kopiją prenumeratos taip pat tyčia panaikinamos.
 - Gyvai dar reikia patikrinti leidimą, bandomąjį pristatymą ir pašalinimą Android Chrome, macOS Chrome / Safari bei iPhone įdiegtoje PWA. Tam produkcijoje turi būti nustatyti stabilūs VAPID raktai ir galutinis HTTPS domenas.
+
+### PWA-3b1 patikros būsena
+
+- Fokusavimo sesijos pradžia sukuria naudotojui priklausantį idempotentišką darbą; pauzė, resetas, užduoties pakeitimas ir priminimo nuostatos išjungimas jį atšaukia.
+- Vienas loginis darbas transakcijoje išskaidomas į atskiras kiekvieno tuo metu aktyvaus įrenginio pristatymo eilutes. Du workeriai negali paimti tos pačios eilutės.
+- Prieš tinklo siuntimą eilutė pažymima `sending`. Po workerio žūties tokia neaiški siunta tampa galutine `ambiguous` ir automatiškai nebekartojama; aiškus 429 / 5xx atmetimas kartojamas ribotai, o 404 / 410 pašalina nebegaliojančią prenumeratą.
+- Atšaukimas pirmiausia išsaugomas naršyklėje ir pakartojamas grįžus ryšiui. Serverio tombstone apsaugo ir nuo atvejo, kai DELETE pasiekia serverį anksčiau už pradinį POST; operation ID su kitu pabaigos laiku atmetamas.
+- Vienam naudotojui ribojamas aktyvių fokusavimo darbų skaičius, naujų operacijų tempas ir septynias dienas saugomų įrašų kiekis. Pasenusios arba prenumeratą praradusios pristatymo eilutės užbaigiamos, kad neblokuotų darbo visam laikui.
+- Pranešimo payload ir service worker tekstas yra fiksuoti, be užduoties pavadinimo ar kito privataus turinio. `accepted` reiškia tik push paslaugos priėmimą, ne pristatymą į ekraną.
+- Pilna kopija išsaugo nuostatas, bet ne operacinę darbų eilę. Atkūrimas pristabdo workerį terminuota savininko nuoma, atmeta vykstantį siuntimą ir prieš vėl paleisdamas išvalo darbus, pristatymus bei prenumeratas; nutrūkęs atkūrimo procesas workerio neužrakina visam laikui.
+- Galutinis automatinis ciklas: 340/340 Node testų, 62/62 Playwright scenarijai, typecheck, produkcinis build, HTTP smoke, Calendar / Tasks integraciniai testai, Docker web+worker health / backup / restart ir 0 produkcinių npm pažeidžiamumų.
+- Gyvai dar reikia patikrinti uždarytos PWA fokusavimo pranešimą Android, macOS ir iPhone įrenginiuose.
 
 ## Tikslas
 

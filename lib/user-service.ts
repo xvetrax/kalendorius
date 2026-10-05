@@ -10,6 +10,7 @@
  */
 
 import { db } from "@/lib/db-multi";
+import { cancelPendingNotificationsForUser } from "@/lib/notification-jobs";
 
 // ---------------------------------------------------------------------------
 // Re-export types used by callers
@@ -160,6 +161,7 @@ export function disableUser(adminId: number, targetUserId: number): void {
     // A disabled account must no longer receive notifications even though the
     // user row is retained for the audit trail.
     db.prepare("DELETE FROM push_subscriptions WHERE user_id = ?").run(targetUserId);
+    cancelPendingNotificationsForUser(targetUserId);
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");

@@ -160,6 +160,73 @@ db.exec(`
     last_test_attempt_at TEXT    NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS notification_preferences (
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    scenario        TEXT    NOT NULL CHECK(scenario IN ('focus_end', 'task_start', 'morning_plan', 'evening_close')),
+    enabled         INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+    lead_minutes    INTEGER CHECK(lead_minutes IS NULL OR (lead_minutes >= 0 AND lead_minutes <= 1440)),
+    local_time      TEXT,
+    time_zone       TEXT,
+    private_content INTEGER NOT NULL DEFAULT 0 CHECK(private_content IN (0, 1)),
+    updated_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(user_id, scenario)
+  );
+
+  CREATE TABLE IF NOT EXISTS notification_jobs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    scenario     TEXT    NOT NULL CHECK(scenario IN ('focus_end', 'task_start', 'morning_plan', 'evening_close')),
+    source_key   TEXT    NOT NULL,
+    run_at       TEXT    NOT NULL,
+    expires_at   TEXT    NOT NULL,
+    cancelled_at TEXT,
+    expanded_at  TEXT,
+    completed_at TEXT,
+    created_at   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, scenario, source_key)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_notification_jobs_due
+    ON notification_jobs(run_at, id)
+    WHERE cancelled_at IS NULL AND completed_at IS NULL;
+
+  CREATE TABLE IF NOT EXISTS notification_deliveries (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id            INTEGER NOT NULL REFERENCES notification_jobs(id) ON DELETE CASCADE,
+    subscription_id   INTEGER REFERENCES push_subscriptions(id) ON DELETE SET NULL,
+    state             TEXT    NOT NULL DEFAULT 'queued'
+      CHECK(state IN ('queued', 'leased', 'sending', 'accepted', 'retryable', 'permanent', 'ambiguous', 'cancelled')),
+    lease_owner       TEXT,
+    lease_until       TEXT,
+    attempt_count     INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    next_attempt_at   TEXT,
+    attempted_at      TEXT,
+    accepted_at       TEXT,
+    last_status_class TEXT,
+    error_code        TEXT,
+    created_at        TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(job_id, subscription_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_notification_deliveries_ready
+    ON notification_deliveries(state, next_attempt_at, id);
+
+  CREATE TABLE IF NOT EXISTS notification_runtime (
+    id           INTEGER PRIMARY KEY CHECK(id = 1),
+    paused       INTEGER NOT NULL DEFAULT 0 CHECK(paused IN (0, 1)),
+    generation   INTEGER NOT NULL DEFAULT 1 CHECK(generation > 0),
+    in_flight    INTEGER NOT NULL DEFAULT 0 CHECK(in_flight >= 0),
+    pause_until  TEXT,
+    pause_owner  TEXT,
+    heartbeat_at TEXT,
+    worker_id    TEXT,
+    updated_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  INSERT OR IGNORE INTO notification_runtime (id) VALUES (1);
+
   CREATE TABLE IF NOT EXISTS security_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER REFERENCES users(id),
@@ -277,7 +344,8 @@ db.exec(`
 // v2: normalized calendar preferences and connection-bound Outlook mirrors.
 // v3: OAuth data-consent operations persist add/re-consent intent.
 // v4: encrypted, user-scoped Web Push subscriptions and persistent send throttles.
-export const DATABASE_SCHEMA_VERSION = 4;
+// v5: notification preferences, durable jobs and per-device delivery state.
+export const DATABASE_SCHEMA_VERSION = 5;
 
 type SqliteColumn = { name: string };
 type SqliteIndex = { name: string; unique: number };
@@ -542,6 +610,73 @@ function migrateMultiAccountSchema(): void {
         last_test_attempt_at TEXT    NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS notification_preferences (
+        user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        scenario        TEXT    NOT NULL CHECK(scenario IN ('focus_end', 'task_start', 'morning_plan', 'evening_close')),
+        enabled         INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+        lead_minutes    INTEGER CHECK(lead_minutes IS NULL OR (lead_minutes >= 0 AND lead_minutes <= 1440)),
+        local_time      TEXT,
+        time_zone       TEXT,
+        private_content INTEGER NOT NULL DEFAULT 0 CHECK(private_content IN (0, 1)),
+        updated_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(user_id, scenario)
+      );
+
+      CREATE TABLE IF NOT EXISTS notification_jobs (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        scenario     TEXT    NOT NULL CHECK(scenario IN ('focus_end', 'task_start', 'morning_plan', 'evening_close')),
+        source_key   TEXT    NOT NULL,
+        run_at       TEXT    NOT NULL,
+        expires_at   TEXT    NOT NULL,
+        cancelled_at TEXT,
+        expanded_at  TEXT,
+        completed_at TEXT,
+        created_at   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, scenario, source_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_notification_jobs_due
+        ON notification_jobs(run_at, id)
+        WHERE cancelled_at IS NULL AND completed_at IS NULL;
+
+      CREATE TABLE IF NOT EXISTS notification_deliveries (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id            INTEGER NOT NULL REFERENCES notification_jobs(id) ON DELETE CASCADE,
+        subscription_id   INTEGER REFERENCES push_subscriptions(id) ON DELETE SET NULL,
+        state             TEXT    NOT NULL DEFAULT 'queued'
+          CHECK(state IN ('queued', 'leased', 'sending', 'accepted', 'retryable', 'permanent', 'ambiguous', 'cancelled')),
+        lease_owner       TEXT,
+        lease_until       TEXT,
+        attempt_count     INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+        next_attempt_at   TEXT,
+        attempted_at      TEXT,
+        accepted_at       TEXT,
+        last_status_class TEXT,
+        error_code        TEXT,
+        created_at        TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at        TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(job_id, subscription_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_notification_deliveries_ready
+        ON notification_deliveries(state, next_attempt_at, id);
+
+      CREATE TABLE IF NOT EXISTS notification_runtime (
+        id           INTEGER PRIMARY KEY CHECK(id = 1),
+        paused       INTEGER NOT NULL DEFAULT 0 CHECK(paused IN (0, 1)),
+        generation   INTEGER NOT NULL DEFAULT 1 CHECK(generation > 0),
+        in_flight    INTEGER NOT NULL DEFAULT 0 CHECK(in_flight >= 0),
+        pause_until  TEXT,
+        pause_owner  TEXT,
+        heartbeat_at TEXT,
+        worker_id    TEXT,
+        updated_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      INSERT OR IGNORE INTO notification_runtime (id) VALUES (1);
+
       CREATE TABLE IF NOT EXISTS calendar_preferences (
         user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         connection_id INTEGER NOT NULL,
@@ -593,6 +728,14 @@ function migrateMultiAccountSchema(): void {
         SELECT RAISE(ABORT, 'mirror connection must belong to task owner');
       END;
     `);
+
+    const notificationRuntimeColumns = tableColumns("notification_runtime");
+    if (!notificationRuntimeColumns.includes("pause_until")) {
+      db.exec("ALTER TABLE notification_runtime ADD COLUMN pause_until TEXT");
+    }
+    if (!notificationRuntimeColumns.includes("pause_owner")) {
+      db.exec("ALTER TABLE notification_runtime ADD COLUMN pause_owner TEXT");
+    }
 
     if (currentVersion < 2) {
       normalizeMultiAccountData();

@@ -4,8 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && node scripts/build-notification-worker.mjs",
     "start": "node scripts/start.mjs",
+    "worker": "node dist/notification-worker.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.mjs",
     "test:smoke": "node tests/smoke.mjs",
@@ -28,6 +29,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/web-push": "^3.6.4",
+    "esbuild": "^0.25.12",
     "typescript": "^5.9.0"
   }
 }

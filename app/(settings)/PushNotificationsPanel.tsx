@@ -20,6 +20,10 @@ type PushState = {
   subscriptions: Device[];
 };
 
+type NotificationPreferences = {
+  focusEnd: { enabled: boolean };
+};
+
 function base64UrlBytes(value: string) {
   const padded = `${value}${"=".repeat((4 - value.length % 4) % 4)}`.replaceAll("-", "+").replaceAll("_", "/");
   const raw = window.atob(padded);
@@ -50,6 +54,7 @@ export function PushNotificationsPanel() {
   const [supported, setSupported] = useState<boolean | null>(null);
   const [permission, setPermission] = useState<NotificationPermission>("default");
   const [state, setState] = useState<PushState | null>(null);
+  const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
   const [currentFingerprint, setCurrentFingerprint] = useState("");
   const [deviceName, setDeviceName] = useState("");
   const [busy, setBusy] = useState("");
@@ -63,8 +68,12 @@ export function PushNotificationsPanel() {
 
   const load = useCallback(async () => {
     try {
-      const next = await json<PushState>(await fetch("/api/push/subscriptions", { cache: "no-store" }));
+      const [next, nextPreferences] = await Promise.all([
+        json<PushState>(await fetch("/api/push/subscriptions", { cache: "no-store" })),
+        json<NotificationPreferences>(await fetch("/api/notifications/preferences", { cache: "no-store" })),
+      ]);
       setState(next);
+      setPreferences(nextPreferences);
       if ("serviceWorker" in navigator && "PushManager" in window) {
         const registration = await navigator.serviceWorker.ready;
         const subscription = await registration.pushManager.getSubscription();
@@ -166,8 +175,24 @@ export function PushNotificationsPanel() {
     } finally { setBusy(""); }
   }
 
+  async function setFocusReminder(enabled: boolean) {
+    if (!online || !preferences) return;
+    setBusy("focus-preference"); setError(""); setMessage("");
+    try {
+      const next = await json<NotificationPreferences>(await fetch("/api/notifications/preferences", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ focusEndEnabled: enabled }),
+      }));
+      setPreferences(next);
+      setMessage(enabled ? "Fokusavimo pabaigos priminimai įjungti." : "Fokusavimo pabaigos priminimai išjungti.");
+    } catch (preferenceError) {
+      setError(preferenceError instanceof Error ? preferenceError.message : "Priminimo nuostatos išsaugoti nepavyko.");
+    } finally { setBusy(""); }
+  }
+
   if (supported === null) return <p className="formHint">Tikrinamas pranešimų palaikymas…</p>;
-  if (!state) return error
+  if (!state || !preferences) return error
     ? <p className="formError" role="alert">{error}</p>
     : <p className="formHint">Kraunami pranešimų nustatymai…</p>;
 
@@ -183,6 +208,14 @@ export function PushNotificationsPanel() {
       <small>Leidimo naršyklė paprašys tik paspaudus šį mygtuką.</small>
     </div>}
     {currentDevice && <p className="pushCurrent" role="status">Pranešimai šiame įrenginyje įjungti kaip <strong>{currentDevice.deviceName}</strong>.</p>}
+    <div className="pushScenarios">
+      <h4>Programėlės priminimai</h4>
+      <label className="freeToggle">
+        <input type="checkbox" checked={preferences.focusEnd.enabled} disabled={!online || Boolean(busy) || state.subscriptions.length === 0} onChange={(event) => void setFocusReminder(event.target.checked)} />
+        <i/><span><strong>Fokusavimo sesija baigėsi</strong><small>Pranešti net tada, kai programėlė uždaryta.</small></span>
+      </label>
+      {state.subscriptions.length === 0 && <small>Pirmiausia įjunk pranešimus bent viename įrenginyje.</small>}
+    </div>
     <p className="pushPrivacy">Bandomasis pranešimas nerodo užduočių ar kalendoriaus turinio. Vėliau kiekvieno priminimo privatumo lygį bus galima pasirinkti atskirai.</p>
     {state.subscriptions.length > 0 && <ul className="pushDevices">
       {state.subscriptions.map((device) => <li key={device.id}>

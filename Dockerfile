@@ -24,6 +24,7 @@ RUN addgroup -S planner && adduser -S -G planner planner
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/dist/notification-worker.mjs ./notification-worker.mjs
 
 RUN mkdir -p /app/data && chown -R planner:planner /app/data
 

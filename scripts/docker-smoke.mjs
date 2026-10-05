@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,7 +12,9 @@ const projectRoot = path.resolve(import.meta.dirname, "..");
 const suffix = `${process.pid}-${Date.now()}`;
 const image = `kalendorius:ma8-smoke-${suffix}`;
 const container = `kalendorius-ma8-smoke-${suffix}`;
+const workerContainer = `kalendorius-worker-smoke-${suffix}`;
 let containerRunning = false;
+let workerRunning = false;
 
 function docker(...args) {
   return execFileSync("docker", args, { cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -53,6 +55,18 @@ function runContainer() {
   containerRunning = true;
 }
 
+function runWorker() {
+  try { unlinkSync(path.join(runDirectory, "notification-worker-health.json")); } catch {}
+  const uid = typeof process.getuid === "function" ? process.getuid() : 1000;
+  const gid = typeof process.getgid === "function" ? process.getgid() : 1000;
+  docker("run", "-d", "--name", workerContainer, "--init", "--user", `${uid}:${gid}`,
+    "--mount", `type=bind,src=${runDirectory},dst=/app/data`,
+    "-e", "NODE_ENV=production", "-e", "TZ=Europe/Vilnius",
+    "-e", `TOKEN_ENCRYPTION_KEY=${encryptionKey}`,
+    "-e", "DATABASE_PATH=/app/data/planner.db", image, "node", "notification-worker.mjs");
+  workerRunning = true;
+}
+
 async function waitForHealth() {
   for (let attempt = 0; attempt < 120; attempt++) {
     try {
@@ -64,9 +78,25 @@ async function waitForHealth() {
   throw new Error(`Docker health check nepraėjo.\n${docker("logs", container)}`);
 }
 
+async function waitForWorkerHealth() {
+  const health = path.join(runDirectory, "notification-worker-health.json");
+  for (let attempt = 0; attempt < 80; attempt++) {
+    try {
+      const value = JSON.parse(readFileSync(health, "utf8"));
+      if (value.ok && Date.now() - Date.parse(value.at) < 10_000) return;
+    } catch {}
+    await delay(250);
+  }
+  throw new Error(`Pranešimų workerio health check nepraėjo.\n${docker("logs", workerContainer)}`);
+}
+
 function removeContainer() {
-  if (!containerRunning) return;
-  try { docker("rm", "-f", container); } finally { containerRunning = false; }
+  if (workerRunning) {
+    try { docker("rm", "-f", workerContainer); } finally { workerRunning = false; }
+  }
+  if (containerRunning) {
+    try { docker("rm", "-f", container); } finally { containerRunning = false; }
+  }
 }
 
 try {
@@ -90,6 +120,8 @@ try {
 
   runContainer();
   await waitForHealth();
+  runWorker();
+  await waitForWorkerHealth();
   for (const [asset, expectedType] of [
     ["/manifest.webmanifest", "application/manifest+json"],
     ["/sw.js", "application/javascript"],
@@ -133,7 +165,9 @@ try {
 
   runContainer();
   await waitForHealth();
-  console.log("OK: Docker build, health, keturios OAuth jungtys, pilnos kopijos atkūrimas ir pakartotinis paleidimas.");
+  runWorker();
+  await waitForWorkerHealth();
+  console.log("OK: Docker build, web ir worker health, keturios OAuth jungtys, pilnos kopijos atkūrimas ir pakartotinis paleidimas.");
 } finally {
   removeContainer();
   try { docker("image", "rm", "-f", image); } catch {}

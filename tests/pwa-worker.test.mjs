@@ -138,6 +138,17 @@ test("push turinys yra fiksuotas ir neparodo serverio atsiųsto privataus teksto
   assert.ok(!JSON.stringify(worker.notifications[0]).includes("Slapta užduotis"));
 });
 
+test("fokusavimo pranešimas turi fiksuotą privatų tekstą ir atskirą žymą", async () => {
+  const worker = await loadWorker();
+  const push = lifetimeEvent();
+  push.event.data = { json: () => ({ v: 1, type: "focus_end", title: "Slapta užduotis" }) };
+  worker.listeners.get("push")(push.event);
+  await push.done();
+  assert.equal(worker.notifications[0].options.body, "Fokusavimo sesija baigėsi — metas atsikvėpti.");
+  assert.equal(worker.notifications[0].options.tag, "dienos-planas-focus-end");
+  assert.ok(!JSON.stringify(worker.notifications[0]).includes("Slapta užduotis"));
+});
+
 test("paspaustas pranešimas atidaro tik programėlės šaknį", async () => {
   const worker = await loadWorker();
   worker.setWindow("https://planner.example/calendar");

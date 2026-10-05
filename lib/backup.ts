@@ -7,6 +7,7 @@ import {
   db,
   normalizeMultiAccountData,
 } from "@/lib/db-multi";
+import { pauseNotificationWorker, resumeNotificationWorker } from "@/lib/notification-worker";
 
 // ---------------------------------------------------------------------------
 // Table registry
@@ -28,6 +29,7 @@ const ALL_TABLES = [
   "user_settings",
   "push_subscriptions",
   "push_rate_limits",
+  "notification_preferences",
   "security_events",
   "tasks",
   "task_plans",
@@ -92,6 +94,7 @@ const REQUIRED_COLUMNS: Record<AllTable, readonly string[]> = {
     "created_at", "updated_at", "last_test_attempt_at", "last_push_accepted_at", "failure_count",
   ],
   push_rate_limits: ["user_id", "last_test_attempt_at"],
+  notification_preferences: ["user_id", "scenario", "enabled", "private_content", "updated_at"],
   security_events: ["id", "event_type", "created_at"],
   tasks: ["id", "user_id", "title", "notes", "due_at", "duration_minutes", "completed", "created_at"],
   task_plans: [
@@ -118,6 +121,7 @@ const PRIMARY_KEYS: Record<AllTable, readonly string[]> = {
   user_settings: ["user_id", "key"],
   push_subscriptions: ["id"],
   push_rate_limits: ["user_id"],
+  notification_preferences: ["user_id", "scenario"],
   security_events: ["id"],
   tasks: ["id"],
   task_plans: ["id"],
@@ -374,6 +378,9 @@ function validateBackup(database: DatabaseSync): string[] {
   if (incomingVersion >= 4 && (!tableNames.has("push_subscriptions") || !tableNames.has("push_rate_limits"))) {
     throw new BackupError("Atsarginėje kopijoje trūksta pranešimų lentelių.");
   }
+  if (incomingVersion >= 5 && !tableNames.has("notification_preferences")) {
+    throw new BackupError("Atsarginėje kopijoje trūksta pranešimų nuostatų lentelės.");
+  }
 
   // Column compatibility checks
   for (const table of tables) {
@@ -431,7 +438,14 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
   }
 
   const temporary = makeTempPath("planner-restore");
+  let workerPauseOwner: string | null = null;
+  let restored = false;
   try {
+    workerPauseOwner = pauseNotificationWorker();
+    const inFlight = Number((db.prepare("SELECT in_flight FROM notification_runtime WHERE id = 1").get() as { in_flight: number }).in_flight);
+    if (inFlight > 0) {
+      throw new BackupError("Pranešimų workeris dar siunčia pranešimą. Palauk keliolika sekundžių ir bandyk atkurti dar kartą.", 409);
+    }
     fs.writeFileSync(temporary, data, { mode: 0o600 });
     const incoming = new DatabaseSync(temporary, { readOnly: true });
     let incomingTables: string[];
@@ -469,7 +483,14 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
 
         // A restored browser session would let a copied bearer cookie survive
         // the restore boundary. Force every user to authenticate again.
-        db.exec("DELETE FROM auth_operations; DELETE FROM sessions; DELETE FROM push_subscriptions; DELETE FROM push_rate_limits;");
+        db.exec(`
+          DELETE FROM notification_deliveries;
+          DELETE FROM notification_jobs;
+          DELETE FROM auth_operations;
+          DELETE FROM sessions;
+          DELETE FROM push_subscriptions;
+          DELETE FROM push_rate_limits;
+        `);
 
         const foreignKeyProblems = db.prepare("PRAGMA foreign_key_check").all();
         if (foreignKeyProblems.length > 0) {
@@ -485,11 +506,13 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
       db.exec("DETACH DATABASE restore_source");
     }
 
+    restored = true;
     return { tablesRestored: incomingTables.length };
   } catch (error) {
     if (error instanceof BackupError) throw error;
     throw new BackupError("Atsarginės kopijos atkurti nepavyko; esami duomenys nepakeisti.");
   } finally {
+    if (workerPauseOwner) resumeNotificationWorker(workerPauseOwner, restored);
     try { fs.unlinkSync(temporary); } catch {}
   }
 }

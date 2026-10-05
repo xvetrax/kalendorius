@@ -14,7 +14,7 @@ import {TaskListManager} from "@/app/task-list-manager";
 import { MicrosoftTaskReminder } from "@/app/microsoft-task-reminder";
 import { MicrosoftTaskRecurrence } from "@/app/microsoft-task-recurrence";
 import { GoogleTaskOrder } from "@/app/google-task-order";
-import {FOCUS_DURATION_SECONDS,parseFocusSession,remainingFocusSeconds,serializeFocusSession} from "@/lib/focus-session";
+import {enqueueFocusCancellation,FOCUS_CANCELLATIONS_STORAGE_KEY,FOCUS_DURATION_SECONDS,parseFocusCancellationQueue,parseFocusSession,remainingFocusSeconds,removeFocusCancellation,serializeFocusSession} from "@/lib/focus-session";
 import {calendarTimeZones,isCalendarTimeZone,zonedInstant,zonedLocalInput} from "@/lib/calendar-time-zone";
 import {CalendarRecurrenceFields,CalendarSeriesRecurrence} from "@/app/calendar-event-recurrence";
 import type {CalendarRecurrence} from "@/lib/calendar-recurrence";
@@ -94,6 +94,7 @@ export default function Planner() {
   const [toast, setToast] = useState(""); const [loading, setLoading] = useState(true); const [mirrorFree, setMirrorFree] = useState(false);
   const [focusTask, setFocusTask] = useState<Task | null>(null); const [seconds, setSeconds] = useState(FOCUS_DURATION_SECONDS); const [running, setRunning] = useState(false);
   const [focusStartedAt,setFocusStartedAt]=useState<number|null>(null),[focusEndsAt,setFocusEndsAt]=useState<number|null>(null);
+  const [focusNotificationOperationId,setFocusNotificationOperationId]=useState<string|null>(null);
   const [focusRestored,setFocusRestored]=useState(false);
   const [dragHint,setDragHint]=useState<{day:string;minute:number;height:number}|null>(null);
 
@@ -199,7 +200,7 @@ export default function Planner() {
   }, []);
   useEffect(() => {
     if(!running||!focusEndsAt)return;
-    const sync=()=>{const remaining=remainingFocusSeconds(focusEndsAt);setSeconds(remaining);if(!remaining){setRunning(false);setFocusEndsAt(null);setToast("Fokusavimo sesija baigta — metas atsikvėpti.");}};
+    const sync=()=>{const remaining=remainingFocusSeconds(focusEndsAt);setSeconds(remaining);if(!remaining){setRunning(false);setFocusEndsAt(null);setFocusNotificationOperationId(null);setToast("Fokusavimo sesija baigta — metas atsikvėpti.");}};
     sync();const id=window.setInterval(sync,250);return()=>clearInterval(id);
   },[running,focusEndsAt]);
   useEffect(() => {
@@ -207,20 +208,36 @@ export default function Planner() {
     try{
       const raw=localStorage.getItem("focus-session"),saved=parseFocusSession(raw);if(!saved){if(raw)localStorage.removeItem("focus-session");return;}
       const task=tasks.find(item=>item.key===saved.taskKey&&!item.completed);if(!task){localStorage.removeItem("focus-session");return;}
-      setFocusTask(task);setSeconds(saved.remainingSeconds);setRunning(saved.running);setFocusStartedAt(saved.startedAt);setFocusEndsAt(saved.endsAt);
+      setFocusTask(task);setSeconds(saved.remainingSeconds);setRunning(saved.running);setFocusStartedAt(saved.startedAt);setFocusEndsAt(saved.endsAt);setFocusNotificationOperationId(saved.notificationOperationId);
       if(!saved.remainingSeconds)setToast("Fokusavimo sesija baigta — metas atsikvėpti.");
     }catch{}finally{setFocusRestored(true);}
   },[tasks,loading,focusRestored]);
   useEffect(()=>{
     if(!focusRestored||!focusTask)return;
     const current=tasks.find(item=>item.key===focusTask.key&&!item.completed);
-    if(!current){setFocusTask(null);setRunning(false);setSeconds(FOCUS_DURATION_SECONDS);setFocusStartedAt(null);setFocusEndsAt(null);}
+    if(!current){if(focusNotificationOperationId)void cancelFocusNotification(focusNotificationOperationId);setFocusTask(null);setRunning(false);setSeconds(FOCUS_DURATION_SECONDS);setFocusStartedAt(null);setFocusEndsAt(null);setFocusNotificationOperationId(null);}
     else if(current!==focusTask)setFocusTask(current);
   },[tasks,focusTask,focusRestored]);
   useEffect(() => {
     if(!focusRestored)return;
-    try{if(focusTask&&seconds>0)localStorage.setItem("focus-session",serializeFocusSession({taskKey:focusTask.key,remainingSeconds:seconds,running,startedAt:focusStartedAt,endsAt:focusEndsAt}));else localStorage.removeItem("focus-session");}catch{}
-  },[focusTask,seconds,running,focusStartedAt,focusEndsAt,focusRestored]);
+    try{if(focusTask&&seconds>0)localStorage.setItem("focus-session",serializeFocusSession({taskKey:focusTask.key,remainingSeconds:seconds,running,startedAt:focusStartedAt,endsAt:focusEndsAt,notificationOperationId:focusNotificationOperationId}));else localStorage.removeItem("focus-session");}catch{}
+  },[focusTask,seconds,running,focusStartedAt,focusEndsAt,focusNotificationOperationId,focusRestored]);
+  useEffect(()=>{
+    if(!pwaRuntime.online)return;
+    let stopped=false;
+    const flush=async()=>{
+      let pending:string[]=[];
+      try{pending=parseFocusCancellationQueue(localStorage.getItem(FOCUS_CANCELLATIONS_STORAGE_KEY));}catch{return;}
+      for(const operationId of pending){
+        if(stopped)return;
+        try{
+          const response=await fetch("/api/notifications/focus",{method:"DELETE",headers:{"content-type":"application/json"},body:JSON.stringify({operationId})});
+          if(response.ok)localStorage.setItem(FOCUS_CANCELLATIONS_STORAGE_KEY,removeFocusCancellation(localStorage.getItem(FOCUS_CANCELLATIONS_STORAGE_KEY),operationId));
+        }catch{}
+      }
+    };
+    void flush();const timer=window.setInterval(()=>void flush(),30_000);return()=>{stopped=true;window.clearInterval(timer);};
+  },[pwaRuntime.online]);
 
   function report(error: unknown) { setToast(error instanceof Error ? error.message : "Veiksmo atlikti nepavyko."); }
   function requireOnline() {if(!pwaRuntime.online)throw new Error("Nėra interneto ryšio. Prisijungus keitimą galėsi pakartoti.");}
@@ -316,13 +333,26 @@ export default function Planner() {
     } catch (error) { report(error); }
   }
   function move(amount: number) { const next = new Date(anchor); mode === "month" ? next.setMonth(next.getMonth() + amount) : next.setDate(next.getDate() + amount * (mode === "day" ? 1 : 7)); setAnchor(next); }
-  function startFocus(task: Task) { setFocusTask(task); setSeconds(FOCUS_DURATION_SECONDS); setRunning(false); setFocusStartedAt(null);setFocusEndsAt(null);setView("focus"); }
-  function resetFocus(){setRunning(false);setSeconds(FOCUS_DURATION_SECONDS);setFocusStartedAt(null);setFocusEndsAt(null);}
+  async function cancelFocusNotification(operationId:string){
+    try{localStorage.setItem(FOCUS_CANCELLATIONS_STORAGE_KEY,enqueueFocusCancellation(localStorage.getItem(FOCUS_CANCELLATIONS_STORAGE_KEY),operationId));}catch{}
+    if(!pwaRuntime.online)return;
+    try{const response=await fetch("/api/notifications/focus",{method:"DELETE",headers:{"content-type":"application/json"},body:JSON.stringify({operationId})});if(response.ok)localStorage.setItem(FOCUS_CANCELLATIONS_STORAGE_KEY,removeFocusCancellation(localStorage.getItem(FOCUS_CANCELLATIONS_STORAGE_KEY),operationId));}catch{}
+  }
+  async function registerFocusNotification(operationId:string,endsAt:number){
+    if(!pwaRuntime.online){setToast("Laikmatis veikia, tačiau be interneto serverio priminimas neužregistruotas.");return;}
+    const response=await fetch("/api/notifications/focus",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({operationId,endsAt:new Date(endsAt).toISOString()})});
+    const body=await response.json().catch(()=>({})) as {scheduled?:boolean;error?:string};
+    if(!response.ok)throw new Error(body.error||"Fokusavimo priminimo užregistruoti nepavyko.");
+  }
+  function startFocus(task: Task) { if(focusNotificationOperationId)void cancelFocusNotification(focusNotificationOperationId);setFocusNotificationOperationId(null);setFocusTask(task); setSeconds(FOCUS_DURATION_SECONDS); setRunning(false); setFocusStartedAt(null);setFocusEndsAt(null);setView("focus"); }
+  function resetFocus(){if(focusNotificationOperationId)void cancelFocusNotification(focusNotificationOperationId);setFocusNotificationOperationId(null);setRunning(false);setSeconds(FOCUS_DURATION_SECONDS);setFocusStartedAt(null);setFocusEndsAt(null);}
   function toggleFocus(task:Task|undefined){
     if(!task)return;
-    if(running){setSeconds(focusEndsAt?remainingFocusSeconds(focusEndsAt):seconds);setRunning(false);setFocusEndsAt(null);return;}
+    if(running){if(focusNotificationOperationId)void cancelFocusNotification(focusNotificationOperationId);setFocusNotificationOperationId(null);setSeconds(focusEndsAt?remainingFocusSeconds(focusEndsAt):seconds);setRunning(false);setFocusEndsAt(null);return;}
     const now=Date.now(),remaining=seconds>0?seconds:FOCUS_DURATION_SECONDS;
-    setFocusTask(task);setSeconds(remaining);setFocusStartedAt(seconds>0?focusStartedAt??now:now);setFocusEndsAt(now+remaining*1000);setRunning(true);
+    const endsAt=now+remaining*1000,operationId=crypto.randomUUID();
+    setFocusTask(task);setSeconds(remaining);setFocusStartedAt(seconds>0?focusStartedAt??now:now);setFocusEndsAt(endsAt);setFocusNotificationOperationId(operationId);setRunning(true);
+    void registerFocusNotification(operationId,endsAt).catch(report);
   }
   async function disconnect(provider: "microsoft" | "google", connection:IntegrationConnection) {
     requireOnline();

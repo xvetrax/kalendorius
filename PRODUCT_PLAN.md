@@ -194,7 +194,7 @@ Detalus įdiegimo, saugaus podėlio, ryšio būsenos, Web Push, platformų patik
 
 - [ ] **PWA-1:** manifestas, ikonų rinkinys, diegimo sąsaja ir reali macOS / Android patikra.
 - [ ] **PWA-2:** minimalus service worker, tik viešų statinių resursų podėlis, offline bei atnaujinimo būsenos.
-- [ ] **PWA-3:** naudotojo valdomos Push prenumeratos, atskiras patvarus pranešimų worker ir privatūs pranešimų nustatymai.
+- [ ] **PWA-3:** naudotojo valdomos Push prenumeratos ir fokusavimo pabaigos patvarus worker įgyvendinti; liko užduočių pradžios bei ryto / vakaro ritualų priminimai ir gyva įrenginių patikra.
 - [ ] **PWA-4:** tik pagal patvirtintą poreikį — ribotas vieno naudotojo dienos plano skaitymas be interneto; offline redagavimas lieka atskiras konfliktų valdymo projektas.
 
 ## Darbo eiga ir ribos

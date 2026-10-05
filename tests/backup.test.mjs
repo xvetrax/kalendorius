@@ -44,6 +44,9 @@ describe("backup", { concurrency: false }, () => {
   beforeEach(() => {
     // Clear all user-data and auth tables in safe order (children first)
     db.exec(`
+      DELETE FROM notification_deliveries;
+      DELETE FROM notification_jobs;
+      DELETE FROM notification_preferences;
       DELETE FROM calendar_event_creates;
       DELETE FROM remote_task_lists;
       DELETE FROM remote_tasks;
@@ -108,6 +111,12 @@ describe("backup", { concurrency: false }, () => {
     db.prepare(
       "INSERT INTO push_subscriptions (user_id, endpoint_hash, encrypted_subscription, device_name) VALUES (?, ?, ?, ?)"
     ).run(testUserId, "a".repeat(64), "iv.tag.encrypted-push-capability", "Test Chrome");
+    db.prepare(
+      "INSERT INTO notification_preferences (user_id, scenario, enabled) VALUES (?, 'focus_end', 1)"
+    ).run(testUserId);
+    db.prepare(
+      "INSERT INTO notification_jobs (user_id, scenario, source_key, run_at, expires_at) VALUES (?, 'focus_end', 'backup-job', ?, ?)"
+    ).run(testUserId, "2026-10-01T09:00:00.000Z", "2026-10-01T09:15:00.000Z");
 
     return taskId;
   }
@@ -148,6 +157,8 @@ describe("backup", { concurrency: false }, () => {
     assert.equal(db.prepare("SELECT color_key FROM oauth_connections").get()?.color_key, "google:google-sub-123");
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM push_subscriptions").get().count, 0, "restore must invalidate push capabilities");
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM push_rate_limits").get().count, 0, "restore must clear stale push throttles");
+    assert.equal(db.prepare("SELECT enabled FROM notification_preferences WHERE user_id = ? AND scenario = 'focus_end'").get(testUserId).enabled, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_jobs").get().count, 0, "restore must clear operational notification jobs");
     assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
 
     // DB must remain writable after restore
@@ -168,7 +179,9 @@ describe("backup", { concurrency: false }, () => {
       assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM calendar_preferences").get().count, 1);
       assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM push_subscriptions").get().count, 1);
       assert.equal(backed.prepare("SELECT encrypted_subscription FROM push_subscriptions").get().encrypted_subscription, "iv.tag.encrypted-push-capability");
-      assert.equal(backed.prepare("PRAGMA user_version").get().user_version, 4);
+      assert.equal(backed.prepare("SELECT enabled FROM notification_preferences").get().enabled, 1);
+      assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'notification_jobs'").get().count, 0);
+      assert.equal(backed.prepare("PRAGMA user_version").get().user_version, 5);
     } finally {
       backed.close();
     }
@@ -276,6 +289,19 @@ describe("backup", { concurrency: false }, () => {
 
     // Live data must be unchanged
     assert.equal(JSON.stringify(db.prepare("SELECT title FROM tasks").all()), JSON.stringify([{ title: "Keep me" }]));
+  });
+
+  it("schema v5 backup must include notification preferences", () => {
+    seedUserTables();
+    const incompletePath = path.join(temp, "missing-notification-preferences.db");
+    writeFileSync(incompletePath, createBackup(), { mode: 0o600 });
+    const incomplete = new DatabaseSync(incompletePath);
+    incomplete.exec("DROP TABLE notification_preferences");
+    incomplete.close();
+    assert.throws(
+      () => restoreBackup(readFileSync(incompletePath)),
+      (error) => error instanceof BackupError && /pranešimų nuostatų lentelės/i.test(error.message),
+    );
   });
 
   it("limits a streamed upload before buffering the complete body", async () => {

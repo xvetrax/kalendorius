@@ -25,10 +25,12 @@ function isTrustedPushServiceHost(hostname: string) {
 
 export class PushNotificationError extends Error {
   readonly status: number;
+  readonly code: string | null;
 
-  constructor(message: string, status = 400) {
+  constructor(message: string, status = 400, code: string | null = null) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -51,6 +53,10 @@ type PushSubscriptionRow = {
   last_push_accepted_at: string | null;
   failure_count: number;
 };
+
+export type StoredPushSubscription = Pick<PushSubscriptionRow,
+  "id" | "user_id" | "endpoint_hash" | "encrypted_subscription" | "device_name"
+>;
 
 export function pushConfiguration() {
   const publicKey = process.env.VAPID_PUBLIC_KEY?.trim() || "";
@@ -114,6 +120,38 @@ export function parsePushSubscription(value: unknown): PushSubscriptionInput {
 
 export function endpointFingerprint(endpoint: string) {
   return createHash("sha256").update(endpoint).digest("hex").slice(0, 16);
+}
+
+export function readStoredPushSubscription(subscriptionId: number, userId: number) {
+  return db.prepare(`
+    SELECT id, user_id, endpoint_hash, encrypted_subscription, device_name
+    FROM push_subscriptions
+    WHERE id = ? AND user_id = ?
+  `).get(subscriptionId, userId) as StoredPushSubscription | undefined;
+}
+
+export async function sendStoredPush(row: StoredPushSubscription, payload: { v: 1; type: "focus_end" }) {
+  const config = pushConfiguration();
+  if (!config.configured) {
+    throw new PushNotificationError("Pranešimai serveryje dar nesukonfigūruoti.", 409, "push_not_configured");
+  }
+  let subscription: PushSubscriptionInput;
+  try {
+    subscription = parsePushSubscription(JSON.parse(decrypt(row.encrypted_subscription)));
+  } catch {
+    throw new PushNotificationError("Pranešimų prenumeratos duomenys sugadinti.", 409, "subscription_corrupt");
+  }
+  return webPush.sendNotification(
+    { endpoint: subscription.endpoint, expirationTime: subscription.expirationTime, keys: subscription.keys },
+    JSON.stringify(payload),
+    {
+      TTL: 15 * 60,
+      urgency: "normal",
+      timeout: PUSH_REQUEST_TIMEOUT_MS,
+      topic: payload.type,
+      vapidDetails: { subject: config.subject, publicKey: config.publicKey, privateKey: config.privateKey },
+    },
+  );
 }
 
 function endpointHash(endpoint: string) {
