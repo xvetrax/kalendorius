@@ -31,6 +31,7 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 - naudoti Kanban užduočių lentą bei 25 minučių fokusavimo laikmatį;
 - matyti dienos suplanuoto darbo krūvį ir ieškoti užduočių;
 - veikti vietoje arba viename neprivilegijuotame „Docker“ konteineryje su išliekančiu duomenų tomu;
+- įdiegti kaip PWA ir kiekviename palaikomame įrenginyje atskirai įjungti, išbandyti arba pašalinti Web Push prenumeratą;
 - užšifruoti „Google“ ir „Microsoft“ atnaujinimo žetonus prieš išsaugant SQLite bazėje;
 - aiškiai rodyti abiejų integracijų būseną ir saugiai pašalinti vietoje saugomus OAuth žetonus mygtuku „Atjungti“;
 - kurti atskiras paskyras pirmo Google arba Microsoft OIDC prisijungimo metu, saugoti atšaukiamas DB sesijas ir izoliuoti kiekvieno naudotojo duomenis;
@@ -42,6 +43,7 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 1. „Microsoft Entra admin center“ užregistruok aplikaciją ir pridėk abu Web redirect URI: `http://localhost:3000/api/auth/microsoft-oidc/callback` prisijungimui ir `http://localhost:3000/api/microsoft/callback` kalendoriaus bei užduočių ryšiui.
 2. Pridėk delegated leidimus: `User.Read`, `Calendars.ReadWrite`, `Tasks.ReadWrite` ir `offline_access`; sukurk Client Secret.
 3. Nukopijuok `.env.example` į `.env`, įrašyk Microsoft Client ID, Client Secret, `INITIAL_ADMIN_EMAIL` ir 64 simbolių šifravimo raktą (`openssl rand -hex 32`).
+   Pranešimams vieną kartą paleisk `npm run vapid:generate` ir įrašyk `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` bei `VAPID_SUBJECT=mailto:tavo-adresas@example.com`. Tų pačių VAPID raktų nekeisk tarp konteinerio atnaujinimų.
 4. Jei nori Google, „Google Cloud Console“ tame pačiame projekte įjunk Calendar API ir Tasks API, sukurk Web OAuth klientą ir registruok abu URI: `http://localhost:3000/api/auth/google-oidc/callback` prisijungimui ir `http://localhost:3000/api/google/callback` integracijai.
 5. Vietiniam darbui paleisk `npm ci`, tada `npm run dev`. Produkcinei kopijai naudok `npm run build && npm start`.
 6. „Docker“ paleidimui naudok `docker compose up --build`.
@@ -81,7 +83,7 @@ npm start
 
 ## Atsarginės kopijos ir atkūrimas
 
-Atverk **Nustatymai → Duomenys**. Administratoriaus **Pilna kopija** išsaugo visą kelių naudotojų DB: paskyras, savininkams priskirtas užduotis ir planus, tiekėjų talpyklą, sesijų būseną, kalendoriaus kūrimo operacijų registrą bei užšifruotus OAuth atnaujinimo žetonus. Failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju naudotojai turi iš naujo prijungti paskyras. Paprasto naudotojo **Eksportuoti (be žetonų)** įtraukia tik jo darbo duomenis, be Google / Microsoft žetonų ir kitų naudotojų eilučių.
+Atverk **Nustatymai → Duomenys**. Administratoriaus **Pilna kopija** išsaugo visą kelių naudotojų DB: paskyras, savininkams priskirtas užduotis ir planus, tiekėjų talpyklą, sesijų būseną, kalendoriaus kūrimo operacijų registrą, užšifruotus OAuth atnaujinimo žetonus bei užšifruotas push prenumeratas. Failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju naudotojai turi iš naujo prijungti paskyras. Atkūrimas tyčia pašalina push prenumeratas, kad nukopijuotas diegimas nepradėtų siųsti į seno serverio įrenginius. Paprasto naudotojo **Eksportuoti (be žetonų)** įtraukia tik jo darbo duomenis, be OAuth ar push paslapčių ir kitų naudotojų eilučių.
 
 **Atkurti iš kopijos** priima iki 100 MB SQLite failą. Prieš pakeisdama duomenis programa patikrina failo vientisumą, lenteles ir stulpelius, tada vienoje transakcijoje pakeičia visų programos lentelių duomenis. Klaidinga ar naujesnės nepalaikomos schemos kopija esamų duomenų nekeičia. Po sėkmingo atkūrimo puslapis persikrauna. Prieš programos atnaujinimą parsisiųsk pilną kopiją.
 

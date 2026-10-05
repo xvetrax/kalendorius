@@ -20,6 +20,9 @@ services:
       PUBLIC_SIGNUP: ${PUBLIC_SIGNUP:-true}
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:?Nustatyk administratoriaus el. paštą}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Nustatyk 64 hex simbolių raktą}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Nustatyk Google OAuth Client ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?Nustatyk Google OAuth Client Secret}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:?Nustatyk Google integracijos callback URL}

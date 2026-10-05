@@ -29,7 +29,14 @@ OAuth tiekėjų Client ID ir Client Secret bei naują šifravimo raktą:
 
 ```bash
 openssl rand -hex 32
+npm run vapid:generate
 ```
+
+Antra komanda sugeneruoja Web Push viešą ir privatų VAPID raktus. Į `.env`
+įrašyk `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` ir kontaktą, pavyzdžiui,
+`VAPID_SUBJECT=mailto:admin@example.com`. Raktai turi išlikti tie patys po image
+perkūrimo; jų pakeitimas reiškia, kad visuose įrenginiuose pranešimus reikės
+įjungti iš naujo.
 
 `.env` faile esantys žetonai ir paslaptys neturi būti keliami į Git.
 

@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {usePwaRuntime} from "@/app/pwa-runtime";
+import {logoutPushContext} from "@/app/push-client";
 
 interface Identity {
   provider: "google" | "microsoft";
@@ -60,10 +61,7 @@ export function UserAccountPanel() {
     if (!online) { setMsg("Nėra interneto ryšio."); return; }
     setBusy(true); setMsg("");
     try {
-      const res = await fetch(`/api/auth/logout${all ? "?all=1" : ""}`, {
-        method: "POST",
-        headers: { "Origin": window.location.origin },
-      });
+      const res = await logoutPushContext(all);
       if (res.ok) {
         window.location.href = "/login";
       } else {

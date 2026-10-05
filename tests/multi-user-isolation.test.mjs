@@ -519,6 +519,9 @@ test("Disabled user: session returns null after user is disabled", () => {
   const memberId = insertUser("Member To Disable", "membertodisable@test.example", "member");
 
   const { rawToken } = createSession(memberId);
+  db.prepare(
+    "INSERT INTO push_subscriptions (user_id, endpoint_hash, encrypted_subscription, device_name) VALUES (?, ?, ?, ?)",
+  ).run(memberId, "d".repeat(64), "iv.tag.ciphertext", "Disabled device");
   assert.ok(getUserFromSession(rawToken), "Session valid before disable");
 
   disableUser(adminId, memberId);
@@ -526,6 +529,11 @@ test("Disabled user: session returns null after user is disabled", () => {
   // After disabling, getUserFromSession should find user is not active and return null
   const ctx = getUserFromSession(rawToken);
   assert.equal(ctx, null, "Disabled user's session must return null");
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS count FROM push_subscriptions WHERE user_id = ?").get(memberId).count,
+    0,
+    "Disabled account must not retain push subscriptions",
+  );
 });
 
 // ---------------------------------------------------------------------------

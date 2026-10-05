@@ -25,6 +25,8 @@ services:
       # PUBLIC_SIGNUP — true leidžia naujam žmogui pačiam susikurti paskyrą per OIDC
       # INITIAL_ADMIN_EMAIL — pirmojo administratoriaus Google / Microsoft adresas
       # TOKEN_ENCRYPTION_KEY — 64 hex simboliai (openssl rand -hex 32)
+      # VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY — vieną kartą sugeneruoti Web Push raktai
+      # VAPID_SUBJECT — administratoriaus mailto: adresas arba HTTPS URL
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 30s

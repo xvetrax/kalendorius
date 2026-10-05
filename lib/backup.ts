@@ -26,6 +26,8 @@ const ALL_TABLES = [
   "calendar_preferences",
   "calendar_preference_sets",
   "user_settings",
+  "push_subscriptions",
+  "push_rate_limits",
   "security_events",
   "tasks",
   "task_plans",
@@ -85,6 +87,11 @@ const REQUIRED_COLUMNS: Record<AllTable, readonly string[]> = {
   calendar_preferences: ["user_id", "connection_id", "calendar_id", "enabled", "updated_at"],
   calendar_preference_sets: ["user_id", "connection_id", "explicit", "updated_at"],
   user_settings: ["user_id", "key", "value"],
+  push_subscriptions: [
+    "id", "user_id", "endpoint_hash", "encrypted_subscription", "device_name",
+    "created_at", "updated_at", "last_test_attempt_at", "last_push_accepted_at", "failure_count",
+  ],
+  push_rate_limits: ["user_id", "last_test_attempt_at"],
   security_events: ["id", "event_type", "created_at"],
   tasks: ["id", "user_id", "title", "notes", "due_at", "duration_minutes", "completed", "created_at"],
   task_plans: [
@@ -109,6 +116,8 @@ const PRIMARY_KEYS: Record<AllTable, readonly string[]> = {
   calendar_preferences: ["user_id", "connection_id", "calendar_id"],
   calendar_preference_sets: ["user_id", "connection_id"],
   user_settings: ["user_id", "key"],
+  push_subscriptions: ["id"],
+  push_rate_limits: ["user_id"],
   security_events: ["id"],
   tasks: ["id"],
   task_plans: ["id"],
@@ -362,6 +371,9 @@ function validateBackup(database: DatabaseSync): string[] {
   ) {
     throw new BackupError("Atsarginėje kopijoje trūksta kelių paskyrų kalendorių pasirinkimų.");
   }
+  if (incomingVersion >= 4 && (!tableNames.has("push_subscriptions") || !tableNames.has("push_rate_limits"))) {
+    throw new BackupError("Atsarginėje kopijoje trūksta pranešimų lentelių.");
+  }
 
   // Column compatibility checks
   for (const table of tables) {
@@ -457,7 +469,7 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
 
         // A restored browser session would let a copied bearer cookie survive
         // the restore boundary. Force every user to authenticate again.
-        db.exec("DELETE FROM auth_operations; DELETE FROM sessions;");
+        db.exec("DELETE FROM auth_operations; DELETE FROM sessions; DELETE FROM push_subscriptions; DELETE FROM push_rate_limits;");
 
         const foreignKeyProblems = db.prepare("PRAGMA foreign_key_check").all();
         if (foreignKeyProblems.length > 0) {

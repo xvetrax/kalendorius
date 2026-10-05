@@ -157,6 +157,9 @@ export function disableUser(adminId: number, targetUserId: number): void {
     db.prepare("UPDATE users SET status = 'disabled' WHERE id = ?").run(targetUserId);
     db.prepare("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
       .run(nowIso(), targetUserId);
+    // A disabled account must no longer receive notifications even though the
+    // user row is retained for the audit trail.
+    db.prepare("DELETE FROM push_subscriptions WHERE user_id = ?").run(targetUserId);
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");

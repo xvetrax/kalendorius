@@ -7,6 +7,10 @@ async function loadWorker({ network = async () => new Response("network") } = {}
   const listeners = new Map();
   const deleted = [];
   const cachedRequests = [];
+  const notifications = [];
+  const opened = [];
+  let focused = 0;
+  let navigated = "";
   const offlineResponse = new Response("offline", { headers: { "content-type": "text/html" } });
   const assetResponse = new Response("asset");
   const context = {
@@ -31,13 +35,30 @@ async function loadWorker({ network = async () => new Response("network") } = {}
     },
     self: {
       location: { origin: "https://planner.example" },
-      clients: { async claim() {} },
+      registration: { async showNotification(title, options) { notifications.push({ title, options }); } },
+      clients: {
+        async claim() {},
+        async matchAll() { return context.__windows || []; },
+        async openWindow(url) { opened.push(url); return { url }; },
+      },
       async skipWaiting() {},
       addEventListener(type, listener) { listeners.set(type, listener); },
     },
+    __windows: [],
   };
   vm.runInNewContext(await readFile(new URL("../public/sw.js", import.meta.url), "utf8"), context, { filename: "public/sw.js" });
-  return { listeners, deleted, cachedRequests };
+  return {
+    listeners, deleted, cachedRequests, notifications, opened,
+    setWindow(url) {
+      context.__windows = [{
+        url,
+        async navigate(target) { navigated = target; this.url = target; return this; },
+        async focus() { focused += 1; return this; },
+      }];
+    },
+    get focused() { return focused; },
+    get navigated() { return navigated; },
+  };
 }
 
 function lifetimeEvent() {
@@ -102,4 +123,31 @@ test("aktyvuojant pašalinamas tik senas programėlės podėlis", async () => {
   worker.listeners.get("activate")(activate.event);
   await activate.done();
   assert.deepEqual(worker.deleted, ["dienos-planas-public-v0"]);
+});
+
+test("push turinys yra fiksuotas ir neparodo serverio atsiųsto privataus teksto", async () => {
+  const worker = await loadWorker();
+  const push = lifetimeEvent();
+  push.event.data = { json: () => ({ type: "test", title: "Slapta užduotis", body: "Privatus tekstas", url: "https://evil.example" }) };
+  worker.listeners.get("push")(push.event);
+  await push.done();
+  assert.equal(worker.notifications.length, 1);
+  assert.equal(worker.notifications[0].title, "Dienos planas");
+  assert.equal(worker.notifications[0].options.body, "Pranešimai šiame įrenginyje veikia.");
+  assert.equal(worker.notifications[0].options.data.url, "/");
+  assert.ok(!JSON.stringify(worker.notifications[0]).includes("Slapta užduotis"));
+});
+
+test("paspaustas pranešimas atidaro tik programėlės šaknį", async () => {
+  const worker = await loadWorker();
+  worker.setWindow("https://planner.example/calendar");
+  const click = lifetimeEvent();
+  let closed = false;
+  click.event.notification = { data: { url: "https://evil.example/steal" }, close() { closed = true; } };
+  worker.listeners.get("notificationclick")(click.event);
+  await click.done();
+  assert.equal(closed, true);
+  assert.equal(worker.navigated, "https://planner.example/");
+  assert.equal(worker.focused, 1);
+  assert.deepEqual(worker.opened, []);
 });

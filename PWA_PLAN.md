@@ -1,6 +1,6 @@
 # „Dienos planas“ PWA įgyvendinimo planas
 
-Atnaujinta: 2026-10-04. Būsena: PWA-1a bei PWA-2 įgyvendinimas ir automatinė patikra užbaigti; PWA-1b liko realių įrenginių, gyvos OAuth sesijos ir gyvo kelių kortelių atnaujinimo priėmimo patikra. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
+Atnaujinta: 2026-10-05. Būsena: PWA-1a, PWA-2 ir PWA-3a įgyvendinimas bei automatinė patikra užbaigti; PWA-1b liko realių įrenginių, gyvos OAuth sesijos ir gyvo kelių kortelių atnaujinimo priėmimo patikra. PWA-3b liko suplanuoti priminimai ir atskiras patvarus worker. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
 
 ## Įgyvendinimo eiga
 
@@ -9,6 +9,8 @@ Atnaujinta: 2026-10-04. Būsena: PWA-1a bei PWA-2 įgyvendinimas ir automatinė 
 - [x] **PWA-2:** saugus service worker, ryšio būsena ir programos atnaujinimo eiga. Įgyvendinimas bei automatinė priėmimo patikra užbaigti; gyvas įdiegtos programos atnaujinimas tikrinamas kartu su PWA-1b.
 - [x] **PWA-2a:** saugus service worker, tik viešų failų podėlis, bendras offline puslapis, griežtos antraštės ir seno podėlio valymas. Praėjo 319 testų, build, HTTP ir Docker smoke, realus Playwright offline scenarijus bei nepriklausoma peržiūra.
 - [x] **PWA-2b:** ryšio būsena, visų aptiktų rašymo veiksmų ir OAuth nuorodų blokavimas, neįrašytų formų apsauga bei valdomas programėlės atnaujinimas. Praėjo 319 testų, 57 E2E scenarijai, build, HTTP ir Docker smoke bei nepriklausoma `ship` peržiūra.
+- [x] **PWA-3a:** VAPID konfigūracija, užšifruotos naudotojo įrenginių prenumeratos, aiškus leidimo prašymas, bandomasis privatumo neatskleidžiantis pranešimas, įrenginių sąrašas ir prenumeratos panaikinimas. Praėjo 328 testai, 61 E2E scenarijus, build, HTTP ir Docker smoke bei produkcinių priklausomybių auditas; liko gyva realių įrenginių priėmimo patikra.
+- [ ] **PWA-3b:** scenarijų nuostatos, patvarus `notification_jobs` registras ir atskiras Docker worker fokusavimo, užduočių bei dienos ritualų priminimams.
 
 ### PWA-1b perdavimo būsena
 
@@ -25,6 +27,15 @@ Atnaujinta: 2026-10-04. Būsena: PWA-1a bei PWA-2 įgyvendinimas ir automatinė 
 - Nauja versija aptinkama pagal service worker ir pasikeitusius Next statinių failų adresus. Perkrovimas vyksta tik naudotojui paspaudus atnaujinimo mygtuką, o atidaryta forma prieš tai reikalauja patvirtinimo.
 - Praėjo `npm run typecheck`, 319/319 vienetinių ir integracinių testų, produkcinis `npm run build`, 57/57 Playwright scenarijų, HTTP smoke ir Docker smoke.
 - Du ankstesni `fix-first` peržiūrų radinių rinkiniai pataisyti ir padengti regresiniais testais; galutinė nepriklausoma peržiūra grąžino `ship` be naujų radinių.
+
+### PWA-3a patikros būsena
+
+- Prenumerata priklauso konkrečiam programėlės naudotojui, o endpoint ir naršyklės raktai DB saugomi AES-GCM šifruotu pavidalu; API grąžina tik trumpą endpoint kontrolinį atspaudą.
+- Naršyklės leidimo prašoma tik paspaudus aiškų įjungimo mygtuką. Nustatymuose galima matyti, išbandyti ir pašalinti savo įrenginius; svetimi prenumeratos ID grąžina 404.
+- Bandomojo pranešimo payload turi tik fiksuotą tipą, o service worker rodo fiksuotą privatų turinį ir atidaro tik tos pačios kilmės programos šaknį.
+- Vienam naudotojui leidžiama iki 10 įrenginių ir taikomas bendras 30 sekundžių bandomojo siuntimo ribojimas; siuntimas turi 10 sekundžių tinklo timeout. 404 / 410 atsakas pašalina nebegaliojančią prenumeratą, laikina klaida išlaiko ją pakartojimui.
+- Atsijungus pašalinama dabartinio įrenginio prenumerata, atsijungus visuose įrenginiuose arba išjungus paskyrą pašalinamos visos naudotojo prenumeratos. Atkūrus pilną DB kopiją prenumeratos taip pat tyčia panaikinamos.
+- Gyvai dar reikia patikrinti leidimą, bandomąjį pristatymą ir pašalinimą Android Chrome, macOS Chrome / Safari bei iPhone įdiegtoje PWA. Tam produkcijoje turi būti nustatyti stabilūs VAPID raktai ir galutinis HTTPS domenas.
 
 ## Tikslas
 
@@ -184,7 +195,7 @@ Kiekviena užbaigta eilutė yra atskiras patikrintas commit ir push į aktyvią 
 2. **Diegimo sąsaja ir standalone išdėstymas.** Tik po realaus macOS / Android įdiegimo patikros.
 3. **Service worker ir offline karkasas.** Tik vieši statiniai resursai, jokio privataus API cache.
 4. **Ryšio bei programos atnaujinimo sąsaja.** Patikrinti nebaigto redagavimo apsaugą.
-5. **Push prenumeratos ir nustatymai.** Pirmiausia bandomasis pranešimas.
+5. **Push prenumeratos ir nustatymai.** Pirmiausia bandomasis pranešimas. Automatinė PWA-3a dalis užbaigta; liko gyva kelių platformų patikra.
 6. **Patvarus notification worker.** Tada fokusavimo ir dienos ritualų pranešimai.
 7. **Visų platformų priėmimo patikra ir dokumentacija.** Tik po jos PWA laikoma viešai paruošta.
 

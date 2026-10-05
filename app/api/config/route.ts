@@ -3,6 +3,7 @@ import { isMicrosoftConfigured } from "@/lib/microsoft";
 import { isTokenEncryptionConfigured } from "@/lib/secrets";
 import { isPublicSignupEnabled } from "@/lib/user-service";
 import { requireUserContext } from "@/lib/db-multi";
+import { pushConfiguration } from "@/lib/push-notifications";
 import pkg from "@/package.json";
 
 export const runtime = "nodejs";
@@ -18,6 +19,7 @@ export async function GET(request: Request) {
     INITIAL_ADMIN_EMAIL: env.INITIAL_ADMIN_EMAIL ? "set" : "first account becomes admin",
     google: isGoogleConfigured() ? "ok" : "not configured",
     microsoft: isMicrosoftConfigured() ? "ok" : "not configured",
+    webPush: pushConfiguration().configured ? "ok" : "not configured",
     DATABASE_PATH: env.DATABASE_PATH || "(default: ./data/planner.db)",
   };
   const issues = Object.entries(checks).filter(([, v]) => v === "missing" || v === "not configured");

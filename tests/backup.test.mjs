@@ -52,6 +52,8 @@ describe("backup", { concurrency: false }, () => {
       DELETE FROM calendar_preferences;
       DELETE FROM calendar_preference_sets;
       DELETE FROM user_settings;
+      DELETE FROM push_subscriptions;
+      DELETE FROM push_rate_limits;
       DELETE FROM security_events;
       DELETE FROM oauth_connections;
       DELETE FROM auth_operations;
@@ -103,6 +105,9 @@ describe("backup", { concurrency: false }, () => {
     db.prepare(
       "INSERT INTO calendar_preferences (user_id, connection_id, calendar_id, enabled) VALUES (?, ?, 'primary', 1)"
     ).run(testUserId, connectionId);
+    db.prepare(
+      "INSERT INTO push_subscriptions (user_id, endpoint_hash, encrypted_subscription, device_name) VALUES (?, ?, ?, ?)"
+    ).run(testUserId, "a".repeat(64), "iv.tag.encrypted-push-capability", "Test Chrome");
 
     return taskId;
   }
@@ -141,6 +146,8 @@ describe("backup", { concurrency: false }, () => {
     assert.equal(db.prepare("SELECT explicit FROM calendar_preference_sets").get()?.explicit, 1);
     assert.equal(db.prepare("SELECT calendar_id FROM calendar_preferences").get()?.calendar_id, "primary");
     assert.equal(db.prepare("SELECT color_key FROM oauth_connections").get()?.color_key, "google:google-sub-123");
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM push_subscriptions").get().count, 0, "restore must invalidate push capabilities");
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM push_rate_limits").get().count, 0, "restore must clear stale push throttles");
     assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
 
     // DB must remain writable after restore
@@ -159,7 +166,9 @@ describe("backup", { concurrency: false }, () => {
       // And the encrypted token is present in full backup (admin access)
       assert.ok(backed.prepare("SELECT encrypted_refresh_token FROM oauth_connections").get()?.encrypted_refresh_token);
       assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM calendar_preferences").get().count, 1);
-      assert.equal(backed.prepare("PRAGMA user_version").get().user_version, 3);
+      assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM push_subscriptions").get().count, 1);
+      assert.equal(backed.prepare("SELECT encrypted_subscription FROM push_subscriptions").get().encrypted_subscription, "iv.tag.encrypted-push-capability");
+      assert.equal(backed.prepare("PRAGMA user_version").get().user_version, 4);
     } finally {
       backed.close();
     }
@@ -185,6 +194,8 @@ describe("backup", { concurrency: false }, () => {
       assert.ok(!tables.includes("auth_operations"), "auth_operations must not be in user export");
       assert.ok(!tables.includes("security_events"), "security_events must not be in user export");
       assert.ok(!tables.includes("users"), "users must not be in user export");
+      assert.ok(!tables.includes("push_subscriptions"), "push_subscriptions must not be in user export");
+      assert.ok(!tables.includes("push_rate_limits"), "push_rate_limits must not be in user export");
     } finally {
       exported.close();
     }

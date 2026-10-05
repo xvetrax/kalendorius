@@ -30,6 +30,10 @@ export async function POST(request: Request) {
 
   const url = new URL(request.url);
   const revokeAll = url.searchParams.get("all") === "1";
+  const body = await request.json().catch(() => ({})) as { pushEndpointHash?: unknown };
+  const pushEndpointHash = typeof body.pushEndpointHash === "string" && /^[a-f\d]{64}$/i.test(body.pushEndpointHash)
+    ? body.pushEndpointHash.toLowerCase()
+    : "";
 
   // Resolve current session from cookie
   const cookieHeader = request.headers.get("cookie") ?? "";
@@ -48,6 +52,7 @@ export async function POST(request: Request) {
       if (revokeAll) {
         // Revoke all sessions for this user
         revokeAllUserSessions(session.user_id);
+        db.prepare("DELETE FROM push_subscriptions WHERE user_id = ?").run(session.user_id);
 
         // Log security event
         try {
@@ -61,6 +66,10 @@ export async function POST(request: Request) {
       } else {
         // Revoke only the current session
         revokeSession(session.id);
+        if (pushEndpointHash) {
+          db.prepare("DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint_hash = ?")
+            .run(session.user_id, pushEndpointHash);
+        }
 
         // Log security event
         try {

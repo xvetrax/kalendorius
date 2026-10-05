@@ -138,6 +138,28 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_user_settings_user ON user_settings(user_id);
 
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint_hash   TEXT    NOT NULL UNIQUE,
+    encrypted_subscription TEXT NOT NULL,
+    device_name     TEXT    NOT NULL,
+    created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_test_attempt_at TEXT,
+    last_push_accepted_at TEXT,
+    failure_count   INTEGER NOT NULL DEFAULT 0
+      CHECK(failure_count >= 0)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+    ON push_subscriptions(user_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS push_rate_limits (
+    user_id              INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    last_test_attempt_at TEXT    NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS security_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER REFERENCES users(id),
@@ -254,7 +276,8 @@ db.exec(`
 // v1: oauth_connections supports more than one account per provider.
 // v2: normalized calendar preferences and connection-bound Outlook mirrors.
 // v3: OAuth data-consent operations persist add/re-consent intent.
-export const DATABASE_SCHEMA_VERSION = 3;
+// v4: encrypted, user-scoped Web Push subscriptions and persistent send throttles.
+export const DATABASE_SCHEMA_VERSION = 4;
 
 type SqliteColumn = { name: string };
 type SqliteIndex = { name: string; unique: number };
@@ -496,6 +519,28 @@ function migrateMultiAccountSchema(): void {
         ON oauth_connections(provider, provider_account_id);
       CREATE INDEX IF NOT EXISTS idx_oauth_connections_user_provider_status
         ON oauth_connections(user_id, provider, status);
+
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        endpoint_hash   TEXT    NOT NULL UNIQUE,
+        encrypted_subscription TEXT NOT NULL,
+        device_name     TEXT    NOT NULL,
+        created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_test_attempt_at TEXT,
+        last_push_accepted_at TEXT,
+        failure_count   INTEGER NOT NULL DEFAULT 0
+          CHECK(failure_count >= 0)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+        ON push_subscriptions(user_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS push_rate_limits (
+        user_id              INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        last_test_attempt_at TEXT    NOT NULL
+      );
 
       CREATE TABLE IF NOT EXISTS calendar_preferences (
         user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
