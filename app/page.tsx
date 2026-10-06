@@ -105,7 +105,7 @@ export default function Planner() {
       if(res.status===401){window.location.href="/login";return;}
       if(res.ok){const data=await res.json().catch(()=>({}));setMe({id:data.id,role:data.role});}
       else setMe(null);
-    }).catch(()=>{window.location.href="/login";});
+    }).catch(()=>setMe(null));
   },[]);
 
   const panelOpen=view==="calendar" && (isMobile ? mobilePanelOpen : !collapsed);

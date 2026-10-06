@@ -24,7 +24,7 @@ async function loadWorker({ network = async () => new Response("network") } = {}
       async open() {
         return { async addAll(requests) { cachedRequests.push(...requests); } };
       },
-      async keys() { return ["dienos-planas-public-v0", "dienos-planas-public-v1", "kitas-cache"]; },
+      async keys() { return ["dienos-planas-public-v0", "dienos-planas-public-v1", "dienos-planas-public-v2", "kitas-cache"]; },
       async delete(name) { deleted.push(name); return true; },
       async match(request) {
         const path = typeof request === "string" ? request : new URL(request.url).pathname;
@@ -122,7 +122,15 @@ test("aktyvuojant pašalinamas tik senas programėlės podėlis", async () => {
   const activate = lifetimeEvent();
   worker.listeners.get("activate")(activate.event);
   await activate.done();
-  assert.deepEqual(worker.deleted, ["dienos-planas-public-v0", "dienos-planas-public-v1"]);
+  assert.deepEqual(worker.deleted, ["dienos-planas-public-v0", "dienos-planas-public-v1", "dienos-planas-public-v2"]);
+});
+
+test("atnaujinimo žinutė išlaiko workerį gyvą iki skipWaiting pabaigos", async () => {
+  const worker = await loadWorker();
+  const message = lifetimeEvent();
+  worker.listeners.get("message")(Object.assign(message.event, { data: { type: "SKIP_WAITING" } }));
+  assert.ok(message.done() instanceof Promise);
+  await message.done();
 });
 
 test("push turinys yra fiksuotas ir neparodo serverio atsiųsto privataus teksto", async () => {

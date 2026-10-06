@@ -14,7 +14,7 @@
  */
 
 import { createHash, timingSafeEqual } from "node:crypto";
-import { db, createSession, SESSION_COOKIE } from "@/lib/db-multi";
+import { db, createSession, sessionCookieHeader, SESSION_COOKIE } from "@/lib/db-multi";
 import { addIdentity, findOrCreateOidcUser, isPublicSignupEnabled } from "@/lib/user-service";
 import { verifyMicrosoftIdToken } from "@/lib/oidc";
 import { appOrigin } from "@/lib/http";
@@ -22,7 +22,6 @@ import { appOrigin } from "@/lib/http";
 export const runtime = "nodejs";
 
 const MICROSOFT_TOKEN_ENDPOINT = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
-const SESSION_MAX_AGE = 7 * 24 * 60 * 60; // 7 days in seconds
 
 function sha256Hex(input: string): string {
   return createHash("sha256").update(input, "utf8").digest("hex");
@@ -314,22 +313,6 @@ export async function GET(request: Request): Promise<Response> {
       ["Set-Cookie", `oauth_state_ms=; Path=/api/auth/microsoft-oidc/callback; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`],
     ],
   });
-}
-
-// ---------------------------------------------------------------------------
-// Cookie helpers
-// ---------------------------------------------------------------------------
-
-function sessionCookieHeader(rawToken: string, origin: string): string {
-  const secure = origin.startsWith("https://");
-  return [
-    `${SESSION_COOKIE}=${rawToken}`,
-    "Path=/",
-    `Max-Age=${SESSION_MAX_AGE}`,
-    "HttpOnly",
-    "SameSite=Lax",
-    ...(secure ? ["Secure"] : []),
-  ].join("; ");
 }
 
 function clearStateCookie(respOrLocation: Response | string, origin: string): Response {

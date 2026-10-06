@@ -58,6 +58,8 @@ const {
   revokeSession,
   revokeAllUserSessions,
   SESSION_COOKIE,
+  SESSION_DURATION_SECONDS,
+  sessionCookieHeader,
 } = await import("../lib/db-multi.ts");
 
 const {
@@ -190,6 +192,25 @@ test("Session isolation: sessions are scoped to their owner", () => {
   assert.notEqual(ctxB.id, userA, "Session B must not resolve as user A");
   // Using A's token must not return B's context
   assert.notEqual(ctxA.id, userB, "Session A must not resolve as user B");
+});
+
+test("Session persistence: cookie is durable and active use renews the 30-day expiry", () => {
+  const userId = insertUser("Persistent Session", "persistent@test.example");
+  const { rawToken, sessionId } = createSession(userId);
+  const fixedNow = new Date("2026-10-06T12:00:00.000Z");
+  const header = sessionCookieHeader(rawToken, "https://planner.example", fixedNow);
+
+  assert.match(header, new RegExp(`^${SESSION_COOKIE}=${rawToken};`));
+  assert.match(header, new RegExp(`Max-Age=${SESSION_DURATION_SECONDS}`));
+  assert.match(header, /Expires=Thu, 05 Nov 2026 12:00:00 GMT/);
+  assert.match(header, /HttpOnly; SameSite=Lax; Secure$/);
+
+  db.prepare("UPDATE sessions SET expires_at = ? WHERE id = ?")
+    .run(new Date(Date.now() + 60_000).toISOString(), sessionId);
+  assert.ok(getUserFromSession(rawToken));
+  const renewed = db.prepare("SELECT expires_at FROM sessions WHERE id = ?").get(sessionId);
+  const remainingDays = (Date.parse(renewed.expires_at) - Date.now()) / 86_400_000;
+  assert.ok(remainingDays > 29.9 && remainingDays <= 30.01, `unexpected renewal: ${remainingDays} days`);
 });
 
 // ---------------------------------------------------------------------------

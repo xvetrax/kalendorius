@@ -23,6 +23,7 @@ const PwaRuntimeContext = createContext<PwaRuntimeState>({
 export function PwaRuntimeProvider({ children }: { children: React.ReactNode }) {
   const registration = useRef<ServiceWorkerRegistration | null>(null);
   const reloadForUpdate = useRef(false);
+  const updateReloadTimer = useRef<number | null>(null);
   const initialAssetVersion = useRef("");
   const [supported, setSupported] = useState(false);
   const [online, setOnline] = useState(true);
@@ -61,7 +62,9 @@ export function PwaRuntimeProvider({ children }: { children: React.ReactNode }) 
       setUpdateAvailable(true);
     };
     const controllerChanged = () => {
-      if (reloadForUpdate.current) window.location.reload();
+      if (!reloadForUpdate.current) return;
+      if (updateReloadTimer.current !== null) window.clearTimeout(updateReloadTimer.current);
+      window.location.reload();
     };
     navigator.serviceWorker.addEventListener("controllerchange", controllerChanged);
 
@@ -89,6 +92,7 @@ export function PwaRuntimeProvider({ children }: { children: React.ReactNode }) 
       window.removeEventListener("focus", becameVisible);
       document.removeEventListener("visibilitychange", becameVisible);
       navigator.serviceWorker.removeEventListener("controllerchange", controllerChanged);
+      if (updateReloadTimer.current !== null) window.clearTimeout(updateReloadTimer.current);
     };
   }, []);
 
@@ -114,8 +118,12 @@ export function PwaRuntimeProvider({ children }: { children: React.ReactNode }) 
     const worker = registration.current?.waiting || null;
     reloadForUpdate.current = true;
     setUpdating(true);
-    if (worker?.state === "installed") worker.postMessage({ type: "SKIP_WAITING" });
-    else window.location.reload();
+    if (worker?.state === "installed") {
+      worker.postMessage({ type: "SKIP_WAITING" });
+      // Safari standalone web apps have occasionally failed to surface the
+      // controllerchange event. Never leave the update action stuck forever.
+      updateReloadTimer.current = window.setTimeout(() => window.location.reload(), 2_000);
+    } else window.location.reload();
   }
 
   return (

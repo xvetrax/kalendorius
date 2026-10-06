@@ -14,7 +14,7 @@
  */
 
 import { createHash, timingSafeEqual } from "node:crypto";
-import { db, createSession, SESSION_COOKIE } from "@/lib/db-multi";
+import { db, createSession, sessionCookieHeader, SESSION_COOKIE } from "@/lib/db-multi";
 import { addIdentity, findOrCreateOidcUser, isPublicSignupEnabled } from "@/lib/user-service";
 import { verifyGoogleIdToken } from "@/lib/oidc";
 import { appOrigin } from "@/lib/http";
@@ -23,7 +23,6 @@ export const runtime = "nodejs";
 
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const GOOGLE_ISSUER = "https://accounts.google.com";
-const SESSION_MAX_AGE = 7 * 24 * 60 * 60; // 7 days in seconds
 
 function sha256Hex(input: string): string {
   return createHash("sha256").update(input, "utf8").digest("hex");
@@ -280,22 +279,6 @@ export async function GET(request: Request): Promise<Response> {
       ["Set-Cookie", `oauth_state_google=; Path=/api/auth/google-oidc/callback; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`],
     ],
   });
-}
-
-// ---------------------------------------------------------------------------
-// Cookie helpers
-// ---------------------------------------------------------------------------
-
-function sessionCookieHeader(rawToken: string, origin: string): string {
-  const secure = origin.startsWith("https://");
-  return [
-    `${SESSION_COOKIE}=${rawToken}`,
-    "Path=/",
-    `Max-Age=${SESSION_MAX_AGE}`,
-    "HttpOnly",
-    "SameSite=Lax",
-    ...(secure ? ["Secure"] : []),
-  ].join("; ");
 }
 
 function clearStateCookie(respOrLocation: Response | string, origin: string): Response {

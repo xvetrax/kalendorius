@@ -1,11 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 
-async function installFakeWaitingWorker(page: Page) {
-  await page.addInitScript(() => {
+async function installFakeWaitingWorker(page: Page, activate = true) {
+  await page.addInitScript((shouldActivate) => {
     class FakeWorker extends EventTarget {
       state: ServiceWorkerState = "installed";
       postMessage() {
         sessionStorage.setItem("pwa-test-skip-waiting", "sent");
+        if (!shouldActivate) return;
         this.state = "activating";
         queueMicrotask(() => {
           this.state = "activated";
@@ -26,7 +27,7 @@ async function installFakeWaitingWorker(page: Page) {
     });
     Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: fakeServiceWorker });
     Object.assign(window, { __pwaTest: { registration, worker } });
-  });
+  }, activate);
 }
 
 test("be ryšio rodoma būsena ir išjungiami pagrindiniai rašymo veiksmai", async ({ page, context }) => {
@@ -51,6 +52,22 @@ test("be ryšio rodoma būsena ir išjungiami pagrindiniai rašymo veiksmai", as
     await context.setOffline(false);
   }
   await expect(page.getByRole("status").filter({ hasText: "Nėra interneto" })).toHaveCount(0);
+});
+
+test("laikina paskyros patikros tinklo klaida neišregistruoja naudotojo", async ({ page }) => {
+  await page.route("**/api/auth/me", route => route.abort("connectionrefused"));
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("button", { name: "Nustatymai", exact: true })).toBeVisible();
+});
+
+test("atidarant programėlę pratęsiamas ilgalaikis prisijungimo slapukas", async ({ page, context }) => {
+  await page.goto("/");
+  const session = (await context.cookies()).find(cookie => cookie.name === "planner_session");
+  expect(session).toBeTruthy();
+  const remainingDays = (session!.expires * 1000 - Date.now()) / 86_400_000;
+  expect(remainingDays).toBeGreaterThan(29.9);
+  expect(remainingDays).toBeLessThanOrEqual(30.01);
 });
 
 test("nauja versija siūloma aiškiu veiksmu ir saugo atidarytą redagavimą", async ({ page }) => {
@@ -144,4 +161,17 @@ test("kitoje kortelėje jau aktyvuotas workeris nepalieka atnaujinimo užstrigus
     update.click(),
   ]);
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem("pwa-test-skip-waiting"))).toBeNull();
+});
+
+test("negavus controllerchange atnaujinimas po termino vis tiek perkrauna programėlę", async ({ page }) => {
+  await installFakeWaitingWorker(page, false);
+  await page.goto("/");
+  const update = page.getByRole("button", { name: "Atnaujinti programėlę" });
+  await expect(update).toBeVisible();
+
+  await Promise.all([
+    page.waitForEvent("framenavigated"),
+    update.click(),
+  ]);
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("pwa-test-skip-waiting"))).toBe("sent");
 });

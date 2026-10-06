@@ -761,7 +761,8 @@ migrateMultiAccountSchema();
 // ---------------------------------------------------------------------------
 
 export const SESSION_COOKIE = "planner_session";
-const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const SESSION_DURATION_SECONDS = 30 * 24 * 60 * 60;
+const SESSION_DURATION_MS = SESSION_DURATION_SECONDS * 1000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -832,8 +833,10 @@ export function getUserFromSession(rawToken: string): UserContext | null {
   if (session.revoked_at !== null) return null;
   if (new Date(session.expires_at) <= new Date()) return null;
 
-  // Touch last_used_at
-  db.prepare("UPDATE sessions SET last_used_at = ? WHERE id = ?").run(nowIso(), session.id);
+  // Active users keep a rolling session. The browser cookie is refreshed on
+  // protected page navigations by proxy.ts to the same 30-day boundary.
+  db.prepare("UPDATE sessions SET last_used_at = ?, expires_at = ? WHERE id = ?")
+    .run(nowIso(), expiryIso(SESSION_DURATION_MS), session.id);
 
   // Load user and check status
   const user = db.prepare(`
@@ -847,6 +850,22 @@ export function getUserFromSession(rawToken: string): UserContext | null {
   }
 
   return { id: user.id, role: user.role };
+}
+
+/** Persistent first-party session cookie used by both OIDC callbacks and the
+ * protected-page refresh in proxy.ts. Expires complements Max-Age for WebKit
+ * web-app compatibility; Max-Age remains authoritative where both exist. */
+export function sessionCookieHeader(rawToken: string, origin: string, now = new Date()): string {
+  const expires = new Date(now.getTime() + SESSION_DURATION_MS).toUTCString();
+  return [
+    `${SESSION_COOKIE}=${rawToken}`,
+    "Path=/",
+    `Max-Age=${SESSION_DURATION_SECONDS}`,
+    `Expires=${expires}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    ...(origin.startsWith("https://") ? ["Secure"] : []),
+  ].join("; ");
 }
 
 /**

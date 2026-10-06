@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getUserFromSession, SESSION_COOKIE } from "@/lib/db-multi";
+import { getUserFromSession, sessionCookieHeader, SESSION_COOKIE } from "@/lib/db-multi";
+import { appOrigin } from "@/lib/http";
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -20,7 +21,15 @@ export function proxy(request: NextRequest) {
   }
 
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (token && getUserFromSession(token)) return NextResponse.next();
+  if (token && getUserFromSession(token)) {
+    const response = NextResponse.next();
+    // Refresh the persistent cookie on page opens. This keeps a regularly
+    // used installed web app signed in without interfering with logout APIs.
+    if (!pathname.startsWith("/api/")) {
+      response.headers.append("Set-Cookie", sessionCookieHeader(token, appOrigin(request.url)));
+    }
+    return response;
+  }
 
   // API routes → 401 JSON
   if (pathname.startsWith("/api/")) {
