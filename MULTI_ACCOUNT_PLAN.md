@@ -1,6 +1,6 @@
 # Kelių Google ir Microsoft paskyrų įgyvendinimo planas
 
-Atnaujinta: 2026-10-01. Būsena: **MA-8a baigtas, MA-8b vykdomas** — automatinė regresija, Docker ir backup roundtrip praėjo; gyvas kelių paskyrų priėmimas pradėtas.
+Atnaujinta: 2026-10-06. Būsena: **MA-8a baigtas, MA-8b vykdomas** — automatinė regresija, Docker ir backup roundtrip praėjo; gyvas kelių paskyrų priėmimas pradėtas.
 
 ## Įgyvendinimo būsena
 
@@ -321,4 +321,4 @@ Kelių paskyrų etapas laikomas baigtu tik kai:
 - backup / restore ir paskyros atjungimas patikrinti;
 - gyvas Google bei Microsoft priėmimo scenarijus užbaigtas be žinomų P0/P1 problemų.
 
-Tik tada pradedamas [PWA planas](PWA_PLAN.md).
+PWA implementacija jau užbaigta lygiagrečiai, tačiau viešo leidimo priėmimas baigiamas tik uždarius ir MA-8b, ir [PWA gyvų įrenginių patikrą](PWA_PLAN.md).

@@ -1,6 +1,6 @@
 # Kelių naudotojų sistemos planas
 
-Atnaujinta: 2026-09-27. Būsena: **įgyvendinama `feature/multi-user` šakoje**.
+Atnaujinta: 2026-10-06. Būsena: **pagrindinė implementacija užbaigta; liko gyvas dviejų naudotojų priėmimas ir viešo paleidimo apsaugos**.
 
 ## Tikslinis veikimas
 
@@ -33,7 +33,7 @@ Prisijungimo tapatybė suteikia tik prieigą prie programėlės. Prisijungęs ž
 - [ ] Gyvas atskiras Calendar / Tasks prijungimas kiekvienam iš dviejų naudotojų.
 - [ ] Piktnaudžiavimo ribojimas reverse proxy sluoksnyje prieš plačiai viešinant URL.
 - [ ] Privatumo ir duomenų saugojimo aprašas viešam naudojimui.
-- [ ] Atsarginių kopijų bei atkūrimo priėmimo bandymas Docker aplinkoje.
+- [x] Atsarginių kopijų bei atkūrimo priėmimo bandymas Docker aplinkoje.
 
 ## Priėmimo scenarijai
 

@@ -1,6 +1,6 @@
 # „Dienos planas“ — kelias iki kasdien naudojamo produkto
 
-Atnaujinta: 2026-09-27. Būsena: **kelių naudotojų versija įgyvendinama ir tikrinama `feature/multi-user` šakoje**.
+Atnaujinta: 2026-10-06. Būsena: **kelių naudotojų, kelių paskyrų ir PWA pagrindinė implementacija užbaigta; vykdomas gyvas priėmimas ir suplanuoti penki tolesni patobulinimai**.
 
 ## Tikslas ir darbo principas
 
@@ -186,16 +186,28 @@ Detalus saugios schemos migracijos, kelių OAuth jungčių, visų kalendorių ag
 - [x] **MA-6/7:** visos įvykių ir užduočių mutacijos bei Outlook blokai pririšti prie konkrečios jungties.
 - [ ] **MA-8:** automatinė, Docker ir backup / restore patikra baigta; vykdoma kontroliuojama gyvų Google bei Microsoft paskyrų patikra.
 
-Šis etapas vykdomas prieš PWA. Antra tos pačios rūšies paskyra produkcijoje nejungiama, kol nebaigta OAuth expand migracija ir jungčiai priskirta skaitymo eiga.
+Kelių paskyrų implementacija, OAuth expand migracija ir jungčiai priskirtos skaitymo bei rašymo eigos užbaigtos. MA-8 išleidimo vartai lieka atviri iki kontroliuojamos gyvų paskyrų patikros; PWA implementacija atlikta lygiagrečiai, o viešas priėmimas priklauso nuo abiejų planų gyvų testų.
 
 ### I. Įdiegiama PWA programėlė — po kelių paskyrų
 
 Detalus įdiegimo, saugaus podėlio, ryšio būsenos, Web Push, platformų patikros ir white-label paruošimo planas aprašytas [PWA_PLAN.md](PWA_PLAN.md).
 
-- [ ] **PWA-1:** manifestas, ikonų rinkinys, diegimo sąsaja ir reali macOS / Android patikra.
-- [ ] **PWA-2:** minimalus service worker, tik viešų statinių resursų podėlis, offline bei atnaujinimo būsenos.
-- [ ] **PWA-3:** naudotojo valdomos Push prenumeratos ir fokusavimo pabaigos patvarus worker įgyvendinti; liko užduočių pradžios bei ryto / vakaro ritualų priminimai ir gyva įrenginių patikra.
-- [ ] **PWA-4:** tik pagal patvirtintą poreikį — ribotas vieno naudotojo dienos plano skaitymas be interneto; offline redagavimas lieka atskiras konfliktų valdymo projektas.
+- [ ] **PWA-1:** manifestas, ikonų rinkinys, diegimo sąsaja ir standalone išdėstymas įgyvendinti bei automatiškai patikrinti; liko reali macOS / Android diegimo, OAuth ir sesijos patikra.
+- [x] **PWA-2:** saugus viešų statinių resursų service worker, offline būsena, ryšio apsaugos ir valdomas programėlės atnaujinimas įgyvendinti bei automatiškai patikrinti.
+- [ ] **PWA-3:** naudotojo valdomos Push prenumeratos, atskiras patvarus worker, fokusavimo pabaigos, užduoties pradžios bei ryto / vakaro ritualų priminimai įgyvendinti ir automatiškai patikrinti; liko gyva kelių platformų pristatymo patikra.
+- [ ] **PWA-4:** suplanuotas penktas patobulinimas — ribotas paskutinio pasirinkto dienos plano skaitymas be interneto; offline redagavimas lieka atskiras konfliktų valdymo projektas.
+
+### J. Tolimesni kalendoriaus ir PWA patobulinimai
+
+Įgyvendinimo eilė po gyvų paskyrų ir PWA priėmimo patikros:
+
+1. [ ] **Pasikartojantys įvykiai — „šis ir visi būsimi“.** Suprojektuoti saugų serijos skaidymą, išimčių perkėlimą, tiekėjų versijų konfliktus ir aiškų poveikio patvirtinimą; patikrinti Google bei Microsoft sintetiniais adapteriais ir gyvomis bandomosiomis paskyromis.
+2. [ ] **Automatinis slinkimas tempiant.** Dienos ir savaitės tinklelyje slinkti artėjant prie matomos srities krašto, išlaikyti aiškų laiko taikinį ir neleisti netyčiniam perkėlimui po nesėkmingos operacijos.
+3. [ ] **Pilnas kelių dienų ir DST tempimas.** Leisti saugiai perkelti bei keisti kelių dienų blokus, pasirinkti konkretų pasikartojančios valandos egzempliorių ir apibrėžti elgseną 23 bei 25 valandų dienomis.
+4. [ ] **Fizinių įrenginių prieinamumo auditas.** Patikrinti telefonų lietimą, klaviatūros navigaciją, fokusą, ekrano skaitytuvų pavadinimus, kontrastą ir valdiklių dydžius realiuose macOS, Windows, Android bei iPhone įrenginiuose; rastas problemas taisyti atskirais patikrintais commitais.
+5. [ ] **PWA-4 — ribotas dienos planas be interneto.** Išsaugoti tik naudotojo aiškiai pasirinktą paskutinį dienos planą su galiojimo laiku, naudotojo izoliacija ir visišku išvalymu atsijungus; kūrimo bei redagavimo nepridėti.
+
+Kiekvienas punktas yra atskiras darbo paketas su tiksliniais testais darbo metu, pilnu regresijos ciklu po didesnio pakeitimo, nepriklausoma peržiūra ir atskiru commit bei push į `origin`.
 
 ## Darbo eiga ir ribos
 
@@ -388,7 +400,7 @@ Kiekvienas etapas užbaigiamas kodo patikra, prasmingais testais, TypeScript, pr
 
 Tikram OAuth prisijungimui ir paskyrų patikrai reikės naudotojo veiksmų oficialiuose prisijungimo puslapiuose. Tai netrukdo įgyvendinti ir imituotomis API tikrinti integracijas. Viešas publikavimas, tikrų susitikimų siuntimas ir tiekėjų paskyrų konfigūravimas nėra atliekami vien audito metu.
 
-AI automatinis planavimas, vieši rezervavimo puslapiai, komandinė daugelio naudotojų sistema ir papildomos integracijos lieka po šių pagrindinių funkcijų. Jų nereikia tam, kad veiktų prašomas asmeninis kalendorius ir užduočių valdymas.
+AI automatinis planavimas, vieši rezervavimo puslapiai, bendros komandų darbo erdvės ir papildomos integracijos lieka po šių pagrindinių funkcijų. Atskiros naudotojų paskyros ir izoliuotos darbo erdvės jau įgyvendintos; bendras kelių žmonių vienos darbo erdvės redagavimas į dabartinę apimtį neįtrauktas.
 
 
 ## 2026-09-16 — E etapo bendras užduočių planavimas ir Google sutikimas

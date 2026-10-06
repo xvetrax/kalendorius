@@ -73,7 +73,7 @@ npm start
 npm run worker
 ```
 
-`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo, užduočių pradžios ir dienos ritualų pranešimų workerį, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus bei Lord Howe vasaros / žiemos laiko ribas ir saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-06 pilnas ciklas baigtas su 362/362 Node testais ir 62/62 Playwright scenarijais.
+`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo, užduočių pradžios ir dienos ritualų pranešimų workerį, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus bei Lord Howe vasaros / žiemos laiko ribas ir saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-06 pilnas ciklas baigtas su 364/364 Node testais ir 65/65 Playwright scenarijais.
 
 `test:smoke` paleidžia tik lokalią produkcinę kopiją su laikina DB ir neprijungtomis integracijomis. Tikrina CSS / JS / favicon, OAuth klaidas, CSRF, atjungimo API bei užduoties sukūrimą, planavimą, perkėlimą, trukmę, išplanavimą ir užbaigimą. Tikrina, kad terminas nekinta ir pasenusi plano versija atmetama. Užbaigęs pašalina savo testinę DB.
 
@@ -169,12 +169,16 @@ Prieš šalinimą rodoma dabartinė užduočių suma, reikia tiksliai įvesti s�
 
 Patikra atliekama su izoliuotomis imitacinėmis API. Tai negarantuoja atominio šalinimo, jei kitoje programoje sąrašas pasikeičia tarp paskutinio perskaitymo ir tiekėjo DELETE; gyvų paskyrų ir Google sąrašo `If-Match` elgsena dar nepatvirtinta. Jei tiekėjas pašalina sąrašą, bet atsakymas prarandamas, vietiniai planai išsaugomi, kol rezultatas nėra patvirtintas; juos galima peržiūrėti ir sutvarkyti nustatymuose.
 
-## Likę darbai ir ribos
+## Likę darbai ir vykdymo eilė
 
-- atlikti aukščiau aprašytą gyvų Google ir Microsoft paskyrų priėmimo patikrą ir pataisyti rastus neatitikimus;
-- įgyvendinti pasikartojančios serijos veiksmą **šis ir visi būsimi** tik turint saugų serijos skaidymo bei išimčių perkėlimo modelį;
-- pridėti automatinį slinkimą tempiant, pilną kelių dienų / DST tempimą ir aiškų pasikartojančios valandos egzemplioriaus pasirinkimą;
-- užbaigti fizinio telefono, klaviatūros ir jutiklinio valdymo prieinamumo auditą;
-- pridėti senų užbaigtų kalendoriaus kūrimo operacijų registro valymo politiką.
+Pirmiausia atliekama aukščiau aprašyta gyvų Google ir Microsoft paskyrų bei realių PWA įrenginių priėmimo patikra ir taisomi jos metu rasti neatitikimai. Po jos patobulinimai vykdomi šia eilės tvarka:
+
+1. pasikartojančios serijos veiksmas **šis ir visi būsimi**, turint saugų serijos skaidymo bei išimčių perkėlimo modelį;
+2. automatinis kalendoriaus slinkimas tempiant ir aiškus laiko taikinys;
+3. pilnas kelių dienų / DST tempimas bei aiškus pasikartojančios valandos egzemplioriaus pasirinkimas;
+4. fizinių telefonų, klaviatūros ir jutiklinio valdymo prieinamumo auditas;
+5. PWA-4 — ribotas paskutinio pasirinkto dienos plano skaitymas be interneto, be offline redagavimo.
+
+Papildomas priežiūros darbas: pridėti senų užbaigtų kalendoriaus kūrimo operacijų registro valymo politiką. Detalūs priėmimo kriterijai ir etapų tvarka pateikti [PRODUCT_PLAN.md](PRODUCT_PLAN.md) bei [PWA_PLAN.md](PWA_PLAN.md).
 
 Viešam diegimui naudok HTTPS ir prieš pirmą paleidimą nustatyk `INITIAL_ADMIN_EMAIL`. Administratoriaus rolė leidžia valdyti naudotojų būseną bei roles, tačiau nesuteikia prieigos prie jų užduočių, kalendorių ar OAuth žetonų.

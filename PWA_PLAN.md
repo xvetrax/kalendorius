@@ -19,7 +19,7 @@ Atnaujinta: 2026-10-06. Būsena: PWA-1a, PWA-2, PWA-3a, PWA-3b1, PWA-3b2a ir PWA
 - Praėjo `npm run typecheck`, 315 vienetinių / integracinių testų, produkcinis `npm run build`, HTTP smoke ir Docker smoke patikros.
 - PWA diegimo bei mobiliojo išdėstymo Playwright scenarijai praėjo 8/8; į juos įtrauktas priimtas ir atmestas naršyklės diegimo dialogas, `appinstalled`, standalone bei iOS standalone būsenos.
 - Pirmo nepriklausomo vertinimo pastabos dėl horizontalaus telefono `safe-area` ir vienkartinio atmesto diegimo įvykio sutvarkytos bei padengtos testais.
-- Pakartotinis nepriklausomas vertinimas neįvyko, nes vertinimo agento workspace baigėsi kreditai. Prieš pažymint PWA-1b užbaigtu reikia peržiūrėti galutinį diff ir atlikti žemiau nurodytą gyvą patikrą.
+- Galutinis PWA sesijos ir atnaujinimo pataisos diff nepriklausomai peržiūrėtas; vertinimas grąžino `ship` be radinių. Po pataisos praėjo 364/364 Node testai, 65/65 Playwright scenarijai, typecheck, produkcinis build, HTTP, Calendar, Tasks ir Docker smoke patikros.
 - Gyvai patikrinti: diegimą ir paleidimą macOS bei Android, prisijungimą ir atsijungimą standalone lange, Google ir Microsoft OAuth grįžimą bei pasibaigusios sesijos nukreipimą į `/login`.
 - Po naujo Docker leidimo su dviem atidarytomis programos kortelėmis gyvai patikrinti, kad atnaujinimo kvietimas neužstringa, išsaugo nebaigtą formą iki patvirtinimo ir po naudotojo veiksmo abi kortelės gauna naują versiją.
 
@@ -194,9 +194,9 @@ Techninis pagrindas: [oficialus Next.js PWA vadovas](https://nextjs.org/docs/app
 - Atšaukus leidimą arba ištrynus paskyrą, nauji pranešimai nebesiunčiami.
 - Patikrinta Android Chrome, macOS Chrome / Safari ir bent viename iPhone su įdiegta PWA.
 
-## PWA-4 — ribotas darbas be interneto (vėlesnis etapas)
+## PWA-4 — ribotas darbas be interneto (suplanuotas penktas patobulinimas)
 
-Šis etapas pradedamas tik surinkus realų poreikį. Pirmiausia leidžiama tik perskaityti paskutinį naudotojo aiškiai pasirinktą dienos planą. Duomenys laikomi IndexedDB, raktinami pagal naudotojo ID, turi galiojimo laiką ir visiškai ištrinami atsijungus.
+Šis etapas vykdomas po pasikartojančių įvykių, tempimo ir fizinių įrenginių prieinamumo darbų. Pirmiausia leidžiama tik perskaityti paskutinį naudotojo aiškiai pasirinktą dienos planą. Duomenys laikomi IndexedDB, raktinami pagal naudotojo ID, turi galiojimo laiką ir visiškai ištrinami atsijungus.
 
 Offline kūrimas ar redagavimas yra atskiras projektas. Jam reikės patvarios veiksmų eilės, idempotentiškų operacijų ID, konfliktų ekrano ir aiškių Google / Microsoft versijų taisyklių. Jis neįtraukiamas į pradinį PWA leidimą.
 
@@ -243,4 +243,4 @@ Kiekviena užbaigta eilutė yra atskiras patikrintas commit ir push į aktyvią 
 
 ## Toliau rekomenduojama apimtis
 
-Artimiausias etapas yra PWA-1b bei PWA-3 gyvas priėmimas realiuose macOS, Android ir iPhone įrenginiuose: diegimas, OAuth grįžimas, kelių kortelių atnaujinimas ir visi keturi pranešimų scenarijai. Ribotą offline duomenų skaitymą iš PWA-4 pradėti tik surinkus realų poreikį ir apibrėžus naudotojo duomenų išvalymo ribas.
+Pirmiausia užbaigiamas PWA-1b bei PWA-3 gyvas priėmimas realiuose macOS, Android ir iPhone įrenginiuose: diegimas, OAuth grįžimas, kelių kortelių atnaujinimas ir visi keturi pranešimų scenarijai. Po bendro kalendoriaus patobulinimų eilės vykdomas PWA-4 — ribotas paskutinio pasirinkto dienos plano skaitymas be interneto, aiškiai apibrėžus galiojimo laiką ir duomenų išvalymą. Offline redagavimas į PWA-4 neįtraukiamas.
