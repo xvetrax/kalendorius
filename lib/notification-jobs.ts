@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { canonicalCalendarTimeZone, compatibleZonedInstant, zonedLocalInput } from "./calendar-time-zone.ts";
 import { db } from "./db-multi.ts";
 
 export type NotificationScenario = "focus_end" | "task_start" | "morning_plan" | "evening_close";
+export type DailyRitualScenario = "morning_plan" | "evening_close";
 
 export class NotificationJobError extends Error {
   readonly status: number;
@@ -32,6 +34,10 @@ const RETENTION_DAYS = 7;
 const DEFAULT_TASK_START_LEAD_MINUTES = 10;
 const TASK_START_LEAD_MINUTES = new Set([0, 5, 10, 15, 30, 60, 1440]);
 const TASK_START_EXPIRY_GRACE_MS = 15 * 60 * 1000;
+const DAILY_RITUAL_EXPIRY_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_MORNING_TIME = "08:00";
+const DEFAULT_EVENING_TIME = "18:00";
+const LOCAL_TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 export type TaskStartNotificationHooks = {
   sync(taskKey: string, scheduledAt: string | null, scheduleVersion: number): void;
@@ -69,14 +75,50 @@ function taskStartPreference(database: DatabaseSync, userId: number): Preference
   };
 }
 
+function dailyRitualPreference(database: DatabaseSync, userId: number, scenario: DailyRitualScenario): PreferenceRow {
+  return (database.prepare(`
+    SELECT scenario, enabled, lead_minutes, local_time, time_zone, private_content
+    FROM notification_preferences
+    WHERE user_id = ? AND scenario = ?
+  `).get(userId, scenario) as PreferenceRow | undefined) ?? {
+    scenario,
+    enabled: 0,
+    lead_minutes: null,
+    local_time: scenario === "morning_plan" ? DEFAULT_MORNING_TIME : DEFAULT_EVENING_TIME,
+    time_zone: null,
+    private_content: 0,
+  };
+}
+
+export function isDailyRitualLocalTime(value: unknown): value is string {
+  return typeof value === "string" && LOCAL_TIME.test(value);
+}
+
 export function getNotificationPreferences(userId: number) {
   const focus = focusPreference(userId);
   const taskStart = taskStartPreference(db, userId);
+  const morning = dailyRitualPreference(db, userId, "morning_plan");
+  const evening = dailyRitualPreference(db, userId, "evening_close");
+  const morningZone = canonicalCalendarTimeZone(morning.time_zone);
+  const eveningZone = canonicalCalendarTimeZone(evening.time_zone);
   return {
     focusEnd: { enabled: Boolean(focus.enabled) },
     taskStart: {
       enabled: Boolean(taskStart.enabled),
       leadMinutes: taskStart.lead_minutes ?? DEFAULT_TASK_START_LEAD_MINUTES,
+    },
+    dailyRituals: {
+      timeZone: morningZone && eveningZone && morningZone === eveningZone
+        ? morningZone
+        : morningZone || eveningZone,
+      morningPlan: {
+        enabled: Boolean(morning.enabled),
+        localTime: isDailyRitualLocalTime(morning.local_time) ? morning.local_time : DEFAULT_MORNING_TIME,
+      },
+      eveningClose: {
+        enabled: Boolean(evening.enabled),
+        localTime: isDailyRitualLocalTime(evening.local_time) ? evening.local_time : DEFAULT_EVENING_TIME,
+      },
     },
   };
 }
@@ -263,6 +305,196 @@ export function rebuildTaskStartNotificationsInTransaction(database: DatabaseSyn
     const plans = scheduledTaskPlans(database, userId);
     for (const plan of plans) syncTaskStartCore(database, userId, plan.task_key, plan.scheduled_at, plan.schedule_version, now);
   }
+}
+
+type DailyRitualSetting = { enabled: boolean; localTime: string };
+
+export type DailyRitualPreferencesInput = {
+  timeZone: string;
+  morningPlan: DailyRitualSetting;
+  eveningClose: DailyRitualSetting;
+};
+
+type DailyRitualRow = {
+  user_id: number;
+  scenario: DailyRitualScenario;
+  enabled: number;
+  local_time: string | null;
+  time_zone: string | null;
+};
+
+function shiftCalendarDate(value: string, days: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return shifted.toISOString().slice(0, 10);
+}
+
+function localDateAt(now: number, timeZone: string) {
+  return zonedLocalInput(new Date(now).toISOString(), timeZone).slice(0, 10);
+}
+
+function dailyOccurrence(date: string, localTime: string, timeZone: string) {
+  return Date.parse(compatibleZonedInstant(`${date}T${localTime}`, timeZone));
+}
+
+function cancelDailyRitualCore(database: DatabaseSync, userId: number, scenario: DailyRitualScenario) {
+  database.prepare(`
+    UPDATE notification_jobs
+    SET cancelled_at = COALESCE(cancelled_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = ? AND scenario = ? AND completed_at IS NULL
+  `).run(userId, scenario);
+  cancelDeliveries(database, userId, scenario);
+}
+
+function syncDailyRitualCore(database: DatabaseSync, preference: DailyRitualRow, now: number) {
+  if (!preference.enabled || !isDailyRitualLocalTime(preference.local_time)) return;
+  const timeZone = canonicalCalendarTimeZone(preference.time_zone);
+  if (!timeZone) return;
+  const currentDate = localDateAt(now, timeZone);
+  const dates = [
+    shiftCalendarDate(currentDate, -1),
+    currentDate,
+    shiftCalendarDate(currentDate, 1),
+    shiftCalendarDate(currentDate, 2),
+  ];
+  for (const date of dates) {
+    const runAtMs = dailyOccurrence(date, preference.local_time, timeZone);
+    const runAt = new Date(runAtMs).toISOString();
+    const expiresAt = new Date(runAtMs + DAILY_RITUAL_EXPIRY_MS).toISOString();
+    const existing = database.prepare(`
+      SELECT id, cancelled_at, expanded_at, completed_at
+      FROM notification_jobs
+      WHERE user_id = ? AND scenario = ? AND source_key = ?
+    `).get(preference.user_id, preference.scenario, date) as {
+      id: number;
+      cancelled_at: string | null;
+      expanded_at: string | null;
+      completed_at: string | null;
+    } | undefined;
+    if (Date.parse(expiresAt) <= now) continue;
+    if (existing?.expanded_at || existing?.completed_at) continue;
+    if (existing) {
+      if (existing.cancelled_at && runAtMs <= now) continue;
+      database.prepare(`
+        UPDATE notification_jobs
+        SET run_at = ?, expires_at = ?, cancelled_at = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(runAt, expiresAt, existing.id);
+      return;
+    }
+    // A persisted job may be delivered late inside its grace window after a
+    // restart. Never invent a missed occurrence that was not already durable.
+    if (runAtMs <= now) continue;
+    database.prepare(`
+      INSERT INTO notification_jobs
+        (user_id, scenario, source_key, run_at, expires_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run(preference.user_id, preference.scenario, date, runAt, expiresAt);
+    return;
+  }
+}
+
+export function reconcileDailyRitualJobsInTransaction(
+  database: DatabaseSync,
+  now = Date.now(),
+  userId?: number,
+) {
+  const rows = database.prepare(`
+    SELECT user_id, scenario, enabled, local_time, time_zone
+    FROM notification_preferences
+    WHERE scenario IN ('morning_plan', 'evening_close') AND enabled = 1
+      ${userId === undefined ? "" : "AND user_id = ?"}
+    ORDER BY user_id, scenario
+  `).all(...(userId === undefined ? [] : [userId])) as DailyRitualRow[];
+  for (const row of rows) {
+    if (!isDailyRitualLocalTime(row.local_time) || !canonicalCalendarTimeZone(row.time_zone)) continue;
+    syncDailyRitualCore(database, row, now);
+  }
+}
+
+export function rebuildDailyRitualNotificationsInTransaction(database: DatabaseSync, now = Date.now()) {
+  reconcileDailyRitualJobsInTransaction(database, now);
+}
+
+function consumedCurrentDate(database: DatabaseSync, userId: number, scenario: DailyRitualScenario, timeZone: string, now: number) {
+  const sourceKey = localDateAt(now, timeZone);
+  return Boolean(database.prepare(`
+    SELECT 1 FROM notification_jobs
+    WHERE user_id = ? AND scenario = ? AND source_key = ?
+      AND (expanded_at IS NOT NULL OR completed_at IS NOT NULL)
+    LIMIT 1
+  `).get(userId, scenario, sourceKey));
+}
+
+function markDailyDateConsumed(database: DatabaseSync, userId: number, scenario: DailyRitualScenario, date: string, now: number) {
+  const timestamp = new Date(now).toISOString();
+  database.prepare(`
+    INSERT INTO notification_jobs
+      (user_id, scenario, source_key, run_at, expires_at, cancelled_at, completed_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, scenario, source_key) DO UPDATE SET
+      cancelled_at = COALESCE(notification_jobs.cancelled_at, excluded.cancelled_at),
+      completed_at = COALESCE(notification_jobs.completed_at, excluded.completed_at),
+      updated_at = CURRENT_TIMESTAMP
+  `).run(userId, scenario, date, timestamp, timestamp, timestamp, timestamp);
+}
+
+function parseDailyRitualSetting(value: unknown, label: string): DailyRitualSetting {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new NotificationJobError(`Neteisinga ${label} priminimo nuostata.`);
+  }
+  const setting = value as { enabled?: unknown; localTime?: unknown };
+  if (Object.keys(setting).some((key) => key !== "enabled" && key !== "localTime")
+    || typeof setting.enabled !== "boolean" || !isDailyRitualLocalTime(setting.localTime)) {
+    throw new NotificationJobError(`Neteisinga ${label} priminimo nuostata.`);
+  }
+  return { enabled: setting.enabled, localTime: setting.localTime };
+}
+
+export function updateDailyRitualPreferences(userId: number, value: unknown, now = Date.now()) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new NotificationJobError("Neteisingos dienos ritualų nuostatos.");
+  }
+  const raw = value as { timeZone?: unknown; morningPlan?: unknown; eveningClose?: unknown };
+  if (Object.keys(raw).some((key) => !["timeZone", "morningPlan", "eveningClose"].includes(key))) {
+    throw new NotificationJobError("Neteisingos dienos ritualų nuostatos.");
+  }
+  const timeZone = canonicalCalendarTimeZone(raw.timeZone);
+  if (!timeZone) throw new NotificationJobError("Pasirink galiojančią IANA laiko zoną.");
+  const settings: [DailyRitualScenario, DailyRitualSetting][] = [
+    ["morning_plan", parseDailyRitualSetting(raw.morningPlan, "ryto")],
+    ["evening_close", parseDailyRitualSetting(raw.eveningClose, "vakaro")],
+  ];
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const [scenario, setting] of settings) {
+      const current = dailyRitualPreference(db, userId, scenario);
+      const currentZone = canonicalCalendarTimeZone(current.time_zone);
+      const unchanged = Boolean(current.enabled) === setting.enabled
+        && current.local_time === setting.localTime
+        && currentZone === timeZone;
+      if (unchanged) continue;
+      const consumed = currentZone ? consumedCurrentDate(db, userId, scenario, currentZone, now) : false;
+      cancelDailyRitualCore(db, userId, scenario);
+      db.prepare(`
+        INSERT INTO notification_preferences (user_id, scenario, enabled, local_time, time_zone, updated_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, scenario) DO UPDATE SET
+          enabled = excluded.enabled,
+          local_time = excluded.local_time,
+          time_zone = excluded.time_zone,
+          updated_at = excluded.updated_at
+      `).run(userId, scenario, setting.enabled ? 1 : 0, setting.localTime, timeZone);
+      if (consumed) markDailyDateConsumed(db, userId, scenario, localDateAt(now, timeZone), now);
+    }
+    reconcileDailyRitualJobsInTransaction(db, now, userId);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return getNotificationPreferences(userId);
 }
 
 export function updateFocusPreference(userId: number, enabled: boolean) {

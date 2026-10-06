@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "./db-multi.ts";
+import { reconcileDailyRitualJobsInTransaction, type NotificationScenario } from "./notification-jobs.ts";
 import { deletePushSubscription, PushNotificationError, readStoredPushSubscription, sendStoredPush, type StoredPushSubscription } from "./push-notifications.ts";
 
 const LEASE_MS = 30_000;
@@ -13,12 +14,12 @@ type Delivery = {
   job_id: number;
   user_id: number;
   subscription_id: number;
-  scenario: "focus_end" | "task_start";
+  scenario: NotificationScenario;
   expires_at: string;
   attempt_count: number;
 };
 
-type Send = (subscription: StoredPushSubscription, payload: { v: 1; type: "focus_end" | "task_start" }) => Promise<unknown>;
+type Send = (subscription: StoredPushSubscription, payload: { v: 1; type: NotificationScenario }) => Promise<unknown>;
 
 function transaction<T>(fn: () => T): T {
   db.exec("BEGIN IMMEDIATE");
@@ -100,7 +101,7 @@ function expandDueJobs(now: Date) {
     FROM notification_jobs j
     JOIN users u ON u.id = j.user_id AND u.status = 'active'
     JOIN notification_preferences p ON p.user_id = j.user_id AND p.scenario = j.scenario AND p.enabled = 1
-    WHERE j.scenario IN ('focus_end', 'task_start')
+    WHERE j.scenario IN ('focus_end', 'task_start', 'morning_plan', 'evening_close')
       AND j.cancelled_at IS NULL AND j.completed_at IS NULL AND j.expanded_at IS NULL
       AND julianday(j.run_at) <= julianday(?)
     ORDER BY j.run_at, j.id
@@ -214,7 +215,10 @@ export async function processNotificationTick(options: {
   `).run(now.toISOString());
   const runtime = db.prepare("SELECT paused FROM notification_runtime WHERE id = 1").get() as { paused: number };
   if (runtime.paused) return { processed: false, reason: "paused" as const };
-  transaction(() => recoverInterrupted(now));
+  transaction(() => {
+    recoverInterrupted(now);
+    reconcileDailyRitualJobsInTransaction(db, now.getTime());
+  });
   expandDueJobs(now);
   const delivery = claimDelivery(workerId, now);
   if (!delivery) return { processed: false, reason: "idle" as const };

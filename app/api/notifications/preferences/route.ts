@@ -3,6 +3,7 @@ import { assertSameOrigin } from "@/lib/http";
 import {
   getNotificationPreferences,
   NotificationJobError,
+  updateDailyRitualPreferences,
   updateFocusPreference,
   updateTaskStartPreference,
 } from "@/lib/notification-jobs";
@@ -35,16 +36,29 @@ export async function PATCH(request: Request) {
       focusEndEnabled?: unknown;
       taskStartEnabled?: unknown;
       taskStartLeadMinutes?: unknown;
+      dailyRituals?: unknown;
     };
+    const keys = Object.keys(body);
     if (typeof body.focusEndEnabled === "boolean"
+      && keys.length === 1
       && body.taskStartEnabled === undefined
-      && body.taskStartLeadMinutes === undefined) {
+      && body.taskStartLeadMinutes === undefined
+      && body.dailyRituals === undefined) {
       return Response.json(updateFocusPreference(user.id, body.focusEndEnabled));
     }
     if (typeof body.taskStartEnabled === "boolean"
       && typeof body.taskStartLeadMinutes === "number"
-      && body.focusEndEnabled === undefined) {
+      && keys.length === 2
+      && body.focusEndEnabled === undefined
+      && body.dailyRituals === undefined) {
       return Response.json(updateTaskStartPreference(user.id, body.taskStartEnabled, body.taskStartLeadMinutes));
+    }
+    if (body.dailyRituals !== undefined
+      && keys.length === 1
+      && body.focusEndEnabled === undefined
+      && body.taskStartEnabled === undefined
+      && body.taskStartLeadMinutes === undefined) {
+      return Response.json(updateDailyRitualPreferences(user.id, body.dailyRituals));
     }
     throw new NotificationJobError("Neteisinga pranešimų nuostata.");
   } catch (error) { return failure(error); }

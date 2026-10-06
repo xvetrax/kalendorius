@@ -1,6 +1,6 @@
 # „Dienos planas“ PWA įgyvendinimo planas
 
-Atnaujinta: 2026-10-06. Būsena: PWA-1a, PWA-2, PWA-3a, PWA-3b1 ir PWA-3b2a įgyvendinimas bei automatinė patikra užbaigti; PWA-1b liko realių įrenginių, gyvos OAuth sesijos ir gyvo kelių kortelių atnaujinimo priėmimo patikra. PWA-3b2b liko ryto / vakaro ritualų priminimai su naudotojo IANA laiko zona ir aiškia DST taisykle. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
+Atnaujinta: 2026-10-06. Būsena: PWA-1a, PWA-2, PWA-3a, PWA-3b1, PWA-3b2a ir PWA-3b2b įgyvendinimas bei automatinė patikra užbaigti; PWA-1b ir PWA-3 liko realių įrenginių, gyvos OAuth sesijos, gyvo kelių kortelių atnaujinimo ir Web Push priėmimo patikra. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
 
 ## Įgyvendinimo eiga
 
@@ -12,7 +12,7 @@ Atnaujinta: 2026-10-06. Būsena: PWA-1a, PWA-2, PWA-3a, PWA-3b1 ir PWA-3b2a įgy
 - [x] **PWA-3a:** VAPID konfigūracija, užšifruotos naudotojo įrenginių prenumeratos, aiškus leidimo prašymas, bandomasis privatumo neatskleidžiantis pranešimas, įrenginių sąrašas ir prenumeratos panaikinimas. Praėjo 328 testai, 61 E2E scenarijus, build, HTTP ir Docker smoke bei produkcinių priklausomybių auditas; liko gyva realių įrenginių priėmimo patikra.
 - [x] **PWA-3b1:** scenarijų nuostatų ir patvaraus `notification_jobs` registro pagrindas, per įrenginį atskirtos pristatymo būsenos, atskiras Docker worker ir fokusavimo pabaigos priminimas.
 - [x] **PWA-3b2a:** užduoties pradžios priminimas pagal programėlės planą, pasirenkamas išankstinis laikas, atominių užduoties pakeitimų ir darbų eilės suderinimas bei atkūrimas iš pilnos kopijos.
-- [ ] **PWA-3b2b:** ryto / vakaro ritualų priminimai su naudotojo IANA laiko zona ir aiškia DST taisykle.
+- [x] **PWA-3b2b:** ryto / vakaro ritualų priminimai su naudotojo IANA laiko zona, aiškia DST taisykle ir dviejų valandų serverio pertraukos atkūrimo langu.
 
 ### PWA-1b perdavimo būsena
 
@@ -60,6 +60,17 @@ Atnaujinta: 2026-10-06. Būsena: PWA-1a, PWA-2, PWA-3a, PWA-3b1 ir PWA-3b2a įgy
 - Pilnos kopijos atkūrimas išvalo seną operacinę eilę, iš galiojančių atkurtų planų atkuria būsimus užduočių pradžios darbus ir palieka push prenumeratas išjungtas iki pakartotinio įrenginio prijungimo.
 - Galutinis automatinis ciklas: 354/354 Node testų, 62/62 Playwright scenarijai, typecheck, produkcinis build, HTTP smoke, Calendar / Tasks integraciniai testai, Docker web+worker health / backup / restart ir 0 produkcinių npm pažeidžiamumų.
 - Gyvai dar reikia patikrinti uždarytos PWA užduoties pradžios pranešimą Android, macOS ir iPhone įrenginiuose, įskaitant perplanavimą prieš pat siuntimo laiką.
+
+### PWA-3b2b patikros būsena
+
+- Nustatymuose galima atskirai įjungti ryto dienos planavimo ir vakaro dienos uždarymo priminimus, pasirinkti kiekvieno vietinį laiką bei bendrą IANA laiko zoną.
+- Kiekvienai vietinei datai ir scenarijui sukuriamas vienas patvarus darbas. Workerio perkrovimas ar keli workeriai nesukuria antro tos pačios dienos pristatymo.
+- DST elgsena atitinka „compatible“ taisyklę: pasikartojančią valandą naudojamas pirmas kartas, o neegzistuojantis vietinis laikas perkeliamas pirmyn per laikrodžio persukimo tarpą. Tai patikrinta ir vienos valandos Vilniaus, ir pusvalandžio Lord Howe perėjimais.
+- Jau suplanuotas darbas po serverio pertraukos gali būti pristatytas per dvi valandas; pasibaigus šiam langui jis pažymimas užbaigtu ir nebesiunčiamas. Pakeitus laiką ar zoną po tos dienos darbo išplėtimo antras tos pačios vietinės dienos priminimas nekuriamas.
+- API atominiu būdu saugo abu ritualus ir bendrą zoną, atmeta dalinius, mišrius bei neteisingus laikus ar zonas. Pilna kopija išsaugo nuostatas, validuoja jų semantiką ir atkuria tik būsimus darbus, ne senas pristatymo eiles ar push prenumeratas.
+- Workerio payload ir service worker tekstai yra fiksuoti bei neatskleidžia vietinio laiko, zonos, užduočių ar kalendoriaus turinio.
+- Galutinis automatinis ciklas: 362/362 Node testai, 62/62 Playwright scenarijai, typecheck, produkcinis build, HTTP smoke, Calendar / Tasks integraciniai testai, Docker web+worker health / backup / restart ir 0 produkcinių npm pažeidžiamumų.
+- Gyvai dar reikia patikrinti uždarytos PWA ryto ir vakaro pranešimus Android, macOS bei iPhone įrenginiuose ir vieną realų laikrodžio persukimą arba laikinai parinktą artimą laiką.
 
 ## Tikslas
 
@@ -232,4 +243,4 @@ Kiekviena užbaigta eilutė yra atskiras patikrintas commit ir push į aktyvią 
 
 ## Toliau rekomenduojama apimtis
 
-Artimiausias kūrimo etapas yra **PWA-3b2b**: ryto ir vakaro ritualų priminimai su aiškiai išsaugota naudotojo IANA laiko zona, DST elgsena ir atskirais įjungimo valdikliais. Lygiagrečiai reikia užbaigti PWA-1b bei PWA-3 gyvą priėmimą realiuose macOS, Android ir iPhone įrenginiuose. Ribotą offline duomenų skaitymą iš PWA-4 pradėti tik surinkus realų poreikį ir apibrėžus naudotojo duomenų išvalymo ribas.
+Artimiausias etapas yra PWA-1b bei PWA-3 gyvas priėmimas realiuose macOS, Android ir iPhone įrenginiuose: diegimas, OAuth grįžimas, kelių kortelių atnaujinimas ir visi keturi pranešimų scenarijai. Ribotą offline duomenų skaitymą iš PWA-4 pradėti tik surinkus realų poreikį ir apibrėžus naudotojo duomenų išvalymo ribas.

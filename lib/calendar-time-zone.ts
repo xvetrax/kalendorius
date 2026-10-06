@@ -76,3 +76,31 @@ export function zonedInstant(value:string,timeZone:string){
   if(candidates.size>1)throw new Error("Ši valanda pasirinktoje laiko zonoje kartojasi dėl laiko persukimo. Pasirink kitą laiką.");
   return new Date([...candidates][0]).toISOString();
 }
+
+/**
+ * Resolve a recurring wall-clock time with Temporal-compatible DST behavior:
+ * choose the first occurrence during a repeated hour and move a missing time
+ * forward by the size of the daylight-saving gap.
+ */
+export function compatibleZonedInstant(value:string,timeZone:string){
+  const match=value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if(!match||!isCalendarTimeZone(timeZone))throw new Error("Įvesk laiką ir pasirink galiojančią laiko zoną.");
+  const [year,month,day,hour,minute]=match.slice(1).map(Number),naive=Date.UTC(year,month-1,day,hour,minute);
+  const check=new Date(naive);
+  if(check.getUTCFullYear()!==year||check.getUTCMonth()!==month-1||check.getUTCDate()!==day||check.getUTCHours()!==hour||check.getUTCMinutes()!==minute)throw new Error("Ši data ar valanda neegzistuoja.");
+  const offsets=new Set<number>();
+  for(const delta of [-72,-48,-24,-12,0,12,24,48,72])offsets.add(offsetAt(naive+delta*3600000,timeZone));
+  const exact:number[]=[];
+  const shifted:{instant:number;wallDelta:number}[]=[];
+  for(const offset of offsets){
+    const instant=naive-offset;
+    const wall=parts(instant,timeZone);
+    const wallInstant=Date.UTC(wall.year,wall.month-1,wall.day,wall.hour,wall.minute);
+    if(wallValue(instant,timeZone,false)===value)exact.push(instant);
+    else if(wallInstant>naive)shifted.push({instant,wallDelta:wallInstant-naive});
+  }
+  if(exact.length)return new Date(Math.min(...exact)).toISOString();
+  shifted.sort((left,right)=>left.wallDelta-right.wallDelta||left.instant-right.instant);
+  if(shifted.length)return new Date(shifted[0].instant).toISOString();
+  throw new Error("Nepavyko nustatyti priminimo laiko pasirinktoje laiko zonoje.");
+}

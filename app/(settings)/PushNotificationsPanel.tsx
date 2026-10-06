@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePwaRuntime } from "@/app/pwa-runtime";
 import { pushEndpointHash } from "@/app/push-client";
+import { calendarTimeZones } from "@/lib/calendar-time-zone";
 
 type Device = {
   id: number;
@@ -23,6 +24,11 @@ type PushState = {
 type NotificationPreferences = {
   focusEnd: { enabled: boolean };
   taskStart: { enabled: boolean; leadMinutes: number };
+  dailyRituals: {
+    timeZone: string | null;
+    morningPlan: { enabled: boolean; localTime: string };
+    eveningClose: { enabled: boolean; localTime: string };
+  };
 };
 
 function base64UrlBytes(value: string) {
@@ -61,6 +67,8 @@ export function PushNotificationsPanel() {
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [browserTimeZone, setBrowserTimeZone] = useState("UTC");
+  const [timeZones, setTimeZones] = useState(["UTC"]);
 
   const currentDevice = useMemo(
     () => state?.subscriptions.find((device) => device.endpointFingerprint === currentFingerprint) || null,
@@ -99,6 +107,9 @@ export function PushNotificationsPanel() {
       setPermission(Notification.permission);
       setDeviceName(defaultDeviceName());
     }
+    const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    setBrowserTimeZone(localZone);
+    setTimeZones([...new Set([localZone, ...calendarTimeZones()])]);
     void load();
   }, [load]);
 
@@ -208,6 +219,28 @@ export function PushNotificationsPanel() {
     } finally { setBusy(""); }
   }
 
+  async function setDailyRituals(update: Partial<NotificationPreferences["dailyRituals"]>) {
+    if (!online || !preferences) return;
+    const current = preferences.dailyRituals;
+    const next = {
+      timeZone: update.timeZone ?? current.timeZone ?? browserTimeZone,
+      morningPlan: update.morningPlan ?? current.morningPlan,
+      eveningClose: update.eveningClose ?? current.eveningClose,
+    };
+    setBusy("daily-rituals"); setError(""); setMessage("");
+    try {
+      const saved = await json<NotificationPreferences>(await fetch("/api/notifications/preferences", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ dailyRituals: next }),
+      }));
+      setPreferences(saved);
+      setMessage("Dienos ritualų priminimai atnaujinti.");
+    } catch (preferenceError) {
+      setError(preferenceError instanceof Error ? preferenceError.message : "Dienos ritualų nuostatos išsaugoti nepavyko.");
+    } finally { setBusy(""); }
+  }
+
   if (supported === null) return <p className="formHint">Tikrinamas pranešimų palaikymas…</p>;
   if (!state || !preferences) return error
     ? <p className="formError" role="alert">{error}</p>
@@ -247,6 +280,32 @@ export function PushNotificationsPanel() {
             <option value={1440}>prieš 1 dieną</option>
           </select>
         </label>
+      </div>
+      <div className="pushRituals">
+        <label className="pushRitualZone">Dienos ritualų laiko zona
+          <select value={preferences.dailyRituals.timeZone ?? browserTimeZone} disabled={!online || Boolean(busy) || state.subscriptions.length === 0} onChange={(event) => void setDailyRituals({ timeZone: event.target.value })}>
+            {timeZones.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+          </select>
+        </label>
+        <div className="pushScenarioRow">
+          <label className="freeToggle">
+            <input type="checkbox" checked={preferences.dailyRituals.morningPlan.enabled} disabled={!online || Boolean(busy) || state.subscriptions.length === 0} onChange={(event) => void setDailyRituals({ morningPlan: { ...preferences.dailyRituals.morningPlan, enabled: event.target.checked } })} />
+            <i/><span><strong>Ryto dienos planavimas</strong><small>Priminti peržiūrėti ir susiplanuoti dieną.</small></span>
+          </label>
+          <label className="pushRitualTime">Laikas
+            <input type="time" value={preferences.dailyRituals.morningPlan.localTime} disabled={!online || Boolean(busy) || state.subscriptions.length === 0} onChange={(event) => void setDailyRituals({ morningPlan: { ...preferences.dailyRituals.morningPlan, localTime: event.target.value } })} />
+          </label>
+        </div>
+        <div className="pushScenarioRow">
+          <label className="freeToggle">
+            <input type="checkbox" checked={preferences.dailyRituals.eveningClose.enabled} disabled={!online || Boolean(busy) || state.subscriptions.length === 0} onChange={(event) => void setDailyRituals({ eveningClose: { ...preferences.dailyRituals.eveningClose, enabled: event.target.checked } })} />
+            <i/><span><strong>Vakaro dienos uždarymas</strong><small>Priminti užbaigti dieną ir pasiruošti rytojui.</small></span>
+          </label>
+          <label className="pushRitualTime">Laikas
+            <input type="time" value={preferences.dailyRituals.eveningClose.localTime} disabled={!online || Boolean(busy) || state.subscriptions.length === 0} onChange={(event) => void setDailyRituals({ eveningClose: { ...preferences.dailyRituals.eveningClose, localTime: event.target.value } })} />
+          </label>
+        </div>
+        <small>Persukant laikrodį pasikartojančią valandą naudojame pirmą kartą, o neegzistuojantį laiką perkeliame pirmyn per DST tarpą. Po serverio pertraukos jau suplanuotą priminimą siunčiame ne vėliau kaip per 2 valandas.</small>
       </div>
       {state.subscriptions.length === 0 && <small>Pirmiausia įjunk pranešimus bent viename įrenginyje.</small>}
     </div>

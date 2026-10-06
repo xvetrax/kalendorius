@@ -56,6 +56,11 @@ test("leidimo neprašo atidarius nustatymus, o aiškus veiksmas įregistruoja į
   let preferences = {
     focusEnd: { enabled: false },
     taskStart: { enabled: false, leadMinutes: 10 },
+    dailyRituals: {
+      timeZone: null as string | null,
+      morningPlan: { enabled: false, localTime: "08:00" },
+      eveningClose: { enabled: false, localTime: "18:00" },
+    },
   };
   const preferencePatches: Array<Record<string, unknown>> = [];
   await page.route("**/api/push/subscriptions", async (route) => {
@@ -88,6 +93,9 @@ test("leidimo neprašo atidarius nustatymus, o aiškus veiksmas įregistruoja į
           },
         };
       }
+      if (patch.dailyRituals && typeof patch.dailyRituals === "object") {
+        preferences = { ...preferences, dailyRituals: patch.dailyRituals as typeof preferences.dailyRituals };
+      }
     }
     await route.fulfill({ json: preferences });
   });
@@ -110,6 +118,13 @@ test("leidimo neprašo atidarius nustatymus, o aiškus veiksmas įregistruoja į
 
   await page.locator(".pushScenarioRow select").selectOption("30");
   expect(preferencePatches.at(-1)).toEqual({ taskStartEnabled: true, taskStartLeadMinutes: 30 });
+
+  await page.getByLabel("Dienos ritualų laiko zona").selectOption("Europe/Vilnius");
+  expect(preferencePatches.at(-1)).toMatchObject({ dailyRituals: { timeZone: "Europe/Vilnius" } });
+  await page.locator("label.freeToggle").filter({ hasText: "Ryto dienos planavimas" }).click();
+  expect(preferencePatches.at(-1)).toMatchObject({ dailyRituals: { morningPlan: { enabled: true, localTime: "08:00" } } });
+  await page.getByLabel("Laikas").first().fill("07:45");
+  expect(preferencePatches.at(-1)).toMatchObject({ dailyRituals: { morningPlan: { enabled: true, localTime: "07:45" } } });
 
   await page.getByRole("button", { name: "Bandyti" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Bandomasis pranešimas išsiųstas" })).toBeVisible();

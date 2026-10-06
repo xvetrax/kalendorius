@@ -34,6 +34,7 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 - įdiegti kaip PWA ir kiekviename palaikomame įrenginyje atskirai įjungti, išbandyti arba pašalinti Web Push prenumeratą;
 - pasirinktinai gauti privatų fokusavimo sesijos pabaigos pranešimą net uždarius PWA; patvarus workeris po perkrovimo nebekartoja neaiškios jau pradėtos siuntos;
 - pasirinktinai gauti fiksuoto privataus turinio pranešimą prieš programėlėje suplanuotos užduoties pradžią; nustatymuose pasirinkti pradžios momentą, 5–60 min. arba vienos dienos išankstinį laiką;
+- pasirinktinai gauti ryto planavimo ir vakaro dienos uždarymo priminimus pasirinktu vietiniu laiku bei IANA laiko zona; DST perėjimai apdorojami deterministiškai, o jau suplanuotas darbas po serverio pertraukos galioja dvi valandas;
 - užšifruoti „Google“ ir „Microsoft“ atnaujinimo žetonus prieš išsaugant SQLite bazėje;
 - aiškiai rodyti abiejų integracijų būseną ir saugiai pašalinti vietoje saugomus OAuth žetonus mygtuku „Atjungti“;
 - kurti atskiras paskyras pirmo Google arba Microsoft OIDC prisijungimo metu, saugoti atšaukiamas DB sesijas ir izoliuoti kiekvieno naudotojo duomenis;
@@ -72,7 +73,7 @@ npm start
 npm run worker
 ```
 
-`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo ir užduočių pradžios pranešimų workerį, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-06 pilnas ciklas baigtas su 354/354 Node testų ir 62/62 Playwright scenarijais.
+`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo, užduočių pradžios ir dienos ritualų pranešimų workerį, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus bei Lord Howe vasaros / žiemos laiko ribas ir saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-06 pilnas ciklas baigtas su 362/362 Node testais ir 62/62 Playwright scenarijais.
 
 `test:smoke` paleidžia tik lokalią produkcinę kopiją su laikina DB ir neprijungtomis integracijomis. Tikrina CSS / JS / favicon, OAuth klaidas, CSRF, atjungimo API bei užduoties sukūrimą, planavimą, perkėlimą, trukmę, išplanavimą ir užbaigimą. Tikrina, kad terminas nekinta ir pasenusi plano versija atmetama. Užbaigęs pašalina savo testinę DB.
 

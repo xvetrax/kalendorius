@@ -193,6 +193,134 @@ test("užduoties pradžios workeris siunčia tik fiksuotą privatų payload", as
   assert.equal((await worker.processNotificationTick({ workerId: "task-start-repeat", now: new Date(startsAt - 3 * 60_000), send: async () => { throw new Error("must not resend"); } })).processed, false);
 });
 
+test("ryto ir vakaro nuostatos atominiu būdu sukuria po vieną vietinės dienos darbą", async () => {
+  const now = Date.parse("2026-10-05T04:00:00.000Z"); // 07:00 Europe/Vilnius
+  const input = {
+    timeZone: "Europe/Vilnius",
+    morningPlan: { enabled: true, localTime: "08:00" },
+    eveningClose: { enabled: true, localTime: "18:00" },
+  };
+  const preferences = jobs.updateDailyRitualPreferences(userA, input, now);
+  assert.deepEqual(preferences.dailyRituals, { ...input, timeZone: "Europe/Vilnius" });
+  assert.deepEqual(jobs.getNotificationPreferences(userB).dailyRituals, {
+    timeZone: null,
+    morningPlan: { enabled: false, localTime: "08:00" },
+    eveningClose: { enabled: false, localTime: "18:00" },
+  });
+  assert.deepEqual(db.prepare(`
+    SELECT scenario, source_key, run_at, expires_at FROM notification_jobs
+    WHERE user_id = ? AND scenario IN ('morning_plan', 'evening_close') ORDER BY scenario
+  `).all(userA).map((row) => ({ ...row })), [
+    { scenario: "evening_close", source_key: "2026-10-05", run_at: "2026-10-05T15:00:00.000Z", expires_at: "2026-10-05T17:00:00.000Z" },
+    { scenario: "morning_plan", source_key: "2026-10-05", run_at: "2026-10-05T05:00:00.000Z", expires_at: "2026-10-05T07:00:00.000Z" },
+  ]);
+  jobs.updateDailyRitualPreferences(userA, input, now);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ?").get(userA).count, 2);
+
+  const invalidZone = await preferencesRoute.PATCH(request("/api/notifications/preferences", {
+    method: "PATCH",
+    body: { dailyRituals: { ...input, timeZone: "+03:00" } },
+  }));
+  assert.equal(invalidZone.status, 400);
+  const partial = await preferencesRoute.PATCH(request("/api/notifications/preferences", {
+    method: "PATCH",
+    body: { dailyRituals: { timeZone: "UTC", morningPlan: input.morningPlan } },
+  }));
+  assert.equal(partial.status, 400);
+  const mixed = await preferencesRoute.PATCH(request("/api/notifications/preferences", {
+    method: "PATCH",
+    body: { focusEndEnabled: true, dailyRituals: input },
+  }));
+  assert.equal(mixed.status, 400);
+  const apiSaved = await preferencesRoute.PATCH(request("/api/notifications/preferences", {
+    method: "PATCH",
+    cookie: cookieB,
+    body: { dailyRituals: input },
+  }));
+  assert.equal(apiSaved.status, 200);
+  assert.deepEqual((await apiSaved.json()).dailyRituals, { ...input, timeZone: "Europe/Vilnius" });
+  assert.equal(jobs.getNotificationPreferences(userA).dailyRituals.morningPlan.enabled, true);
+});
+
+test("dienos ritualai laikosi DST taisyklės ir proceso laiko zonos", () => {
+  const previous = process.env.TZ;
+  process.env.TZ = "America/New_York";
+  try {
+    jobs.updateDailyRitualPreferences(userA, {
+      timeZone: "Europe/Vilnius",
+      morningPlan: { enabled: true, localTime: "03:30" },
+      eveningClose: { enabled: false, localTime: "18:00" },
+    }, Date.parse("2026-03-28T12:00:00.000Z"));
+    assert.equal(db.prepare("SELECT run_at FROM notification_jobs WHERE user_id = ? AND scenario = 'morning_plan'").get(userA).run_at, "2026-03-29T01:30:00.000Z");
+
+    jobs.updateDailyRitualPreferences(userB, {
+      timeZone: "Europe/Vilnius",
+      morningPlan: { enabled: true, localTime: "03:30" },
+      eveningClose: { enabled: false, localTime: "18:00" },
+    }, Date.parse("2026-10-24T12:00:00.000Z"));
+    assert.equal(db.prepare("SELECT run_at FROM notification_jobs WHERE user_id = ? AND scenario = 'morning_plan'").get(userB).run_at, "2026-10-25T00:30:00.000Z");
+  } finally {
+    if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
+  }
+});
+
+test("ritualo workeris pristato patvarų darbą per dviejų valandų langą tik vieną kartą", async () => {
+  push.savePushSubscription(userA, sample("morning-plan"));
+  const before = Date.parse("2026-10-05T04:00:00.000Z");
+  jobs.updateDailyRitualPreferences(userA, {
+    timeZone: "Europe/Vilnius",
+    morningPlan: { enabled: true, localTime: "08:00" },
+    eveningClose: { enabled: false, localTime: "18:00" },
+  }, before);
+  const sent = [];
+  const due = new Date("2026-10-05T05:30:00.000Z");
+  assert.equal((await worker.processNotificationTick({ workerId: "morning-late", now: due, send: async (_subscription, payload) => sent.push(payload) })).state, "accepted");
+  assert.deepEqual(sent, [{ v: 1, type: "morning_plan" }]);
+  assert.equal((await worker.processNotificationTick({ workerId: "morning-repeat", now: due, send: async () => { throw new Error("must not resend"); } })).processed, false);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'morning_plan' AND source_key = '2026-10-05'").get(userA).count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'morning_plan' AND source_key = '2026-10-06' AND cancelled_at IS NULL").get(userA).count, 1);
+});
+
+test("pasibaigus ritualo dviejų valandų langui praleistas darbas nebesiunčiamas", async () => {
+  push.savePushSubscription(userA, sample("morning-expired"));
+  jobs.updateDailyRitualPreferences(userA, {
+    timeZone: "UTC",
+    morningPlan: { enabled: true, localTime: "08:00" },
+    eveningClose: { enabled: false, localTime: "18:00" },
+  }, Date.parse("2026-10-05T07:00:00.000Z"));
+  let sends = 0;
+  const result = await worker.processNotificationTick({
+    workerId: "morning-expired",
+    now: new Date("2026-10-05T10:00:01.000Z"),
+    send: async () => { sends += 1; },
+  });
+  assert.equal(result.processed, false);
+  assert.equal(sends, 0);
+  assert.ok(db.prepare("SELECT completed_at FROM notification_jobs WHERE user_id = ? AND scenario = 'morning_plan' AND source_key = '2026-10-05'").get(userA).completed_at);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'morning_plan' AND source_key = '2026-10-06' AND cancelled_at IS NULL").get(userA).count, 1);
+});
+
+test("pakeitus jau išplėstą ritualą naujas tos pačios vietinės dienos priminimas nekuriamas", async () => {
+  push.savePushSubscription(userA, sample("ritual-change"));
+  const input = {
+    timeZone: "UTC",
+    morningPlan: { enabled: true, localTime: "08:00" },
+    eveningClose: { enabled: false, localTime: "18:00" },
+  };
+  jobs.updateDailyRitualPreferences(userA, input, Date.parse("2026-10-05T07:00:00.000Z"));
+  assert.equal((await worker.processNotificationTick({ workerId: "ritual-consumed", now: new Date("2026-10-05T08:01:00.000Z"), send: async () => undefined })).state, "accepted");
+  jobs.updateDailyRitualPreferences(userA, {
+    ...input,
+    timeZone: "America/New_York",
+    morningPlan: { enabled: true, localTime: "10:00" },
+  }, Date.parse("2026-10-05T08:05:00.000Z"));
+  const active = db.prepare(`
+    SELECT source_key, run_at FROM notification_jobs
+    WHERE user_id = ? AND scenario = 'morning_plan' AND cancelled_at IS NULL AND completed_at IS NULL
+  `).all(userA).map((row) => ({ ...row }));
+  assert.deepEqual(active, [{ source_key: "2026-10-06", run_at: "2026-10-06T14:00:00.000Z" }]);
+});
+
 test("nekintantis 0 min. planas po pradžios neatšaukia dar galiojančio darbo", async () => {
   push.savePushSubscription(userA, sample("task-start-zero"));
   const startsAt = Date.parse("2099-11-05T13:00:00.000Z");

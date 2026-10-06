@@ -135,6 +135,8 @@ describe("backup", { concurrency: false }, () => {
     const originalId = seedUserTables();
     db.prepare("UPDATE task_plans SET scheduled_at = '2099-12-01T08:00:00.000Z' WHERE user_id = ?").run(testUserId);
     db.prepare("INSERT INTO notification_preferences (user_id, scenario, enabled, lead_minutes) VALUES (?, 'task_start', 1, 10)").run(testUserId);
+    db.prepare("INSERT INTO notification_preferences (user_id, scenario, enabled, local_time, time_zone) VALUES (?, 'morning_plan', 1, '08:00', 'Europe/Vilnius')").run(testUserId);
+    db.prepare("INSERT INTO notification_preferences (user_id, scenario, enabled, local_time, time_zone) VALUES (?, 'evening_close', 1, '18:00', 'Europe/Vilnius')").run(testUserId);
     const backup = createBackup();
     assert.ok(backup.toString("utf8", 0, 16).startsWith("SQLite format 3"));
 
@@ -162,6 +164,7 @@ describe("backup", { concurrency: false }, () => {
     assert.equal(db.prepare("SELECT enabled FROM notification_preferences WHERE user_id = ? AND scenario = 'focus_end'").get(testUserId).enabled, 1);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_jobs WHERE scenario = 'focus_end'").get().count, 0, "restore must clear old operational notification jobs");
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_jobs WHERE scenario = 'task_start' AND cancelled_at IS NULL").get().count, 1, "restore must rebuild task-start jobs from restored plans");
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_jobs WHERE scenario IN ('morning_plan', 'evening_close') AND cancelled_at IS NULL").get().count, 2, "restore must rebuild future daily ritual jobs");
     assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
 
     // DB must remain writable after restore
@@ -304,6 +307,20 @@ describe("backup", { concurrency: false }, () => {
     assert.throws(
       () => restoreBackup(readFileSync(incompletePath)),
       (error) => error instanceof BackupError && /pranešimų nuostatų lentelės/i.test(error.message),
+    );
+  });
+
+  it("schema v5 backup rejects malformed enabled daily ritual time settings", () => {
+    seedUserTables();
+    db.prepare("INSERT INTO notification_preferences (user_id, scenario, enabled, local_time, time_zone) VALUES (?, 'morning_plan', 1, '08:00', 'Europe/Vilnius')").run(testUserId);
+    const invalidPath = path.join(temp, "invalid-daily-ritual.db");
+    writeFileSync(invalidPath, createBackup(), { mode: 0o600 });
+    const invalid = new DatabaseSync(invalidPath);
+    invalid.prepare("UPDATE notification_preferences SET local_time = '25:90', time_zone = '+03:00' WHERE scenario = 'morning_plan'").run();
+    invalid.close();
+    assert.throws(
+      () => restoreBackup(readFileSync(invalidPath)),
+      (error) => error instanceof BackupError && /dienos ritualų laiko/i.test(error.message),
     );
   });
 

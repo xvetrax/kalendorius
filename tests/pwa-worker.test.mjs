@@ -161,6 +161,24 @@ test("užduoties pradžios pranešimas turi fiksuotą privatų tekstą ir atskir
   assert.ok(!JSON.stringify(worker.notifications[0]).includes("local:1"));
 });
 
+test("ryto ir vakaro ritualai turi fiksuotą privatų tekstą bei atskiras žymas", async () => {
+  const worker = await loadWorker();
+  for (const [type, body, tag] of [
+    ["morning_plan", "Metas peržiūrėti ir susiplanuoti savo dieną.", "dienos-planas-morning-plan"],
+    ["evening_close", "Metas užbaigti dieną ir pasiruošti rytojui.", "dienos-planas-evening-close"],
+  ]) {
+    const push = lifetimeEvent();
+    push.event.data = { json: () => ({ v: 1, type, title: "Slaptas planas", body: "Privatus tekstas", timeZone: "Europe/Vilnius" }) };
+    worker.listeners.get("push")(push.event);
+    await push.done();
+    const notification = worker.notifications.at(-1);
+    assert.equal(notification.options.body, body);
+    assert.equal(notification.options.tag, tag);
+    assert.ok(!JSON.stringify(notification).includes("Slaptas planas"));
+    assert.ok(!JSON.stringify(notification).includes("Europe/Vilnius"));
+  }
+});
+
 test("paspaustas pranešimas atidaro tik programėlės šaknį", async () => {
   const worker = await loadWorker();
   worker.setWindow("https://planner.example/calendar");

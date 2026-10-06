@@ -45,8 +45,10 @@ self.addEventListener("push", (event) => {
     test: { body: "Pranešimai šiame įrenginyje veikia.", tag: "dienos-planas-test" },
     focus_end: { body: "Fokusavimo sesija baigėsi — metas atsikvėpti.", tag: "dienos-planas-focus-end" },
     task_start: { body: "Suplanuota užduotis netrukus prasidės.", tag: "dienos-planas-task-start" },
+    morning_plan: { body: "Metas peržiūrėti ir susiplanuoti savo dieną.", tag: "dienos-planas-morning-plan" },
+    evening_close: { body: "Metas užbaigti dieną ir pasiruošti rytojui.", tag: "dienos-planas-evening-close" },
   };
-  const message = payload?.v === 1 && (payload.type === "focus_end" || payload.type === "task_start")
+  const message = payload?.v === 1 && ["focus_end", "task_start", "morning_plan", "evening_close"].includes(payload.type)
     ? messages[payload.type]
     : payload?.type === "test" ? messages.test : { body: "Turi naują priminimą.", tag: "dienos-planas-reminder" };
   event.waitUntil(self.registration.showNotification("Dienos planas", {

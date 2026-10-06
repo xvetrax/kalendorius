@@ -130,7 +130,10 @@ export function readStoredPushSubscription(subscriptionId: number, userId: numbe
   `).get(subscriptionId, userId) as StoredPushSubscription | undefined;
 }
 
-export async function sendStoredPush(row: StoredPushSubscription, payload: { v: 1; type: "focus_end" | "task_start" }) {
+export async function sendStoredPush(row: StoredPushSubscription, payload: {
+  v: 1;
+  type: "focus_end" | "task_start" | "morning_plan" | "evening_close";
+}) {
   const config = pushConfiguration();
   if (!config.configured) {
     throw new PushNotificationError("Pranešimai serveryje dar nesukonfigūruoti.", 409, "push_not_configured");

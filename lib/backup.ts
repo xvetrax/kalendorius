@@ -8,7 +8,12 @@ import {
   normalizeMultiAccountData,
 } from "@/lib/db-multi";
 import { pauseNotificationWorker, resumeNotificationWorker } from "@/lib/notification-worker";
-import { rebuildTaskStartNotificationsInTransaction } from "@/lib/notification-jobs";
+import { canonicalCalendarTimeZone } from "@/lib/calendar-time-zone";
+import {
+  isDailyRitualLocalTime,
+  rebuildDailyRitualNotificationsInTransaction,
+  rebuildTaskStartNotificationsInTransaction,
+} from "@/lib/notification-jobs";
 
 // ---------------------------------------------------------------------------
 // Table registry
@@ -95,7 +100,9 @@ const REQUIRED_COLUMNS: Record<AllTable, readonly string[]> = {
     "created_at", "updated_at", "last_test_attempt_at", "last_push_accepted_at", "failure_count",
   ],
   push_rate_limits: ["user_id", "last_test_attempt_at"],
-  notification_preferences: ["user_id", "scenario", "enabled", "private_content", "updated_at"],
+  notification_preferences: [
+    "user_id", "scenario", "enabled", "lead_minutes", "local_time", "time_zone", "private_content", "updated_at",
+  ],
   security_events: ["id", "event_type", "created_at"],
   tasks: ["id", "user_id", "title", "notes", "due_at", "duration_minutes", "completed", "created_at"],
   task_plans: [
@@ -417,6 +424,20 @@ function validateBackup(database: DatabaseSync): string[] {
     }
   }
 
+  if (incomingVersion >= 5 && tableNames.has("notification_preferences")) {
+    const rituals = database.prepare(`
+      SELECT enabled, local_time, time_zone
+      FROM notification_preferences
+      WHERE scenario IN ('morning_plan', 'evening_close')
+    `).all() as { enabled: number; local_time: string | null; time_zone: string | null }[];
+    if (rituals.some((row) =>
+      (row.local_time !== null && !isDailyRitualLocalTime(row.local_time))
+      || (row.time_zone !== null && !canonicalCalendarTimeZone(row.time_zone))
+      || (Boolean(row.enabled) && (!isDailyRitualLocalTime(row.local_time) || !canonicalCalendarTimeZone(row.time_zone))))) {
+      throw new BackupError("Atsarginėje kopijoje yra neteisingų dienos ritualų laiko nuostatų.");
+    }
+  }
+
   return tables.map(t => t.name);
 }
 
@@ -493,6 +514,7 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
           DELETE FROM push_rate_limits;
         `);
         rebuildTaskStartNotificationsInTransaction(db);
+        rebuildDailyRitualNotificationsInTransaction(db);
 
         const foreignKeyProblems = db.prepare("PRAGMA foreign_key_check").all();
         if (foreignKeyProblems.length > 0) {
