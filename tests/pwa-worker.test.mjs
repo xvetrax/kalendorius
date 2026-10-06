@@ -122,7 +122,7 @@ test("aktyvuojant pašalinamas tik senas programėlės podėlis", async () => {
   const activate = lifetimeEvent();
   worker.listeners.get("activate")(activate.event);
   await activate.done();
-  assert.deepEqual(worker.deleted, ["dienos-planas-public-v0"]);
+  assert.deepEqual(worker.deleted, ["dienos-planas-public-v0", "dienos-planas-public-v1"]);
 });
 
 test("push turinys yra fiksuotas ir neparodo serverio atsiųsto privataus teksto", async () => {
@@ -147,6 +147,18 @@ test("fokusavimo pranešimas turi fiksuotą privatų tekstą ir atskirą žymą"
   assert.equal(worker.notifications[0].options.body, "Fokusavimo sesija baigėsi — metas atsikvėpti.");
   assert.equal(worker.notifications[0].options.tag, "dienos-planas-focus-end");
   assert.ok(!JSON.stringify(worker.notifications[0]).includes("Slapta užduotis"));
+});
+
+test("užduoties pradžios pranešimas turi fiksuotą privatų tekstą ir atskirą žymą", async () => {
+  const worker = await loadWorker();
+  const push = lifetimeEvent();
+  push.event.data = { json: () => ({ v: 1, type: "task_start", title: "Slapta užduotis", taskKey: "local:1" }) };
+  worker.listeners.get("push")(push.event);
+  await push.done();
+  assert.equal(worker.notifications[0].options.body, "Suplanuota užduotis netrukus prasidės.");
+  assert.equal(worker.notifications[0].options.tag, "dienos-planas-task-start");
+  assert.ok(!JSON.stringify(worker.notifications[0]).includes("Slapta užduotis"));
+  assert.ok(!JSON.stringify(worker.notifications[0]).includes("local:1"));
 });
 
 test("paspaustas pranešimas atidaro tik programėlės šaknį", async () => {

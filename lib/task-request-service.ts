@@ -5,6 +5,7 @@ import {
   makeMicrosoftTaskGatewayForConnection,
 } from "@/lib/task-gateway";
 import { createTaskService } from "@/lib/task-service";
+import { createTaskStartNotificationHooks } from "@/lib/notification-jobs";
 
 /** Builds one account-bound gateway per active integration for every task route. */
 export function taskServiceForRequest(request: Request) {
@@ -15,5 +16,5 @@ export function taskServiceForRequest(request: Request) {
   const google = listConnections(user.id, "google")
     .filter((connection) => connection.status === "active")
     .map((connection) => makeGoogleTaskGatewayForConnection(user.id, connection));
-  return createTaskService(db, user.id, microsoft, google);
+  return createTaskService(db, user.id, microsoft, google, createTaskStartNotificationHooks(db, user.id));
 }

@@ -8,6 +8,7 @@ import {
   normalizeMultiAccountData,
 } from "@/lib/db-multi";
 import { pauseNotificationWorker, resumeNotificationWorker } from "@/lib/notification-worker";
+import { rebuildTaskStartNotificationsInTransaction } from "@/lib/notification-jobs";
 
 // ---------------------------------------------------------------------------
 // Table registry
@@ -491,6 +492,7 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
           DELETE FROM push_subscriptions;
           DELETE FROM push_rate_limits;
         `);
+        rebuildTaskStartNotificationsInTransaction(db);
 
         const foreignKeyProblems = db.prepare("PRAGMA foreign_key_check").all();
         if (foreignKeyProblems.length > 0) {

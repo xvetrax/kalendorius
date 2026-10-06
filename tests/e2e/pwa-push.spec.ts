@@ -53,6 +53,11 @@ test("leidimo neprašo atidarius nustatymus, o aiškus veiksmas įregistruoja į
   await installPushBrowser(page);
   let subscriptions: Array<Record<string, unknown>> = [];
   let posted: Record<string, unknown> = {};
+  let preferences = {
+    focusEnd: { enabled: false },
+    taskStart: { enabled: false, leadMinutes: 10 },
+  };
+  const preferencePatches: Array<Record<string, unknown>> = [];
   await page.route("**/api/push/subscriptions", async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({ json: { configured: true, publicKey: "B".repeat(87), subscriptions } });
@@ -70,6 +75,22 @@ test("leidimo neprašo atidarius nustatymus, o aiškus veiksmas įregistruoja į
     return route.fulfill({ status: 201, json: { id: 71, subscriptions } });
   });
   await page.route("**/api/push/test", route => route.fulfill({ json: { ok: true } }));
+  await page.route("**/api/notifications/preferences", async route => {
+    if (route.request().method() === "PATCH") {
+      const patch = route.request().postDataJSON() as Record<string, unknown>;
+      preferencePatches.push(patch);
+      if (typeof patch.taskStartEnabled === "boolean" && typeof patch.taskStartLeadMinutes === "number") {
+        preferences = {
+          ...preferences,
+          taskStart: {
+            enabled: patch.taskStartEnabled,
+            leadMinutes: patch.taskStartLeadMinutes,
+          },
+        };
+      }
+    }
+    await route.fulfill({ json: preferences });
+  });
 
   await page.goto("/");
   await page.getByRole("button", { name: "Nustatymai", exact: true }).click();
@@ -82,6 +103,13 @@ test("leidimo neprašo atidarius nustatymus, o aiškus veiksmas įregistruoja į
   expect(await page.evaluate(() => (window as unknown as { __pushTest: { prompts: number; subscribed: boolean } }).__pushTest.prompts)).toBe(1);
   expect(await page.evaluate(() => (window as unknown as { __pushTest: { subscribed: boolean } }).__pushTest.subscribed)).toBe(true);
   expect(posted.endpoint).toBe(endpoint);
+
+  await page.locator("label.freeToggle").filter({ hasText: "Artėja suplanuota užduotis" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Užduočių pradžios priminimai įjungti" })).toBeVisible();
+  expect(preferencePatches.at(-1)).toEqual({ taskStartEnabled: true, taskStartLeadMinutes: 10 });
+
+  await page.locator(".pushScenarioRow select").selectOption("30");
+  expect(preferencePatches.at(-1)).toEqual({ taskStartEnabled: true, taskStartLeadMinutes: 30 });
 
   await page.getByRole("button", { name: "Bandyti" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Bandomasis pranešimas išsiųstas" })).toBeVisible();

@@ -33,6 +33,7 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 - veikti vietoje arba dviejuose neprivilegijuotuose „Docker“ servisuose — web programoje ir pranešimų workeryje — su bendru išliekančiu duomenų tomu;
 - įdiegti kaip PWA ir kiekviename palaikomame įrenginyje atskirai įjungti, išbandyti arba pašalinti Web Push prenumeratą;
 - pasirinktinai gauti privatų fokusavimo sesijos pabaigos pranešimą net uždarius PWA; patvarus workeris po perkrovimo nebekartoja neaiškios jau pradėtos siuntos;
+- pasirinktinai gauti fiksuoto privataus turinio pranešimą prieš programėlėje suplanuotos užduoties pradžią; nustatymuose pasirinkti pradžios momentą, 5–60 min. arba vienos dienos išankstinį laiką;
 - užšifruoti „Google“ ir „Microsoft“ atnaujinimo žetonus prieš išsaugant SQLite bazėje;
 - aiškiai rodyti abiejų integracijų būseną ir saugiai pašalinti vietoje saugomus OAuth žetonus mygtuku „Atjungti“;
 - kurti atskiras paskyras pirmo Google arba Microsoft OIDC prisijungimo metu, saugoti atšaukiamas DB sesijas ir izoliuoti kiekvieno naudotojo duomenis;
@@ -71,7 +72,7 @@ npm start
 npm run worker
 ```
 
-`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo pranešimų workerį, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-05 pilnas ciklas baigtas su 340/340 Node testų ir 62/62 Playwright scenarijais.
+`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo ir užduočių pradžios pranešimų workerį, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus vasaros / žiemos laiko ribas bei saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-06 pilnas ciklas baigtas su 354/354 Node testų ir 62/62 Playwright scenarijais.
 
 `test:smoke` paleidžia tik lokalią produkcinę kopiją su laikina DB ir neprijungtomis integracijomis. Tikrina CSS / JS / favicon, OAuth klaidas, CSRF, atjungimo API bei užduoties sukūrimą, planavimą, perkėlimą, trukmę, išplanavimą ir užbaigimą. Tikrina, kad terminas nekinta ir pasenusi plano versija atmetama. Užbaigęs pašalina savo testinę DB.
 
@@ -85,7 +86,7 @@ npm run worker
 
 ## Atsarginės kopijos ir atkūrimas
 
-Atverk **Nustatymai → Duomenys**. Administratoriaus **Pilna kopija** išsaugo visą kelių naudotojų DB: paskyras, savininkams priskirtas užduotis ir planus, tiekėjų talpyklą, sesijų būseną, pranešimų nuostatas, kalendoriaus kūrimo operacijų registrą, užšifruotus OAuth atnaujinimo žetonus bei užšifruotas push prenumeratas. Failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju naudotojai turi iš naujo prijungti paskyras. Atkūrimas pristabdo workerį ir tyčia pašalina push prenumeratas bei laukiančių pranešimų eilę, kad nukopijuotas diegimas nepradėtų siųsti į seno serverio įrenginius. Paprasto naudotojo **Eksportuoti (be žetonų)** įtraukia tik jo darbo duomenis, be OAuth ar push paslapčių ir kitų naudotojų eilučių.
+Atverk **Nustatymai → Duomenys**. Administratoriaus **Pilna kopija** išsaugo visą kelių naudotojų DB: paskyras, savininkams priskirtas užduotis ir planus, tiekėjų talpyklą, sesijų būseną, pranešimų nuostatas, kalendoriaus kūrimo operacijų registrą, užšifruotus OAuth atnaujinimo žetonus bei užšifruotas push prenumeratas. Failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju naudotojai turi iš naujo prijungti paskyras. Atkūrimas pristabdo workerį ir tyčia pašalina push prenumeratas bei seną operacinę pranešimų eilę, kad nukopijuotas diegimas nepradėtų siųsti į seno serverio įrenginius. Iš atkurtų galiojančių užduočių planų iš naujo sudaromi būsimi užduočių pradžios darbai, tačiau jie nesiunčiami, kol naudotojas naujame diegime vėl neprijungia įrenginio. Paprasto naudotojo **Eksportuoti (be žetonų)** įtraukia tik jo darbo duomenis, be OAuth ar push paslapčių ir kitų naudotojų eilučių.
 
 **Atkurti iš kopijos** priima iki 100 MB SQLite failą. Prieš pakeisdama duomenis programa patikrina failo vientisumą, lenteles ir stulpelius, tada vienoje transakcijoje pakeičia visų programos lentelių duomenis. Klaidinga ar naujesnės nepalaikomos schemos kopija esamų duomenų nekeičia. Po sėkmingo atkūrimo puslapis persikrauna. Prieš programos atnaujinimą parsisiųsk pilną kopiją.
 

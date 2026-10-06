@@ -133,6 +133,8 @@ describe("backup", { concurrency: false }, () => {
 
   it("creates a complete SQLite backup and restores every app table transactionally", () => {
     const originalId = seedUserTables();
+    db.prepare("UPDATE task_plans SET scheduled_at = '2099-12-01T08:00:00.000Z' WHERE user_id = ?").run(testUserId);
+    db.prepare("INSERT INTO notification_preferences (user_id, scenario, enabled, lead_minutes) VALUES (?, 'task_start', 1, 10)").run(testUserId);
     const backup = createBackup();
     assert.ok(backup.toString("utf8", 0, 16).startsWith("SQLite format 3"));
 
@@ -147,7 +149,7 @@ describe("backup", { concurrency: false }, () => {
     assert.ok(result.tablesRestored >= 2, "must restore at least users and tasks");
     assert.equal(db.prepare("SELECT title FROM tasks WHERE id = ?").get(originalId)?.title, "Backup task");
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM tasks").get().count, 1);
-    assert.equal(db.prepare("SELECT scheduled_at FROM task_plans").get()?.scheduled_at, "2026-10-01T08:00:00.000Z");
+    assert.equal(db.prepare("SELECT scheduled_at FROM task_plans").get()?.scheduled_at, "2099-12-01T08:00:00.000Z");
     assert.equal(db.prepare("SELECT mirror_orphan_title FROM task_plans").get()?.mirror_orphan_title, "Likęs blokas");
     assert.equal(db.prepare("SELECT source FROM remote_tasks").get()?.source, "google");
     assert.equal(db.prepare("SELECT source FROM remote_task_lists").get()?.source, "google");
@@ -158,7 +160,8 @@ describe("backup", { concurrency: false }, () => {
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM push_subscriptions").get().count, 0, "restore must invalidate push capabilities");
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM push_rate_limits").get().count, 0, "restore must clear stale push throttles");
     assert.equal(db.prepare("SELECT enabled FROM notification_preferences WHERE user_id = ? AND scenario = 'focus_end'").get(testUserId).enabled, 1);
-    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_jobs").get().count, 0, "restore must clear operational notification jobs");
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_jobs WHERE scenario = 'focus_end'").get().count, 0, "restore must clear old operational notification jobs");
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_jobs WHERE scenario = 'task_start' AND cancelled_at IS NULL").get().count, 1, "restore must rebuild task-start jobs from restored plans");
     assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
 
     // DB must remain writable after restore

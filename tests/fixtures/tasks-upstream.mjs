@@ -18,6 +18,7 @@ export const upstream = {
   calls: [], microsoft: microsoftSeed(), google: googleSeed(),
   reset() {
     this.calls.length = 0; this.microsoft = microsoftSeed(); this.google = googleSeed();
+    this.failGoogleTaskGetOnce = false;
     this.microsoftLists = new Map([["microsoft-list", {id:"microsoft-list",displayName:"Microsoft darbai",wellknownListName:"defaultList"}]]);
     this.googleLists = new Map([["google-list", {id:"google-list",title:"Google darbai",etag:"google-list-v1",_revision:1}]]);
     this.microsoftListTasks = new Map([["microsoft-list",this.microsoft]]);
@@ -85,7 +86,13 @@ function taskApi(source, url, init) {
   const id = decodeURIComponent(match[2]);
   const task = map.get(id);
   if (!task) return Response.json({error: "Missing task"}, {status: 404});
-  if (method === "GET") return taskResponse(task);
+  if (method === "GET") {
+    if (source === "google" && upstream.failGoogleTaskGetOnce) {
+      upstream.failGoogleTaskGetOnce = false;
+      return Response.json({error: "Synthetic confirmation failure"}, {status: 503});
+    }
+    return taskResponse(task);
+  }
   if (method === "PATCH") {
     const ifMatch=new Headers(init?.headers).get("If-Match");
     if (ifMatch && ifMatch !== task["@odata.etag"]) return Response.json({error:"Version mismatch"},{status:412});

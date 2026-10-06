@@ -69,6 +69,8 @@ beforeEach(() => {
     DELETE FROM notification_jobs;
     DELETE FROM notification_preferences;
     DELETE FROM push_subscriptions;
+    DELETE FROM task_plans WHERE user_id IN (${userA}, ${userB});
+    DELETE FROM tasks WHERE user_id IN (${userA}, ${userB});
     UPDATE notification_runtime SET paused = 0, in_flight = 0, pause_until = NULL, pause_owner = NULL, heartbeat_at = NULL, worker_id = NULL WHERE id = 1;
   `);
 });
@@ -94,6 +96,13 @@ test("nuostatos ir fokusavimo API yra apsaugoti nuo CSRF ir atskirti pagal naudo
   assert.equal(enabled.status, 200);
   assert.equal((await enabled.json()).focusEnd.enabled, true);
   assert.equal(jobs.getNotificationPreferences(userB).focusEnd.enabled, false);
+  assert.deepEqual(jobs.getNotificationPreferences(userA).taskStart, { enabled: false, leadMinutes: 10 });
+
+  const invalidTaskStart = await preferencesRoute.PATCH(request("/api/notifications/preferences", {
+    method: "PATCH",
+    body: { taskStartEnabled: true, taskStartLeadMinutes: 7 },
+  }));
+  assert.equal(invalidTaskStart.status, 400);
 
   const now = Date.parse("2026-10-05T10:00:00.000Z");
   const operationId = "11111111-1111-4111-8111-111111111111";
@@ -125,6 +134,149 @@ test("nuostatos ir fokusavimo API yra apsaugoti nuo CSRF ir atskirti pagal naudo
   const foreignCancel = await focusRoute.DELETE(request("/api/notifications/focus", { method: "DELETE", cookie: cookieB, body: { operationId: apiOperation } }));
   assert.equal(foreignCancel.status, 200);
   assert.equal((await foreignCancel.json()).cancelled, true);
+});
+
+test("užduoties pradžios nuostata sukuria, pakeičia ir atšaukia vieną aktyvią darbo kartą", async () => {
+  const start = Date.parse("2099-11-05T10:00:00.000Z");
+  const taskKey = "local:501";
+  db.prepare("INSERT INTO tasks (id, user_id, title) VALUES (501, ?, 'Primenama')").run(userA);
+  db.prepare("INSERT INTO task_plans (user_id, task_key, scheduled_at, schedule_version) VALUES (?, ?, ?, 1)")
+    .run(userA, taskKey, new Date(start).toISOString());
+  const enabled = await preferencesRoute.PATCH(request("/api/notifications/preferences", {
+    method: "PATCH",
+    body: { taskStartEnabled: true, taskStartLeadMinutes: 10 },
+  }));
+  assert.equal(enabled.status, 200);
+  assert.deepEqual((await enabled.json()).taskStart, { enabled: true, leadMinutes: 10 });
+
+  let active = db.prepare(`SELECT id, run_at, expires_at FROM notification_jobs
+    WHERE user_id = ? AND scenario = 'task_start' AND cancelled_at IS NULL AND completed_at IS NULL`).all(userA);
+  assert.equal(active.length, 1);
+  assert.equal(active[0].run_at, "2099-11-05T09:50:00.000Z");
+  assert.equal(active[0].expires_at, "2099-11-05T10:15:00.000Z");
+
+  const hooks = jobs.createTaskStartNotificationHooks(db, userA, () => Date.parse("2099-10-05T10:00:00.000Z"));
+  hooks.sync(taskKey, "2099-11-05T10:00:00.000Z", 1);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA).count, 1);
+
+  hooks.sync(taskKey, "2099-11-05T11:00:00.000Z", 2);
+  active = db.prepare(`SELECT id, run_at FROM notification_jobs
+    WHERE user_id = ? AND scenario = 'task_start' AND cancelled_at IS NULL AND completed_at IS NULL`).all(userA);
+  assert.equal(active.length, 1);
+  assert.equal(active[0].run_at, "2099-11-05T10:50:00.000Z");
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start' AND cancelled_at IS NOT NULL").get(userA).count, 1);
+
+  const disabled = await preferencesRoute.PATCH(request("/api/notifications/preferences", {
+    method: "PATCH",
+    body: { taskStartEnabled: false, taskStartLeadMinutes: 10 },
+  }));
+  assert.equal(disabled.status, 200);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start' AND cancelled_at IS NULL AND completed_at IS NULL").get(userA).count, 0);
+});
+
+test("užduoties pradžios workeris siunčia tik fiksuotą privatų payload", async () => {
+  push.savePushSubscription(userA, sample("task-start"));
+  const startsAt = Date.parse("2099-11-05T12:00:00.000Z");
+  jobs.updateTaskStartPreference(userA, true, 5);
+  const hooks = jobs.createTaskStartNotificationHooks(db, userA, () => startsAt - 60 * 60_000);
+  hooks.sync("local:777", new Date(startsAt).toISOString(), 1);
+  const sent = [];
+  const result = await worker.processNotificationTick({
+    workerId: "task-start",
+    now: new Date(startsAt - 4 * 60_000),
+    send: async (_subscription, payload) => { sent.push(payload); },
+  });
+  assert.equal(result.state, "accepted");
+  assert.deepEqual(sent, [{ v: 1, type: "task_start" }]);
+  hooks.sync("local:777", new Date(startsAt).toISOString(), 1);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA).count, 1);
+  assert.equal((await worker.processNotificationTick({ workerId: "task-start-repeat", now: new Date(startsAt - 3 * 60_000), send: async () => { throw new Error("must not resend"); } })).processed, false);
+});
+
+test("nekintantis 0 min. planas po pradžios neatšaukia dar galiojančio darbo", async () => {
+  push.savePushSubscription(userA, sample("task-start-zero"));
+  const startsAt = Date.parse("2099-11-05T13:00:00.000Z");
+  jobs.updateTaskStartPreference(userA, true, 0);
+  jobs.createTaskStartNotificationHooks(db, userA, () => startsAt - 60_000)
+    .sync("local:zero", new Date(startsAt).toISOString(), 1);
+  jobs.createTaskStartNotificationHooks(db, userA, () => startsAt + 1_000)
+    .sync("local:zero", new Date(startsAt).toISOString(), 1);
+  const scheduled = db.prepare("SELECT id, cancelled_at FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA);
+  assert.equal(scheduled.cancelled_at, null);
+  assert.equal((await worker.processNotificationTick({ workerId: "task-start-zero", now: new Date(startsAt + 1_000), send: async () => undefined })).state, "accepted");
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA).count, 1);
+});
+
+test("Google užduoties perkėlimas išsaugo jau priimtą priminimo kartą", async () => {
+  push.savePushSubscription(userA, sample("moved-accepted"));
+  jobs.updateTaskStartPreference(userA, true, 5);
+  const startsAt = Date.parse("2099-11-06T12:00:00.000Z");
+  const oldKey = "google:old-list:accepted";
+  const newKey = "google:new-list:accepted";
+  const taskHooks = jobs.createTaskStartNotificationHooks(db, userA, () => startsAt - 60 * 60_000);
+  taskHooks.sync(oldKey, new Date(startsAt).toISOString(), 1);
+  const before = db.prepare("SELECT id, source_key FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA);
+  assert.equal((await worker.processNotificationTick({ workerId: "move-accepted", now: new Date(startsAt - 4 * 60_000), send: async () => undefined })).state, "accepted");
+
+  taskHooks.move(oldKey, newKey, new Date(startsAt).toISOString(), 2);
+  const after = db.prepare("SELECT id, source_key, completed_at FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA);
+  assert.equal(after.id, before.id);
+  assert.notEqual(after.source_key, before.source_key);
+  assert.ok(after.completed_at);
+  assert.equal((await worker.processNotificationTick({ workerId: "move-accepted-repeat", now: new Date(startsAt - 3 * 60_000), send: async () => { throw new Error("must not resend"); } })).processed, false);
+});
+
+test("atšaukta užbaigta užduotis gali būti iš naujo suplanuota tuo pačiu laiku", () => {
+  jobs.updateTaskStartPreference(userA, true, 5);
+  const startsAt = Date.parse("2099-11-06T14:00:00.000Z");
+  const taskKey = "local:reopened";
+  const taskHooks = jobs.createTaskStartNotificationHooks(db, userA, () => startsAt - 60 * 60_000);
+  taskHooks.sync(taskKey, new Date(startsAt).toISOString(), 1);
+  db.prepare("UPDATE notification_jobs SET completed_at = CURRENT_TIMESTAMP WHERE user_id = ? AND scenario = 'task_start'").run(userA);
+  taskHooks.cancel(taskKey);
+  taskHooks.sync(taskKey, new Date(startsAt).toISOString(), 2);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA).count, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start' AND cancelled_at IS NULL AND completed_at IS NULL").get(userA).count, 1);
+});
+
+test("Google užduoties perkėlimas išsaugo neaiškią pristatymo būseną", async () => {
+  push.savePushSubscription(userA, sample("moved-ambiguous"));
+  jobs.updateTaskStartPreference(userA, true, 5);
+  const startsAt = Date.parse("2099-11-07T12:00:00.000Z");
+  const oldKey = "google:old-list:ambiguous";
+  const newKey = "google:new-list:ambiguous";
+  const taskHooks = jobs.createTaskStartNotificationHooks(db, userA, () => startsAt - 60 * 60_000);
+  taskHooks.sync(oldKey, new Date(startsAt).toISOString(), 1);
+  const jobId = db.prepare("SELECT id FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA).id;
+  assert.equal((await worker.processNotificationTick({ workerId: "move-ambiguous", now: new Date(startsAt - 4 * 60_000), send: async () => { throw new Error("timeout"); } })).state, "ambiguous");
+
+  taskHooks.move(oldKey, newKey, new Date(startsAt).toISOString(), 2);
+  assert.equal(db.prepare("SELECT id FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA).id, jobId);
+  assert.equal(db.prepare("SELECT state FROM notification_deliveries WHERE job_id = ?").get(jobId).state, "ambiguous");
+  assert.equal((await worker.processNotificationTick({ workerId: "move-ambiguous-repeat", now: new Date(startsAt - 3 * 60_000), send: async () => { throw new Error("must not resend"); } })).processed, false);
+});
+
+test("Google užduoties perkėlimas nekeičia dalinai išsiųsto kelių įrenginių darbo", async () => {
+  push.savePushSubscription(userA, sample("moved-partial-a"));
+  push.savePushSubscription(userA, sample("moved-partial-b"));
+  jobs.updateTaskStartPreference(userA, true, 5);
+  const startsAt = Date.parse("2099-11-08T12:00:00.000Z");
+  const oldKey = "google:old-list:partial";
+  const newKey = "google:new-list:partial";
+  const taskHooks = jobs.createTaskStartNotificationHooks(db, userA, () => startsAt - 60 * 60_000);
+  taskHooks.sync(oldKey, new Date(startsAt).toISOString(), 1);
+  const sent = [];
+  const send = async (subscription) => { sent.push(subscription.id); };
+  const due = new Date(startsAt - 4 * 60_000);
+  assert.equal((await worker.processNotificationTick({ workerId: "move-partial-a", now: due, send })).state, "accepted");
+  const jobId = db.prepare("SELECT id FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA).id;
+
+  taskHooks.move(oldKey, newKey, new Date(startsAt).toISOString(), 2);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id = ? AND scenario = 'task_start'").get(userA).count, 1);
+  assert.deepEqual(db.prepare("SELECT state FROM notification_deliveries WHERE job_id = ? ORDER BY id").all(jobId).map(row => row.state), ["accepted", "queued"]);
+  assert.equal((await worker.processNotificationTick({ workerId: "move-partial-b", now: due, send })).state, "accepted");
+  assert.equal((await worker.processNotificationTick({ workerId: "move-partial-done", now: due, send })).processed, false);
+  assert.equal(new Set(sent).size, 2);
 });
 
 test("workeris išplečia vieną darbą į visus įrenginius ir kiekvieną siunčia vieną kartą", async () => {

@@ -29,6 +29,9 @@ const {encrypt}=await import("../lib/secrets.ts");
 // Multi-user db: routes use this for tasks/plans; we also bootstrap a test session here
 const {db:multiDb,createSession}=await import("../lib/db-multi.ts");
 const {SESSION_COOKIE}=await import("../lib/db-multi.ts");
+const notificationJobs=await import("../lib/notification-jobs.ts");
+const notificationWorker=await import("../lib/notification-worker.ts");
+const pushNotifications=await import("../lib/push-notifications.ts");
 const route=await import("../app/api/tasks/route.ts");
 const moveRoute=await import("../app/api/tasks/move/route.ts");
 const orderRoute=await import("../app/api/tasks/order/route.ts");
@@ -55,7 +58,7 @@ bootstrapTestUser();
 const taskScope="https://www.googleapis.com/auth/tasks";
 function connect() {
   // Clear multi-user tables for this user
-  multiDb.exec(`DELETE FROM tasks WHERE user_id=${testUserId};DELETE FROM remote_tasks WHERE user_id=${testUserId};DELETE FROM remote_task_lists WHERE user_id=${testUserId};DELETE FROM task_plans WHERE user_id=${testUserId};DELETE FROM oauth_connections WHERE user_id=${testUserId};`);
+  multiDb.exec(`DELETE FROM notification_deliveries WHERE job_id IN (SELECT id FROM notification_jobs WHERE user_id=${testUserId});DELETE FROM notification_jobs WHERE user_id=${testUserId};DELETE FROM notification_preferences WHERE user_id=${testUserId};DELETE FROM push_subscriptions WHERE user_id=${testUserId};DELETE FROM tasks WHERE user_id=${testUserId};DELETE FROM remote_tasks WHERE user_id=${testUserId};DELETE FROM remote_task_lists WHERE user_id=${testUserId};DELETE FROM task_plans WHERE user_id=${testUserId};DELETE FROM oauth_connections WHERE user_id=${testUserId};`);
   // Insert per-user oauth_connections (replaces legacy saveSetting for tokens)
   multiDb.prepare(`
     INSERT INTO oauth_connections (user_id, provider, provider_account_id, provider_email, encrypted_refresh_token, scopes, generation, status)
@@ -74,6 +77,32 @@ const request=(method,body,origin="http://localhost:3000")=>new Request(url,{met
 const list=async()=>route.GET(new Request(url+"?envelope=1",{headers:{Cookie:sessionCookie}}));
 const ref=task=>({id:task.id,source:task.source,account_id:task.account_id,list_id:task.list_id,schedule_version:task.schedule_version});
 const item=(envelope,source)=>envelope.items.find(task=>task.source===source);
+const pushSample=suffix=>pushNotifications.parsePushSubscription({
+  endpoint:`https://fcm.googleapis.com/fcm/send/${suffix}`,expirationTime:null,
+  keys:{p256dh:"A".repeat(87),auth:"B".repeat(22)},deviceName:`Chrome ${suffix}`,
+});
+
+async function prepareInterruptedGoogleMove(deliveryState) {
+  notificationJobs.updateTaskStartPreference(testUserId,true,10);
+  pushNotifications.savePushSubscription(testUserId,pushSample(`recovery-${deliveryState}`));
+  upstream.googleLists.set("google-list-b",{id:"google-list-b",title:"Google kitas",etag:"google-list-b-v1",_revision:1});
+  upstream.googleListTasks.set("google-list-b",new Map());
+  const base=Date.now();
+  let task=item(await (await list()).json(),"google");
+  task=await (await route.PATCH(request("PATCH",{...ref(task),scheduled_at:new Date(base+11*60_000).toISOString()}))).json();
+  const before=multiDb.prepare("SELECT id,source_key FROM notification_jobs WHERE user_id=? AND scenario='task_start'").get(testUserId);
+  const sent=await notificationWorker.processNotificationTick({
+    workerId:`recovery-${deliveryState}`,
+    now:new Date(base+2*60_000),
+    send:deliveryState==="accepted" ? async()=>undefined : async()=>{throw new Error("synthetic timeout");},
+  });
+  assert.equal(sent.state,deliveryState);
+  upstream.failGoogleTaskGetOnce=true;
+  const moveResponse=await moveRoute.POST(new Request(url+"/move",{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({...ref(task),destination_list_id:"google-list-b"})}));
+  assert.ok(moveResponse.status>=500);
+  assert.equal(multiDb.prepare("SELECT COUNT(*) count FROM user_settings WHERE user_id=? AND key LIKE 'task_move_pending:%'").get(testUserId).count,1);
+  return {before,task};
+}
 
 test("actual task route lists both providers with collision-safe identities and Google date-only deadlines",async()=>{
   const response=await list(); assert.equal(response.status,200); assert.equal(response.headers.get("cache-control"),"no-store");
@@ -114,6 +143,46 @@ test("scheduling a remote task, moving it and resizing it sends no provider writ
   }
 });
 
+test("task routes atomically replace and cancel task-start notification jobs",async()=>{
+  notificationJobs.updateTaskStartPreference(testUserId,true,10);
+  let task=await (await route.POST(request("POST",{title:"Primenama vietinė"}))).json();
+  task=await (await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2099-11-06T10:00:00.000Z"}))).json();
+  let active=multiDb.prepare(`SELECT id,run_at FROM notification_jobs WHERE user_id=? AND scenario='task_start'
+    AND cancelled_at IS NULL AND completed_at IS NULL`).all(testUserId);
+  assert.equal(active.length,1);assert.equal(active[0].run_at,"2099-11-06T09:50:00.000Z");
+
+  task=await (await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2099-11-06T11:00:00.000Z"}))).json();
+  active=multiDb.prepare(`SELECT id,run_at FROM notification_jobs WHERE user_id=? AND scenario='task_start'
+    AND cancelled_at IS NULL AND completed_at IS NULL`).all(testUserId);
+  assert.equal(active.length,1);assert.equal(active[0].run_at,"2099-11-06T10:50:00.000Z");
+  assert.equal(multiDb.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id=? AND scenario='task_start' AND cancelled_at IS NOT NULL").get(testUserId).count,1);
+
+  task=await (await route.PATCH(request("PATCH",{...ref(task),completed:true}))).json();
+  assert.equal(task.scheduled_at,null);
+  assert.equal(multiDb.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id=? AND scenario='task_start' AND cancelled_at IS NULL AND completed_at IS NULL").get(testUserId).count,0);
+  task=await (await route.PATCH(request("PATCH",{...ref(task),completed:false}))).json();
+  assert.equal(task.scheduled_at,null);
+  task=await (await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2099-11-06T12:00:00.000Z"}))).json();
+  assert.equal(multiDb.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id=? AND scenario='task_start' AND cancelled_at IS NULL AND completed_at IS NULL").get(testUserId).count,1);
+  assert.equal((await route.DELETE(new Request(`${url}?${new URLSearchParams(ref(task))}`,{method:"DELETE",headers:{Origin:"http://localhost:3000",Cookie:sessionCookie}}))).status,200);
+  assert.equal(multiDb.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id=? AND scenario='task_start' AND cancelled_at IS NULL AND completed_at IS NULL").get(testUserId).count,0);
+});
+
+test("fresh provider completion and deletion cancel task-start jobs",async()=>{
+  notificationJobs.updateTaskStartPreference(testUserId,true,10);
+  let envelope=await (await list()).json();
+  let google=item(envelope,"google"),microsoft=item(envelope,"microsoft");
+  google=await (await route.PATCH(request("PATCH",{...ref(google),scheduled_at:"2099-11-08T10:00:00.000Z"}))).json();
+  microsoft=await (await route.PATCH(request("PATCH",{...ref(microsoft),scheduled_at:"2099-11-08T11:00:00.000Z"}))).json();
+  assert.equal(multiDb.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id=? AND scenario='task_start' AND cancelled_at IS NULL AND completed_at IS NULL").get(testUserId).count,2);
+  upstream.google.get(String(google.id)).status="completed";
+  upstream.microsoft.delete(String(microsoft.id));
+  envelope=await (await list()).json();
+  assert.equal(envelope.items.find(task=>task.key===google.key).completed,1);
+  assert.equal(envelope.items.some(task=>task.key===microsoft.key),false);
+  assert.equal(multiDb.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id=? AND scenario='task_start' AND cancelled_at IS NULL AND completed_at IS NULL").get(testUserId).count,0);
+});
+
 test("task mutations enforce same-origin and refresh cached remote task source data",async()=>{
   // Same-origin check fires before session check, so no Cookie needed for this test
   assert.equal((await route.POST(new Request(url,{method:"POST",headers:{Origin:"https://attacker.example","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({title:"Užblokuota"})}))).status,403);
@@ -137,16 +206,69 @@ test("an account swap rejects references selected for the old provider account",
 });
 
 test("actual Google move route preserves the plan under its destination identity",async()=>{
+  notificationJobs.updateTaskStartPreference(testUserId,true,10);
   upstream.googleLists.set("google-list-b",{id:"google-list-b",title:"Google kitas",etag:"google-list-b-v1",_revision:1});
   upstream.googleListTasks.set("google-list-b",new Map());
   let task=item(await (await list()).json(),"google");
-  task=await (await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2026-11-05T08:00:00.000Z",duration_minutes:55,project:"Darbas",tags:"perkelta"}))).json();
+  task=await (await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2099-11-05T08:00:00.000Z",duration_minutes:55,project:"Darbas",tags:"perkelta"}))).json();
+  const oldNotification=multiDb.prepare("SELECT source_key FROM notification_jobs WHERE user_id=? AND scenario='task_start' AND cancelled_at IS NULL").get(testUserId).source_key;
   const moveRequest=new Request(url+"/move",{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({...ref(task),destination_list_id:"google-list-b"})});
   const response=await moveRoute.POST(moveRequest);assert.equal(response.status,200);const moved=await response.json();
-  assert.equal(moved.list_id,"google-list-b");assert.equal(moved.scheduled_at,"2026-11-05T08:00:00.000Z");assert.equal(moved.duration_minutes,55);assert.equal(moved.project,"Darbas");assert.equal(moved.tags,"perkelta");assert.equal(moved.schedule_version,task.schedule_version+1);
+  assert.equal(moved.list_id,"google-list-b");assert.equal(moved.scheduled_at,"2099-11-05T08:00:00.000Z");assert.equal(moved.duration_minutes,55);assert.equal(moved.project,"Darbas");assert.equal(moved.tags,"perkelta");assert.equal(moved.schedule_version,task.schedule_version+1);
+  const movedNotification=multiDb.prepare("SELECT source_key FROM notification_jobs WHERE user_id=? AND scenario='task_start' AND cancelled_at IS NULL").get(testUserId).source_key;
+  assert.notEqual(movedNotification,oldNotification);
   const refreshed=await (await list()).json(),listed=refreshed.items.find(entry=>entry.key===moved.key);
   assert.ok(listed);assert.equal(listed.scheduled_at,moved.scheduled_at);assert.equal(refreshed.items.some(entry=>entry.key===task.key),false);
   assert.equal((await moveRoute.POST(new Request(url+"/move",{method:"POST",headers:{Origin:"https://attacker.example","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({...ref(moved),destination_list_id:"google-list"})}))).status,403);
+});
+
+for(const deliveryState of ["accepted","ambiguous"]){
+test(`interrupted Google move recovery preserves ${deliveryState} task-start delivery`,async()=>{
+  const {before}=await prepareInterruptedGoogleMove(deliveryState);
+  const envelope=await (await list()).json(),moved=envelope.items.find(task=>task.source==="google"&&task.list_id==="google-list-b");
+  assert.ok(moved);
+  const jobs=multiDb.prepare("SELECT id,source_key,cancelled_at FROM notification_jobs WHERE user_id=? AND scenario='task_start'").all(testUserId);
+  assert.equal(jobs.length,1);assert.equal(jobs[0].id,before.id);assert.notEqual(jobs[0].source_key,before.source_key);assert.equal(jobs[0].cancelled_at,null);
+  assert.equal(multiDb.prepare("SELECT state FROM notification_deliveries WHERE job_id=?").get(before.id).state,deliveryState);
+  assert.equal(multiDb.prepare("SELECT COUNT(*) count FROM user_settings WHERE user_id=? AND key LIKE 'task_move_pending:%'").get(testUserId).count,0);
+});
+}
+
+test("interrupted Google move recovery cancels a completed destination task reminder",async()=>{
+  notificationJobs.updateTaskStartPreference(testUserId,true,10);
+  upstream.googleLists.set("google-list-b",{id:"google-list-b",title:"Google kitas",etag:"google-list-b-v1",_revision:1});
+  upstream.googleListTasks.set("google-list-b",new Map());
+  let task=item(await (await list()).json(),"google");
+  task=await (await route.PATCH(request("PATCH",{...ref(task),scheduled_at:new Date(Date.now()+60*60_000).toISOString()}))).json();
+  const before=multiDb.prepare("SELECT id FROM notification_jobs WHERE user_id=? AND scenario='task_start'").get(testUserId);
+  upstream.failGoogleTaskGetOnce=true;
+  const moveResponse=await moveRoute.POST(new Request(url+"/move",{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({...ref(task),destination_list_id:"google-list-b"})}));
+  assert.ok(moveResponse.status>=500);
+  upstream.googleListTasks.get("google-list-b").get(String(task.id)).status="completed";
+  const envelope=await (await list()).json(),moved=envelope.items.find(entry=>entry.source==="google"&&entry.list_id==="google-list-b");
+  assert.ok(moved);assert.equal(moved.completed,1);assert.equal(moved.scheduled_at,null);
+  const plan=multiDb.prepare("SELECT task_key,scheduled_at FROM task_plans WHERE user_id=?").get(testUserId);
+  assert.equal(plan.task_key,moved.key);assert.equal(plan.scheduled_at,null);
+  const jobs=multiDb.prepare("SELECT id,cancelled_at FROM notification_jobs WHERE user_id=? AND scenario='task_start'").all(testUserId);
+  assert.equal(jobs.length,1);assert.equal(jobs[0].id,before.id);assert.ok(jobs[0].cancelled_at);
+  assert.equal(multiDb.prepare("SELECT COUNT(*) count FROM notification_jobs WHERE user_id=? AND scenario='task_start' AND cancelled_at IS NULL AND completed_at IS NULL").get(testUserId).count,0);
+});
+
+test("Google move ignores another user's matching destination task identity",async()=>{
+  upstream.googleLists.set("google-list-b",{id:"google-list-b",title:"Google kitas",etag:"google-list-b-v1",_revision:1});
+  upstream.googleListTasks.set("google-list-b",new Map());
+  let task=item(await (await list()).json(),"google");
+  task=await (await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2099-11-07T08:00:00.000Z"}))).json();
+  const foreignUser=Number(multiDb.prepare("INSERT INTO users(display_name,primary_email,role,status) VALUES ('Kitas','other@example.test','member','active')").run().lastInsertRowid);
+  const destinationKey=JSON.stringify(["google","google-account","google-list-b",String(task.id)]);
+  multiDb.prepare("INSERT INTO remote_tasks(user_id,task_key,account_id,list_id,task_json,source) VALUES (?,?,?,?,?,'google')")
+    .run(foreignUser,destinationKey,"google-account","google-list-b",JSON.stringify({id:"foreign-id"}));
+  try {
+    const response=await moveRoute.POST(new Request(url+"/move",{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({...ref(task),destination_list_id:"google-list-b"})}));
+    assert.equal(response.status,200);
+  } finally {
+    multiDb.prepare("DELETE FROM users WHERE id=?").run(foreignUser);
+  }
 });
 
 test("actual Google order route applies parent and previous with a versioned snapshot",async()=>{

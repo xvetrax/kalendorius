@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dienos-planas-public-";
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v2";
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const OFFLINE_URL = "/offline.html";
 const PUBLIC_ASSETS = [
@@ -44,9 +44,10 @@ self.addEventListener("push", (event) => {
   const messages = {
     test: { body: "Pranešimai šiame įrenginyje veikia.", tag: "dienos-planas-test" },
     focus_end: { body: "Fokusavimo sesija baigėsi — metas atsikvėpti.", tag: "dienos-planas-focus-end" },
+    task_start: { body: "Suplanuota užduotis netrukus prasidės.", tag: "dienos-planas-task-start" },
   };
-  const message = payload?.v === 1 && payload.type === "focus_end"
-    ? messages.focus_end
+  const message = payload?.v === 1 && (payload.type === "focus_end" || payload.type === "task_start")
+    ? messages[payload.type]
     : payload?.type === "test" ? messages.test : { body: "Turi naują priminimą.", tag: "dienos-planas-reminder" };
   event.waitUntil(self.registration.showNotification("Dienos planas", {
     body: message.body,

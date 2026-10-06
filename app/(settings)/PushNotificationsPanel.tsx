@@ -22,6 +22,7 @@ type PushState = {
 
 type NotificationPreferences = {
   focusEnd: { enabled: boolean };
+  taskStart: { enabled: boolean; leadMinutes: number };
 };
 
 function base64UrlBytes(value: string) {
@@ -191,6 +192,22 @@ export function PushNotificationsPanel() {
     } finally { setBusy(""); }
   }
 
+  async function setTaskStartReminder(enabled: boolean, leadMinutes = preferences?.taskStart.leadMinutes ?? 10) {
+    if (!online || !preferences) return;
+    setBusy("task-start-preference"); setError(""); setMessage("");
+    try {
+      const next = await json<NotificationPreferences>(await fetch("/api/notifications/preferences", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ taskStartEnabled: enabled, taskStartLeadMinutes: leadMinutes }),
+      }));
+      setPreferences(next);
+      setMessage(enabled ? "Užduočių pradžios priminimai įjungti." : "Užduočių pradžios priminimai išjungti.");
+    } catch (preferenceError) {
+      setError(preferenceError instanceof Error ? preferenceError.message : "Priminimo nuostatos išsaugoti nepavyko.");
+    } finally { setBusy(""); }
+  }
+
   if (supported === null) return <p className="formHint">Tikrinamas pranešimų palaikymas…</p>;
   if (!state || !preferences) return error
     ? <p className="formError" role="alert">{error}</p>
@@ -214,6 +231,23 @@ export function PushNotificationsPanel() {
         <input type="checkbox" checked={preferences.focusEnd.enabled} disabled={!online || Boolean(busy) || state.subscriptions.length === 0} onChange={(event) => void setFocusReminder(event.target.checked)} />
         <i/><span><strong>Fokusavimo sesija baigėsi</strong><small>Pranešti net tada, kai programėlė uždaryta.</small></span>
       </label>
+      <div className="pushScenarioRow">
+        <label className="freeToggle">
+          <input type="checkbox" checked={preferences.taskStart.enabled} disabled={!online || Boolean(busy) || state.subscriptions.length === 0} onChange={(event) => void setTaskStartReminder(event.target.checked)} />
+          <i/><span><strong>Artėja suplanuota užduotis</strong><small>Pranešti pagal programėlėje suplanuotą pradžios laiką.</small></span>
+        </label>
+        <label className="pushLeadTime">Pranešti
+          <select value={preferences.taskStart.leadMinutes} disabled={!online || Boolean(busy) || state.subscriptions.length === 0} onChange={(event) => void setTaskStartReminder(preferences.taskStart.enabled, Number(event.target.value))}>
+            <option value={0}>pradžios metu</option>
+            <option value={5}>prieš 5 min.</option>
+            <option value={10}>prieš 10 min.</option>
+            <option value={15}>prieš 15 min.</option>
+            <option value={30}>prieš 30 min.</option>
+            <option value={60}>prieš 1 val.</option>
+            <option value={1440}>prieš 1 dieną</option>
+          </select>
+        </label>
+      </div>
       {state.subscriptions.length === 0 && <small>Pirmiausia įjunk pranešimus bent viename įrenginyje.</small>}
     </div>
     <p className="pushPrivacy">Bandomasis pranešimas nerodo užduočių ar kalendoriaus turinio. Vėliau kiekvieno priminimo privatumo lygį bus galima pasirinkti atskirai.</p>

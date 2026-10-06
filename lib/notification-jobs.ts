@@ -1,3 +1,5 @@
+import { createHash, randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { db } from "./db-multi.ts";
 
 export type NotificationScenario = "focus_end" | "task_start" | "morning_plan" | "evening_close";
@@ -27,6 +29,15 @@ const MAX_ACTIVE_FOCUS_JOBS = 10;
 const MAX_RETAINED_FOCUS_JOBS = 1000;
 const MAX_NEW_FOCUS_JOBS_PER_MINUTE = 60;
 const RETENTION_DAYS = 7;
+const DEFAULT_TASK_START_LEAD_MINUTES = 10;
+const TASK_START_LEAD_MINUTES = new Set([0, 5, 10, 15, 30, 60, 1440]);
+const TASK_START_EXPIRY_GRACE_MS = 15 * 60 * 1000;
+
+export type TaskStartNotificationHooks = {
+  sync(taskKey: string, scheduledAt: string | null, scheduleVersion: number): void;
+  cancel(taskKey: string): void;
+  move(oldTaskKey: string, newTaskKey: string, scheduledAt: string | null, scheduleVersion: number): void;
+};
 
 function focusPreference(userId: number): PreferenceRow {
   return (db.prepare(`
@@ -43,11 +54,215 @@ function focusPreference(userId: number): PreferenceRow {
   };
 }
 
+function taskStartPreference(database: DatabaseSync, userId: number): PreferenceRow {
+  return (database.prepare(`
+    SELECT scenario, enabled, lead_minutes, local_time, time_zone, private_content
+    FROM notification_preferences
+    WHERE user_id = ? AND scenario = 'task_start'
+  `).get(userId) as PreferenceRow | undefined) ?? {
+    scenario: "task_start",
+    enabled: 0,
+    lead_minutes: DEFAULT_TASK_START_LEAD_MINUTES,
+    local_time: null,
+    time_zone: null,
+    private_content: 0,
+  };
+}
+
 export function getNotificationPreferences(userId: number) {
   const focus = focusPreference(userId);
+  const taskStart = taskStartPreference(db, userId);
   return {
     focusEnd: { enabled: Boolean(focus.enabled) },
+    taskStart: {
+      enabled: Boolean(taskStart.enabled),
+      leadMinutes: taskStart.lead_minutes ?? DEFAULT_TASK_START_LEAD_MINUTES,
+    },
   };
+}
+
+function cancelDeliveries(database: DatabaseSync, userId: number, scenario: NotificationScenario, sourcePattern?: string) {
+  database.prepare(`
+    UPDATE notification_deliveries
+    SET state = 'cancelled', lease_owner = NULL, lease_until = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE job_id IN (
+      SELECT id FROM notification_jobs
+      WHERE user_id = ? AND scenario = ? ${sourcePattern ? "AND source_key LIKE ?" : ""}
+    ) AND state IN ('queued', 'leased', 'retryable')
+  `).run(...(sourcePattern ? [userId, scenario, sourcePattern] : [userId, scenario]));
+}
+
+function taskSourcePrefix(taskKey: string) {
+  return `${createHash("sha256").update(taskKey).digest("hex")}:`;
+}
+
+function cancelTaskStartCore(database: DatabaseSync, userId: number, taskKey: string) {
+  const pattern = `${taskSourcePrefix(taskKey)}%`;
+  database.prepare(`
+    UPDATE notification_jobs
+    SET cancelled_at = COALESCE(cancelled_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = ? AND scenario = 'task_start' AND source_key LIKE ? AND cancelled_at IS NULL
+  `).run(userId, pattern);
+  cancelDeliveries(database, userId, "task_start", pattern);
+}
+
+function moveTaskStartCore(database: DatabaseSync, userId: number, oldTaskKey: string, newTaskKey: string) {
+  if (oldTaskKey === newTaskKey) return;
+  const oldPrefix = taskSourcePrefix(oldTaskKey);
+  const newPrefix = taskSourcePrefix(newTaskKey);
+  database.prepare(`
+    UPDATE notification_jobs
+    SET source_key = ? || substr(source_key, ?), updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = ? AND scenario = 'task_start' AND source_key LIKE ?
+  `).run(newPrefix, oldPrefix.length + 1, userId, `${oldPrefix}%`);
+}
+
+function syncTaskStartCore(
+  database: DatabaseSync,
+  userId: number,
+  taskKey: string,
+  scheduledAt: string | null,
+  scheduleVersion: number,
+  now: number,
+) {
+  const preference = taskStartPreference(database, userId);
+  if (!preference.enabled || !scheduledAt) {
+    cancelTaskStartCore(database, userId, taskKey);
+    return;
+  }
+  const startsAt = Date.parse(scheduledAt);
+  if (!Number.isFinite(startsAt)) {
+    cancelTaskStartCore(database, userId, taskKey);
+    return;
+  }
+  const leadMinutes = preference.lead_minutes ?? DEFAULT_TASK_START_LEAD_MINUTES;
+  // Keep the intended run time stable. When the lead window is already open,
+  // the worker sees this past timestamp as immediately due without creating a
+  // new generation on every provider refresh.
+  const runAt = new Date(startsAt - leadMinutes * 60_000).toISOString();
+  const expiresAt = new Date(startsAt + TASK_START_EXPIRY_GRACE_MS).toISOString();
+  const prefix = taskSourcePrefix(taskKey);
+  const existing = database.prepare(`
+    SELECT id FROM notification_jobs
+    WHERE user_id = ? AND scenario = 'task_start' AND source_key LIKE ?
+      AND cancelled_at IS NULL
+      AND run_at = ? AND expires_at = ?
+    LIMIT 1
+  `).get(userId, `${prefix}%`, runAt, expiresAt);
+  if (existing && Date.parse(expiresAt) > now) return;
+  if (startsAt <= now) {
+    cancelTaskStartCore(database, userId, taskKey);
+    return;
+  }
+  cancelTaskStartCore(database, userId, taskKey);
+  const sourceKey = `${prefix}${scheduleVersion}:${leadMinutes}:${randomUUID()}`;
+  database.prepare(`
+    INSERT INTO notification_jobs
+      (user_id, scenario, source_key, run_at, expires_at, created_at, updated_at)
+    VALUES (?, 'task_start', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(userId, sourceKey, runAt, expiresAt);
+}
+
+function withSavepoint<T>(database: DatabaseSync, action: () => T): T {
+  database.exec("SAVEPOINT task_start_notification_sync");
+  try {
+    const result = action();
+    database.exec("RELEASE task_start_notification_sync");
+    return result;
+  } catch (error) {
+    database.exec("ROLLBACK TO task_start_notification_sync");
+    database.exec("RELEASE task_start_notification_sync");
+    throw error;
+  }
+}
+
+function scheduledTaskPlans(database: DatabaseSync, userId: number) {
+  return database.prepare(`
+    SELECT tp.task_key, tp.scheduled_at, tp.schedule_version
+    FROM task_plans tp
+    WHERE tp.user_id = ? AND tp.scheduled_at IS NOT NULL
+      AND (
+        EXISTS (
+          SELECT 1 FROM tasks t
+          WHERE t.user_id = tp.user_id AND 'local:' || t.id = tp.task_key AND t.completed = 0
+        )
+        OR EXISTS (
+          SELECT 1 FROM remote_tasks rt
+          WHERE rt.user_id = tp.user_id AND rt.task_key = tp.task_key
+        )
+      )
+  `).all(userId) as { task_key: string; scheduled_at: string; schedule_version: number }[];
+}
+
+export function createTaskStartNotificationHooks(
+  database: DatabaseSync,
+  userId: number,
+  clock: () => number = Date.now,
+): TaskStartNotificationHooks {
+  return {
+    sync(taskKey, scheduledAt, scheduleVersion) {
+      withSavepoint(database, () => syncTaskStartCore(database, userId, taskKey, scheduledAt, scheduleVersion, clock()));
+    },
+    cancel(taskKey) {
+      withSavepoint(database, () => cancelTaskStartCore(database, userId, taskKey));
+    },
+    move(oldTaskKey, newTaskKey, scheduledAt, scheduleVersion) {
+      withSavepoint(database, () => {
+        moveTaskStartCore(database, userId, oldTaskKey, newTaskKey);
+        syncTaskStartCore(database, userId, newTaskKey, scheduledAt, scheduleVersion, clock());
+      });
+    },
+  };
+}
+
+export function updateTaskStartPreference(userId: number, enabled: boolean, leadMinutes: number) {
+  if (!Number.isInteger(leadMinutes) || !TASK_START_LEAD_MINUTES.has(leadMinutes)) {
+    throw new NotificationJobError("Pasirink nepalaikomą užduoties priminimo laiką.");
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = taskStartPreference(db, userId);
+    if (Boolean(current.enabled) === enabled
+      && (current.lead_minutes ?? DEFAULT_TASK_START_LEAD_MINUTES) === leadMinutes) {
+      db.exec("COMMIT");
+      return getNotificationPreferences(userId);
+    }
+    db.prepare(`
+      INSERT INTO notification_preferences (user_id, scenario, enabled, lead_minutes, updated_at)
+      VALUES (?, 'task_start', ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(user_id, scenario) DO UPDATE SET
+        enabled = excluded.enabled,
+        lead_minutes = excluded.lead_minutes,
+        updated_at = excluded.updated_at
+    `).run(userId, enabled ? 1 : 0, leadMinutes);
+    db.prepare(`
+      UPDATE notification_jobs
+      SET cancelled_at = COALESCE(cancelled_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND scenario = 'task_start' AND completed_at IS NULL
+    `).run(userId);
+    cancelDeliveries(db, userId, "task_start");
+    if (enabled) {
+      const plans = scheduledTaskPlans(db, userId);
+      const now = Date.now();
+      for (const plan of plans) syncTaskStartCore(db, userId, plan.task_key, plan.scheduled_at, plan.schedule_version, now);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return getNotificationPreferences(userId);
+}
+
+export function rebuildTaskStartNotificationsInTransaction(database: DatabaseSync, now = Date.now()) {
+  const users = database.prepare(`
+    SELECT user_id FROM notification_preferences
+    WHERE scenario = 'task_start' AND enabled = 1
+  `).all() as { user_id: number }[];
+  for (const { user_id: userId } of users) {
+    const plans = scheduledTaskPlans(database, userId);
+    for (const plan of plans) syncTaskStartCore(database, userId, plan.task_key, plan.scheduled_at, plan.schedule_version, now);
+  }
 }
 
 export function updateFocusPreference(userId: number, enabled: boolean) {

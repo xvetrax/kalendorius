@@ -1,6 +1,11 @@
 import { requireUserContext } from "@/lib/db-multi";
 import { assertSameOrigin } from "@/lib/http";
-import { getNotificationPreferences, NotificationJobError, updateFocusPreference } from "@/lib/notification-jobs";
+import {
+  getNotificationPreferences,
+  NotificationJobError,
+  updateFocusPreference,
+  updateTaskStartPreference,
+} from "@/lib/notification-jobs";
 
 export const runtime = "nodejs";
 
@@ -24,9 +29,23 @@ export async function PATCH(request: Request) {
   try {
     assertSameOrigin(request);
     const user = requireUserContext(request);
-    const body = await request.json() as { focusEndEnabled?: unknown };
-    if (typeof body.focusEndEnabled !== "boolean") throw new NotificationJobError("Neteisinga fokusavimo priminimo nuostata.");
-    return Response.json(updateFocusPreference(user.id, body.focusEndEnabled));
+    const raw = await request.json();
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new NotificationJobError("Neteisinga pranešimų nuostata.");
+    const body = raw as {
+      focusEndEnabled?: unknown;
+      taskStartEnabled?: unknown;
+      taskStartLeadMinutes?: unknown;
+    };
+    if (typeof body.focusEndEnabled === "boolean"
+      && body.taskStartEnabled === undefined
+      && body.taskStartLeadMinutes === undefined) {
+      return Response.json(updateFocusPreference(user.id, body.focusEndEnabled));
+    }
+    if (typeof body.taskStartEnabled === "boolean"
+      && typeof body.taskStartLeadMinutes === "number"
+      && body.focusEndEnabled === undefined) {
+      return Response.json(updateTaskStartPreference(user.id, body.taskStartEnabled, body.taskStartLeadMinutes));
+    }
+    throw new NotificationJobError("Neteisinga pranešimų nuostata.");
   } catch (error) { return failure(error); }
 }
-
