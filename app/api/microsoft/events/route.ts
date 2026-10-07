@@ -348,6 +348,8 @@ export async function PATCH(request: Request) {
     return Response.json(
       body?.scope === "series"
         ? await calendar.updateSeries(body)
+        : body?.scope === "future"
+          ? await calendar.splitSeries(body)
         : await calendar.update(body),
     );
   } catch (error) {

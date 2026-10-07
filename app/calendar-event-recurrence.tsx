@@ -1,8 +1,9 @@
 "use client";
 
-import {useEffect,useState} from "react";
+import {useEffect,useRef,useState} from "react";
 import type {CalendarEvent,CalendarSeriesSnapshot} from "@/lib/calendar-events";
-import {calendarRecurrenceWeekdays,defaultCalendarRecurrence,parseCalendarRecurrence,type CalendarRecurrence} from "@/lib/calendar-recurrence";
+import {calendarRecurrenceWeekdays,defaultCalendarRecurrence,futureCalendarRecurrence,parseCalendarRecurrence,type CalendarRecurrence} from "@/lib/calendar-recurrence";
+import {zonedLocalInput} from "@/lib/calendar-time-zone";
 
 const labels:Record<typeof calendarRecurrenceWeekdays[number],string>={monday:"Pr",tuesday:"An",wednesday:"Tr",thursday:"Kt",friday:"Pn",saturday:"Št",sunday:"Sk"};
 function localDate(){const now=new Date();return new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,10);}
@@ -32,26 +33,41 @@ export function CalendarRecurrenceFields({value,startDate,onChange,disabled=fals
 }
 
 export function CalendarSeriesRecurrence({event,onChanged}:{event:CalendarEvent;onChanged?:()=>void}){
-  const [snapshot,setSnapshot]=useState<CalendarSeriesSnapshot|null>(null),[rule,setRule]=useState<CalendarRecurrence|null>(null),[busy,setBusy]=useState(false),[fresh,setFresh]=useState(false),[error,setError]=useState(""),[status,setStatus]=useState("");
+  const [snapshot,setSnapshot]=useState<CalendarSeriesSnapshot|null>(null),[rule,setRule]=useState<CalendarRecurrence|null>(null),[scope,setScope]=useState<"series"|"future">("series"),[confirmed,setConfirmed]=useState(false),[busy,setBusy]=useState(false),[fresh,setFresh]=useState(false),[error,setError]=useState(""),[status,setStatus]=useState("");
+  const operationId=useRef<string | null>(null);
   const seriesId=event.seriesId;
+  const targetDate=event.allDay?(event.originalStart?.date||event.start.date||""):zonedLocalInput(event.originalStart?.dateTime||event.start.dateTime||"",event.timeZone||"UTC").slice(0,10);
+  function ruleFor(next:CalendarSeriesSnapshot,nextScope:"series"|"future"){
+    if(!next.recurrence)return null;
+    return nextScope==="future"?futureCalendarRecurrence(next.recurrence,{startDate:next.startDate,allDay:event.allDay,timeZone:event.timeZone},targetDate):next.recurrence;
+  }
   async function refresh(){
     if(!seriesId)return;setBusy(true);setError("");setStatus("");
-    try{const query=new URLSearchParams({seriesId,calendarId:event.calendarId,connectionId:event.connectionId}),response=await fetch(`/api/${event.provider==="outlook"?"microsoft":"google"}/events?${query}`),body:unknown=await response.json().catch(()=>({}));if(!response.ok)throw new Error(message(body,"Serijos taisyklės įkelti nepavyko."));const next=body as CalendarSeriesSnapshot;setSnapshot(next);setRule(next.recurrence);setFresh(true);}
+    try{const query=new URLSearchParams({seriesId,calendarId:event.calendarId,connectionId:event.connectionId}),response=await fetch(`/api/${event.provider==="outlook"?"microsoft":"google"}/events?${query}`),body:unknown=await response.json().catch(()=>({}));if(!response.ok)throw new Error(message(body,"Serijos taisyklės įkelti nepavyko."));const next=body as CalendarSeriesSnapshot;setSnapshot(next);setRule(ruleFor(next,scope));setConfirmed(false);operationId.current=null;setFresh(true);}
     catch(caught){setFresh(false);setError(caught instanceof Error?caught.message:"Serijos taisyklės įkelti nepavyko.");}finally{setBusy(false);}
   }
   useEffect(()=>{void refresh();/* eslint-disable-next-line react-hooks/exhaustive-deps */},[event.key,seriesId]);
   async function save(){
     if(!snapshot||!rule||!seriesId||snapshot.readonlyReason)return;setBusy(true);setError("");setStatus("");
-    try{const response=await fetch(`/api/${event.provider==="outlook"?"microsoft":"google"}/events`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({scope:"series",seriesId,calendarId:event.calendarId,connectionId:event.connectionId,version:snapshot.version,recurrence:rule})}),body:unknown=await response.json().catch(()=>({}));if(!response.ok)throw new Error(message(body,"Serijos taisyklės išsaugoti nepavyko."));const next=body as CalendarSeriesSnapshot;setSnapshot(next);setRule(next.recurrence);setFresh(true);setStatus("Visos serijos kartojimo taisyklė išsaugota.");onChanged?.();}
-    catch(caught){setFresh(false);setError(caught instanceof Error?caught.message:"Serijos taisyklės išsaugoti nepavyko.");}finally{setBusy(false);}
+    try{
+      const split=scope==="future";
+      if(split&&!confirmed)throw new Error("Patvirtink, kad būsimos tiekėjo išimtys bus atstatytos.");
+      if(split)operationId.current??=crypto.randomUUID();
+      const payload=split?{scope:"future",seriesId,occurrenceId:event.id,calendarId:event.calendarId,connectionId:event.connectionId,version:snapshot.version,occurrenceVersion:event.version,operationId:operationId.current,targetDate,targetStart:event.allDay?event.start.date:event.start.dateTime,targetEnd:event.allDay?event.end.date:event.end.dateTime,allDay:event.allDay,...(!event.allDay?{timeZone:event.timeZone||"UTC"}:{}),originalRecurrence:snapshot.recurrence,recurrence:rule,confirmResetExceptions:true}:{scope:"series",seriesId,calendarId:event.calendarId,connectionId:event.connectionId,version:snapshot.version,recurrence:rule};
+      const response=await fetch(`/api/${event.provider==="outlook"?"microsoft":"google"}/events`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(payload)}),body:unknown=await response.json().catch(()=>({}));if(!response.ok)throw new Error(message(body,"Serijos taisyklės išsaugoti nepavyko."));const next=body as CalendarSeriesSnapshot;setSnapshot(next);setRule(next.recurrence);setFresh(true);setStatus(split?"Serija perskirta nuo pasirinkto įvykio.":"Visos serijos kartojimo taisyklė išsaugota.");operationId.current=null;onChanged?.();}
+    catch(caught){setFresh(scope==="future");setError(caught instanceof Error?caught.message:"Serijos taisyklės išsaugoti nepavyko.");}finally{setBusy(false);}
   }
   if(!seriesId)return null;
   const startDate=snapshot?.startDate||(event.allDay?event.start.date!:event.start.dateTime!.slice(0,10));
-  const changed=Boolean(snapshot&&rule&&JSON.stringify(rule)!==JSON.stringify(snapshot.recurrence)),invalid=!rule||!parseCalendarRecurrence(rule,{startDate,allDay:event.allDay,timeZone:event.timeZone});
+  const futureRule=snapshot?.recurrence?futureCalendarRecurrence(snapshot.recurrence,{startDate:snapshot.startDate,allDay:event.allDay,timeZone:event.timeZone},targetDate):null;
+  const editStartDate=scope==="future"?targetDate:startDate;
+  const changed=Boolean(snapshot&&rule&&(scope==="future"||JSON.stringify(rule)!==JSON.stringify(snapshot.recurrence))),invalid=!rule||!parseCalendarRecurrence(rule,{startDate:editStartDate,allDay:event.allDay,timeZone:event.timeZone});
   const readonlyReason=snapshot?.readonlyReason;
-  return <section className="microsoftReminder microsoftRecurrence calendarRecurrence" aria-labelledby="calendar-series-title"><div className="microsoftReminderHeading"><div><h3 id="calendar-series-title">Visa serija</h3><p>Čia keičiama visos serijos taisyklė. Viršuje išsaugomi tik šio egzemplioriaus laukai.</p></div><button type="button" disabled={busy} onClick={()=>void refresh()}>{busy&&!snapshot?"Kraunama…":"Atnaujinti"}</button></div>
+  function chooseScope(next:"series"|"future"){setScope(next);setRule(snapshot?ruleFor(snapshot,next):null);setConfirmed(false);setError("");setStatus("");}
+  return <section className="microsoftReminder microsoftRecurrence calendarRecurrence" aria-labelledby="calendar-series-title"><div className="microsoftReminderHeading"><div><h3 id="calendar-series-title">Pasikartojimo serija</h3><p>Pasirink, kurią serijos dalį keisti. Viršuje išsaugomi tik šio egzemplioriaus laukai.</p></div><button type="button" disabled={busy} onClick={()=>void refresh()}>{busy&&!snapshot?"Kraunama…":"Atnaujinti"}</button></div>
     {readonlyReason&&<p className="formHint">{readonlyReason}</p>}{error&&<p className="formError" role="alert">{error}</p>}{status&&<p className="reminderSuccess" role="status">{status}</p>}
-    {snapshot?.supported&&rule&&<><CalendarRecurrenceFields value={rule} startDate={startDate} onChange={setRule} disabled={busy||!fresh} allowDisable={false}/><div className="modalActions"><button type="button" className="newButton" disabled={busy||!fresh||!changed||Boolean(invalid)} onClick={()=>void save()}>{busy?"Saugoma…":"Išsaugoti visos serijos taisyklę"}</button></div></>}
-    <p className="formHint">„Šį ir būsimus“ šiame etape nesiūloma: saugiam veiksmui reikia perskirti seriją ir perkelti visas tiekėjo išimtis.</p>
+    {snapshot?.supported&&<fieldset className="recurrenceScope"><legend>Keitimo apimtis</legend><label><input type="radio" name={`recurrence-scope-${event.key}`} checked={scope==="series"} disabled={busy} onChange={()=>chooseScope("series")}/>Visa serija</label><label><input type="radio" name={`recurrence-scope-${event.key}`} checked={scope==="future"} disabled={busy||!futureRule} onChange={()=>chooseScope("future")}/>Šis ir visi būsimi</label></fieldset>}
+    {snapshot?.supported&&scope==="future"&&!futureRule&&<p className="formHint">Pirmojo serijos įvykio atskirti negalima — jam pasirink „Visa serija“.</p>}
+    {snapshot?.supported&&rule&&<><CalendarRecurrenceFields value={rule} startDate={editStartDate} onChange={setRule} disabled={busy||!fresh} allowDisable={false}/>{scope==="future"&&<div className="recurrenceSplitWarning"><p><strong>Bus sukurta nauja serija nuo {targetDate}.</strong> Individualūs būsimi pakeitimai ir atšaukimai tiekėjo kalendoriuje bus atstatyti.</p><label><input type="checkbox" checked={confirmed} disabled={busy} onChange={event=>setConfirmed(event.target.checked)}/>Suprantu ir patvirtinu būsimų išimčių atstatymą</label></div>}<div className="modalActions"><button type="button" className="newButton" disabled={busy||!fresh||!changed||Boolean(invalid)||(scope==="future"&&!confirmed)} onClick={()=>void save()}>{busy?"Saugoma…":scope==="future"?"Perskirti ir išsaugoti būsimus":"Išsaugoti visos serijos taisyklę"}</button></div></>}
   </section>;
 }

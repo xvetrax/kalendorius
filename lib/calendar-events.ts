@@ -1,5 +1,6 @@
 import {isCalendarTimeZone,matchingCalendarTimeZone,unambiguousZonedProviderDateTime} from "./calendar-time-zone.ts";
-import {calendarRecurrenceWeekdays,graphCalendarRecurrence,googleCalendarRecurrence,parseCalendarRecurrence,parseGoogleCalendarRecurrence,parseGraphCalendarRecurrence,type CalendarRecurrence,type CalendarRecurrenceContext} from "./calendar-recurrence.ts";
+import {calendarRecurrenceWeekdays,graphCalendarRecurrence,googleCalendarRecurrence,parseCalendarRecurrence,parseGoogleCalendarRecurrence,parseGraphCalendarRecurrence,splitCalendarRecurrence,type CalendarRecurrence,type CalendarRecurrenceContext} from "./calendar-recurrence.ts";
+import {calendarCreateIdentity,calendarCreateOperationId} from "./calendar-create.ts";
 
 export type CalendarProvider = "google" | "outlook";
 export type CalendarResponseStatus = "needsAction" | "accepted" | "tentative" | "declined";
@@ -13,6 +14,7 @@ export type CalendarEvent = {
   htmlLink?:string; hangoutLink?:string; editable:boolean; readOnlyReason:string;
   attendeeCount:number; attendees?:{email:string;name?:string;self?:boolean;responseStatus:string}[]; recurring:boolean; allDay:boolean;
   seriesId?:string;
+  originalStart?:{dateTime?:string;date?:string};
   canRespond:boolean; responseStatus?:CalendarResponseStatus;
   showAs:"free"|"tentative"|"busy"|"oof"|"workingElsewhere"|"unknown"; visibility:CalendarVisibility; reminder:CalendarReminder; timeZone?:string;
 };
@@ -21,6 +23,7 @@ export class CalendarError extends Error {
   constructor(message:string,status=400) {super(message);this.status=status;}
 }
 export type CalendarSeriesSnapshot={seriesId:string;version:string;startDate:string;recurrence:CalendarRecurrence|null;supported:boolean;readonlyReason?:string};
+export type CalendarSeriesSplitResult=CalendarSeriesSnapshot&{previousSeriesId:string;newSeriesId:string;exceptionsReset:true};
 type Gateway = {connection:()=>string|null;request:(path:string,init?:RequestInit)=>Promise<any>;mirrorTaskKey?:(raw:any,calendarId:string)=>string|null};
 const locks=new Map<string,Promise<unknown>>();
 function instant(value:unknown) {
@@ -93,6 +96,7 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
   const recurring=recurringMaster || recurringInstance;
   const rawSeriesId=google?raw.recurringEventId:raw.seriesMasterId;
   const seriesId=recurringInstance&&typeof rawSeriesId==="string"&&rawSeriesId?rawSeriesId:recurringMaster?String(raw.id):undefined;
+  const originalStart=recurringInstance?(google?(raw.originalStartTime?.date?{date:String(raw.originalStartTime.date)}:raw.originalStartTime?.dateTime?{dateTime:instant(raw.originalStartTime.dateTime)}:undefined):typeof raw.originalStart==="string"&&raw.originalStart?(allDay?{date:raw.originalStart.slice(0,10)}:{dateTime:instant(raw.originalStart)}):undefined):undefined;
   const version=String((google ? raw.etag : raw["@odata.etag"] || raw.changeKey) || "");
   const owner=google ? raw.organizer?.self === true : raw.isOrganizer === true;
   const special=google && ((raw.eventType && raw.eventType !== "default") || raw.locked);
@@ -125,7 +129,7 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
     htmlLink:google ? raw.htmlLink : raw.webLink,hangoutLink:google ? raw.hangoutLink : raw.onlineMeeting?.joinUrl,
     editable:!readOnlyReason,readOnlyReason,attendeeCount:rawAttendees.length,
     ...(attendees ? {attendees} : {}),
-    recurring,...(seriesId?{seriesId}:{}),allDay,canRespond,...(responseStatus ? {responseStatus} : {}),showAs,visibility,reminder,...(timeZone?{timeZone}:{})};
+    recurring,...(seriesId?{seriesId}:{}),...(originalStart?{originalStart}:{}),allDay,canRespond,...(responseStatus ? {responseStatus} : {}),showAs,visibility,reminder,...(timeZone?{timeZone}:{})};
 }
 export function createCalendarService(provider:CalendarProvider,gateway:Gateway) {
   const google=provider === "google";
@@ -323,6 +327,60 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     });
     locks.set(key,operation);try{return await operation;}finally{if(locks.get(key)===operation)locks.delete(key);}
   }
+  function selectedFields(source:any,fields:string[]){return Object.fromEntries(fields.filter(field=>source?.[field]!==undefined).map(field=>[field,source[field]]));}
+  async function splitSeries(input:Record<string,unknown>):Promise<CalendarSeriesSplitResult>{
+    const allowed=["scope","seriesId","occurrenceId","calendarId","connectionId","version","occurrenceVersion","operationId","targetDate","targetStart","targetEnd","allDay","timeZone","originalRecurrence","recurrence","confirmResetExceptions"];
+    if(!input||typeof input!=="object"||Array.isArray(input)||Object.keys(input).some(key=>!allowed.includes(key)))throw new CalendarError("Neteisingi serijos skaidymo duomenys.");
+    const seriesId=identifier(input.seriesId,"serijos ID"),occurrenceId=identifier(input.occurrenceId,"egzemplioriaus ID"),calendarId=calendarIdentifier(input.calendarId);
+    if(input.scope!=="future"||typeof input.version!=="string"||!input.version||typeof input.occurrenceVersion!=="string"||!input.occurrenceVersion||typeof input.connectionId!=="string"||input.confirmResetExceptions!==true)throw new CalendarError("Patvirtink būsimos serijos skaidymą ir tiekėjo išimčių atstatymą.");
+    let operationId:string;try{operationId=calendarCreateOperationId(input.operationId);}catch(error){throw new CalendarError(error instanceof Error?error.message:"Neteisingas operacijos ID.");}
+    const targetDate=calendarDate(input.targetDate),allDay=input.allDay===true;
+    if(input.allDay!==true&&input.allDay!==false)throw new CalendarError("Neteisingas serijos laiko režimas.");
+    const dates=allDay?eventDates(input.targetStart,input.targetEnd):undefined,times=allDay?undefined:eventTimes(input.targetStart,input.targetEnd);
+    if(!allDay&&!isCalendarTimeZone(input.timeZone))throw new CalendarError("Pasirink galiojančią serijos laiko zoną.");
+    const connectionId=connected(input.connectionId),key=calendarEventKey(provider,connectionId,calendarId,seriesId),previous=locks.get(key)||Promise.resolve();
+    const operation=previous.catch(()=>{}).then(async()=>{
+      connected(connectionId);const base=eventPath(calendarId,seriesId),raw=await gateway.request(base,{headers});connected(connectionId);
+      const current=seriesSnapshot(raw,seriesId);if(current.readonlyReason)throw new CalendarError(current.readonlyReason,403);
+      const context=seriesContext(raw),original=parseCalendarRecurrence(input.originalRecurrence,context);if(!original)throw new CalendarError("Pradinė serijos taisyklė paseno. Atnaujink įvykį.",409);
+      const split=splitCalendarRecurrence(original,input.recurrence as CalendarRecurrence,context,targetDate);if(!split)throw new CalendarError("Pasirinktas egzempliorius negali pradėti naujos serijos.");
+      const providerOriginal=google?googleCalendarRecurrence(original,context):graphCalendarRecurrence(original,context),providerTruncated=google?googleCalendarRecurrence(split.truncated,context):graphCalendarRecurrence(split.truncated,context);
+      const currentRule=current.recurrence,originalCurrent=JSON.stringify(currentRule)===JSON.stringify(original),alreadyTrimmed=JSON.stringify(currentRule)===JSON.stringify(split.truncated);
+      if(!alreadyTrimmed&&(current.version!==input.version||!originalCurrent))throw new CalendarError("Serija jau pakeista kitur. Atnaujink kartojimo taisyklę.",409);
+      if(!alreadyTrimmed){
+        const occurrenceRaw=await gateway.request(eventPath(calendarId,occurrenceId),{headers});connected(connectionId);
+        const occurrence=normalizeEvent(provider,occurrenceRaw,connectionId,calendarId);
+        if(occurrence.seriesId!==seriesId||occurrence.version!==input.occurrenceVersion)throw new CalendarError("Pasirinktas serijos egzempliorius pasikeitė. Atnaujink kalendorių.",409);
+        const occurrenceDate=occurrence.originalStart?.date||dateInZone(occurrence.originalStart?.dateTime||occurrence.start.dateTime||`${occurrence.start.date}T00:00:00Z`,context.timeZone||"UTC");
+        if(occurrenceDate!==targetDate)throw new CalendarError("Pasirinktas serijos egzempliorius pasikeitė. Atnaujink kalendorių.",409);
+        if(allDay?(occurrence.start.date!==dates!.start||occurrence.end.date!==dates!.end):(new Date(occurrence.start.dateTime!).getTime()!==new Date(times!.start).getTime()||new Date(occurrence.end.dateTime!).getTime()!==new Date(times!.end).getTime()))throw new CalendarError("Pasirinkto egzemplioriaus laikas pasikeitė. Atnaujink kalendorių.",409);
+      }
+      const futureContext={...context,startDate:targetDate},providerFuture=google?googleCalendarRecurrence(split.future,futureContext):graphCalendarRecurrence(split.future,futureContext);
+      const identity=calendarCreateIdentity(provider,connectionId,connectionId,calendarId,operationId,{seriesId,occurrenceId,targetDate,targetStart:input.targetStart,targetEnd:input.targetEnd,recurrence:split.future});
+      const timeZone=allDay?undefined:String(input.timeZone),timePatch=allDay?(google?{start:{date:dates!.start},end:{date:dates!.end}}:{isAllDay:true,start:{dateTime:`${dates!.start}T00:00:00`,timeZone:"UTC"},end:{dateTime:`${dates!.end}T00:00:00`,timeZone:"UTC"}})
+        :(google?{start:{dateTime:times!.start,timeZone},end:{dateTime:times!.end,timeZone}}:{start:{dateTime:outlookDateTime(times!.start,timeZone!),timeZone},end:{dateTime:outlookDateTime(times!.end,timeZone!),timeZone}});
+      const copy=google?selectedFields(raw,["summary","description","location","colorId","attendees","reminders","visibility","transparency","guestsCanInvite","guestsCanModify","guestsCanSeeOtherGuests","anyoneCanAddSelf"]):selectedFields(raw,["subject","body","location","locations","attendees","categories","importance","sensitivity","showAs","isReminderOn","reminderMinutesBeforeStart","responseRequested","allowNewTimeProposals","hideAttendees","isOnlineMeeting","onlineMeetingProvider"]);
+      const googleConference=google&&(raw?.hangoutLink||raw?.conferenceData?.conferenceSolution?.key?.type==="hangoutsMeet")?{conferenceData:{createRequest:{requestId:identity.transactionId,conferenceSolutionKey:{type:"hangoutsMeet"}}}}:{};
+      const createBody=google?{...copy,...timePatch,recurrence:providerFuture,id:identity.googleEventId,...googleConference}:{...copy,...timePatch,recurrence:providerFuture,transactionId:identity.transactionId};
+      let trimmed:any=raw;
+      if(!alreadyTrimmed){trimmed=await gateway.request(base+(google?"?sendUpdates=all":""),{method:"PATCH",headers:{...headers,"If-Match":current.version},body:JSON.stringify({recurrence:providerTruncated})});connected(connectionId);}
+      const createPath=google?`/calendars/${encodeURIComponent(calendarId)}/events?conferenceDataVersion=1&sendUpdates=all`:calendarId==="primary"?"/me/calendar/events":`/me/calendars/${encodeURIComponent(calendarId)}/events`;
+      let created:any;
+      try{created=await gateway.request(createPath,{method:"POST",headers,body:JSON.stringify(createBody)});connected(connectionId);}
+      catch(error){
+        if(google){try{created=await gateway.request(eventPath(calendarId,identity.googleEventId),{headers});connected(connectionId);}catch{}}
+        if(!created){
+          const definite=typeof (error as {status?:unknown})?.status==="number"&&Number((error as {status:number}).status)>=400&&Number((error as {status:number}).status)<500;
+          if(!alreadyTrimmed&&definite){try{await gateway.request(base+(google?"?sendUpdates=all":""),{method:"PATCH",headers:{...headers,"If-Match":String((google?trimmed?.etag:trimmed?.["@odata.etag"]||trimmed?.changeKey)||"")},body:JSON.stringify({recurrence:providerOriginal})});connected(connectionId);}catch{throw new CalendarError("Naujos serijos sukurti nepavyko, o pradinė serija liko sutrumpinta. Atverk originalų kalendorių ir patikrink seriją.",409);}}
+          if(!definite)throw new CalendarError("Serijos skaidymo atsakymas neaiškus. Pakartok tą patį veiksmą — operacijos ID apsaugos nuo dublikato.",502);
+          throw error;
+        }
+      }
+      const createdSnapshot=seriesSnapshot(created,String(created?.id||""));
+      return {...createdSnapshot,previousSeriesId:seriesId,newSeriesId:createdSnapshot.seriesId,exceptionsReset:true as const};
+    });
+    locks.set(key,operation);try{return await operation;}finally{if(locks.get(key)===operation)locks.delete(key);}
+  }
   async function remove(input:Record<string,unknown>) {
     const id=identifier(input.id,"įvykio ID"),calendarId=calendarIdentifier(input.calendarId);
     if (typeof input.connectionId!=="string" || typeof input.version!=="string" || !input.version) throw new CalendarError("Trūksta paskyros arba įvykio versijos.");
@@ -374,5 +432,5 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     locks.set(key,operation);
     try{return await operation;}finally{if(locks.get(key)===operation)locks.delete(key);}
   }
-  return {list,update,series,updateSeries,remove,respond};
+  return {list,update,series,updateSeries,splitSeries,remove,respond};
 }

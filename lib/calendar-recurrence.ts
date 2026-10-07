@@ -25,6 +25,51 @@ function dateOnly(value:unknown){
   return Number.isFinite(parsed.getTime())&&parsed.toISOString().slice(0,10)===value?value:null;
 }
 function validContext(context:CalendarRecurrenceContext){return dateOnly(context.startDate)!==null;}
+function isoDate(value:Date){return value.toISOString().slice(0,10);}
+function weekday(value:string){const date=new Date(`${value}T00:00:00Z`);return calendarRecurrenceWeekdays[(date.getUTCDay()+6)%7];}
+function recurrenceMatches(rule:CalendarRecurrence,startDate:string,value:string){
+  const start=new Date(`${startDate}T00:00:00Z`),date=new Date(`${value}T00:00:00Z`),days=Math.round((date.getTime()-start.getTime())/86400000);
+  if(days<0)return false;
+  if(rule.frequency==="daily")return days%rule.interval===0;
+  if(rule.frequency==="weekly"){
+    const startMonday=new Date(start);startMonday.setUTCDate(start.getUTCDate()-((start.getUTCDay()+6)%7));
+    const dateMonday=new Date(date);dateMonday.setUTCDate(date.getUTCDate()-((date.getUTCDay()+6)%7));
+    const weeks=Math.round((dateMonday.getTime()-startMonday.getTime())/(7*86400000));
+    return weeks%rule.interval===0&&Boolean(rule.days_of_week?.includes(weekday(value)));
+  }
+  const months=(date.getUTCFullYear()-start.getUTCFullYear())*12+date.getUTCMonth()-start.getUTCMonth();
+  if(rule.frequency==="monthly")return months>=0&&months%rule.interval===0&&date.getUTCDate()===rule.day_of_month;
+  return date.getUTCFullYear()>=start.getUTCFullYear()&&(date.getUTCFullYear()-start.getUTCFullYear())%rule.interval===0&&date.getUTCMonth()+1===rule.month&&date.getUTCDate()===rule.day_of_month;
+}
+export function calendarOccurrencesBefore(rule:CalendarRecurrence,context:CalendarRecurrenceContext,targetDate:string){
+  const parsed=parseCalendarRecurrence(rule,context),target=dateOnly(targetDate);if(!parsed||!target||target<context.startDate)return null;
+  let count=0,date=new Date(`${context.startDate}T00:00:00Z`),steps=0;
+  while(isoDate(date)<target&&steps++<366000){
+    const value=isoDate(date);
+    if(recurrenceMatches(parsed,context.startDate,value)){
+      if(parsed.end.type==="date"&&value>parsed.end.date)break;
+      if(parsed.end.type==="count"&&count>=parsed.end.count)break;
+      count++;
+    }
+    date.setUTCDate(date.getUTCDate()+1);
+  }
+  if(steps>=366000||!recurrenceMatches(parsed,context.startDate,target))return null;
+  if(parsed.end.type==="date"&&target>parsed.end.date)return null;
+  if(parsed.end.type==="count"&&count>=parsed.end.count)return null;
+  return count;
+}
+export function futureCalendarRecurrence(rule:CalendarRecurrence,context:CalendarRecurrenceContext,targetDate:string){
+  const count=calendarOccurrencesBefore(rule,context,targetDate);if(count===null)return null;
+  const next={...rule,end:rule.end.type==="count"?{type:"count" as const,count:rule.end.count-count}:rule.end};
+  return parseCalendarRecurrence(next,{...context,startDate:targetDate});
+}
+export function splitCalendarRecurrence(original:CalendarRecurrence,desiredFuture:CalendarRecurrence,context:CalendarRecurrenceContext,targetDate:string){
+  const before=calendarOccurrencesBefore(original,context,targetDate);if(before===null||before<1)return null;
+  const previous=new Date(`${targetDate}T00:00:00Z`);previous.setUTCDate(previous.getUTCDate()-1);
+  const originalEnd=original.end.type==="count"?{type:"count" as const,count:before}:{type:"date" as const,date:isoDate(previous)};
+  const truncated=parseCalendarRecurrence({...original,end:originalEnd},context),future=parseCalendarRecurrence(desiredFuture,{...context,startDate:targetDate});
+  return truncated&&future?{truncated,future,before}:null;
+}
 function defaultCalendarFields(frequency:CalendarRecurrence["frequency"],context:CalendarRecurrenceContext){
   const date=new Date(`${context.startDate}T00:00:00Z`),day=date.getUTCDate(),month=date.getUTCMonth()+1;
   const weekday=calendarRecurrenceWeekdays[(date.getUTCDay()+6)%7];

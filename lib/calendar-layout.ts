@@ -13,17 +13,28 @@ export function touchesDay(start: Date, end: Date, day: Date) {
   const bounds = dayBounds(day);
   return end > start && start < bounds.end && end > bounds.start;
 }
-export function dateAtMinute(day: Date, minute: number): Date {
+export function datesAtMinute(day: Date, minute: number): Date[] {
   const value = Math.min(1425, Math.max(0, Math.round(minute / 15) * 15));
-  const date = new Date(day); date.setHours(0, value, 0, 0);
-  // A wall-clock grid cannot select which occurrence of a repeated hour is intended.
-  // Reject both nonexistent and ambiguous times instead of silently moving work.
-  const ambiguous = [-120, -60, 60, 120].some(delta => {
-    const other = new Date(date.getTime() + delta * 60000);
-    return other.toDateString() === date.toDateString() && minuteOfDay(other) === value;
-  });
-  if (minuteOfDay(date) !== value || ambiguous) throw new Error("Šis laikas keičiasi dėl vasaros / žiemos laiko. Pasirink kitą laiką.");
-  return date;
+  const expected = new Date(day); expected.setHours(0, 0, 0, 0);
+  const seed = new Date(expected); seed.setHours(0, value, 0, 0);
+  const matches = new Map<number,Date>();
+  for(let delta=-180;delta<=180;delta+=15){
+    const candidate=new Date(seed.getTime()+delta*60000);
+    if(candidate.getFullYear()===expected.getFullYear()&&candidate.getMonth()===expected.getMonth()&&candidate.getDate()===expected.getDate()&&minuteOfDay(candidate)===value)matches.set(candidate.getTime(),candidate);
+  }
+  return [...matches.values()].sort((a,b)=>a.getTime()-b.getTime());
+}
+export function dateAtMinute(day: Date, minute: number, occurrence:"reject"|"earlier"|"later"="reject"): Date {
+  const matches=datesAtMinute(day,minute);
+  if(matches.length===1)return matches[0];
+  if(matches.length===2&&occurrence!=="reject")return occurrence==="earlier"?matches[0]:matches[1];
+  throw new Error(matches.length===2?"Ši valanda kartojasi dėl žiemos laiko. Pasirink pirmą arba antrą kartą.":"Šis laikas neegzistuoja dėl vasaros laiko. Pasirink kitą laiką.");
+}
+export function autoScrollDelta(pointer:number,start:number,end:number,edge=72,maxStep=28){
+  if(!Number.isFinite(pointer)||!Number.isFinite(start)||!Number.isFinite(end)||end<=start||edge<=0||maxStep<=0)return 0;
+  if(pointer<start+edge)return -Math.ceil(maxStep*Math.min(1,(start+edge-pointer)/edge));
+  if(pointer>end-edge)return Math.ceil(maxStep*Math.min(1,(pointer-(end-edge))/edge));
+  return 0;
 }
 
 export function layoutDay(items: TimedItem[], day: Date): DaySegment[] {

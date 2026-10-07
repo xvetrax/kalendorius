@@ -6,7 +6,8 @@ import type { MirrorCleanup, Task, TaskList, TaskStep } from "@/lib/task-service
 import type { CalendarEvent as CalEvent, CalendarResponseStatus } from "@/lib/calendar-events";
 import { visibleCalendarEvents } from "@/lib/calendar-mirrors";
 import { EventActions, EventBlock } from "@/app/calendar-event";
-import { dateAtMinute, dayBounds, layoutDay, minuteOfDay, segmentStyle, touchesDay, type DaySegment } from "@/lib/calendar-layout";
+import { dateAtMinute, datesAtMinute, dayBounds, layoutDay, minuteOfDay, segmentStyle, touchesDay, type DaySegment } from "@/lib/calendar-layout";
+import {calendarLaneAt,dragHintFor,laneDateCandidates,RepeatedHourChoice,scrollCalendarAtPointer} from "@/app/calendar-drag";
 
 import {Icon, type IconName} from "@/app/icons";
 import {usePreferences} from "@/app/ui-preferences";
@@ -365,7 +366,7 @@ export default function Planner() {
     finally{setDisconnecting(null);}
   }
 
-  return <EventActions.Provider value={{report,edit:(event)=>setEditingEvent({event}),move:moveEvent}}><TaskActions.Provider value={{report,edit:setEditingTask,move:async (task,date) => {if (date) await planTask(task,date);else {try {const updated=await patchTask(task,{scheduled_at:null,mirror_requested:false});setToast(updated.mirror_error || "Užduotis grąžinta į neplanuotas.");} catch(error) {report(error);}}},complete:(task) => { void patchTask(task, {completed:!task.completed}).catch(report); },resize:async (task,minutes) => { try {const updated=await patchTask(task,{duration_minutes:minutes});setToast(updated.mirror_error || `Trukmė pakeista: ${durationLabel(minutes)}`);} catch(error) {report(error);} },setDragHint}}><main className={`appShell ${panelOpen ? "withPanel" : "withoutPanel"}`} data-mobile-panel={mobilePanelOpen || undefined}>
+  return <EventActions.Provider value={{report,edit:(event)=>setEditingEvent({event}),move:moveEvent,setDragHint}}><TaskActions.Provider value={{report,edit:setEditingTask,move:async (task,date) => {if (date) await planTask(task,date);else {try {const updated=await patchTask(task,{scheduled_at:null,mirror_requested:false});setToast(updated.mirror_error || "Užduotis grąžinta į neplanuotas.");} catch(error) {report(error);}}},complete:(task) => { void patchTask(task, {completed:!task.completed}).catch(report); },resize:async (task,minutes) => { try {const updated=await patchTask(task,{duration_minutes:minutes});setToast(updated.mirror_error || `Trukmė pakeista: ${durationLabel(minutes)}`);} catch(error) {report(error);} },setDragHint}}><main className={`appShell ${panelOpen ? "withPanel" : "withoutPanel"}`} data-mobile-panel={mobilePanelOpen || undefined}>
     <aside className="rail" aria-label="Pagrindinė navigacija">
       <button className="brand" aria-label="Dienos planas – šiandien" onClick={()=>{changeView("calendar");setAnchor(new Date());}}><span className="brandMark"><Icon name="calendar"/></span><span>Dienos planas<small>Tavo laikas. Tavo ritmu.</small></span></button>
       <div className="navCaption">DARBO ERDVĖ</div>
@@ -489,36 +490,49 @@ function TaskBlock({ task, segment }: { task: Task; segment:DaySegment }) {
   const start = new Date(task.scheduled_at!); const actions = useContext(TaskActions);
   const {online}=usePwaRuntime();
   const [preview,setPreview] = useState<number | null>(null); const [saving,setSaving] = useState(false);
-  const gesture = useRef<{y:number;duration:number;next:number} | null>(null);
-  const moveGesture = useRef<{x:number;y:number;grab:number} | null>(null); const moved = useRef(false);
+  const [repeated,setRepeated]=useState<{mode:"move"|"resize";candidates:Date[]}|null>(null);
+  const gesture = useRef<{mode:"resize"} | null>(null);
+  const moveGesture = useRef<{x:number;y:number;grabOffset:number} | null>(null); const moved = useRef(false);
   const [offset,setOffset] = useState<{x:number;y:number} | null>(null);
   const [crossedDay,setCrossedDay] = useState(false);
   async function commit(minutes:number) {setSaving(true);try {await actions.resize(task,minutes);} finally {setSaving(false);setPreview(null);}}
+  function sourceGrabOffset(target:HTMLElement,clientY:number){
+    const lane=target.closest(".dayLane") as HTMLElement|null;if(!lane)return 0;
+    const end=new Date(start.getTime()+task.duration_minutes*60000),candidates=laneDateCandidates(lane,clientY),within=candidates.filter(candidate=>candidate>=start&&candidate<=end);
+    const instant=(within.length?within:candidates).sort((a,b)=>Math.abs(a.getTime()-start.getTime())-Math.abs(b.getTime()-start.getTime()))[0];
+    return instant?instant.getTime()-start.getTime():0;
+  }
+  function finishChoice(candidate:Date){const pending=repeated;setRepeated(null);if(!pending)return;if(pending.mode==="move")void actions.move(task,candidate);else void commit(Math.round((candidate.getTime()-start.getTime())/60000));}
+  function keyboardMove(dayStep:number,minuteStep:number){
+    if(dayStep){const target=new Date(start);target.setDate(target.getDate()+dayStep);const candidates=datesAtMinute(target,minuteOfDay(start));if(candidates.length===2){setRepeated({mode:"move",candidates});return;}if(candidates.length===1){setSaving(true);void actions.move(task,candidates[0]).finally(()=>setSaving(false));return;}actions.report(new Error("Pasirinktas laikas tą dieną neegzistuoja dėl vasaros laiko."));return;}
+    const next=new Date(start.getTime()+minuteStep*60000);setSaving(true);void actions.move(task,next).finally(()=>setSaving(false));
+  }
   return <div className="eventBlock taskTime" data-short={segment.height<45 || undefined} data-tiny={segment.height<24 || undefined} style={{...segmentStyle(segment,preview),...(crossedDay ? {opacity:0,pointerEvents:"none"} : offset ? {transform:`translate(${offset.x}px,${offset.y}px)`,zIndex:10,pointerEvents:"none"} : {})}}>
-    <button className="taskBlockEdit" disabled={saving} aria-label={`Redaguoti planą: ${task.title}`} title={segment.gestureSafe ? "Tempk į kitą dieną arba paspausk redaguoti. Shift+←→ — diena, Shift+↑↓ — laikas." : "Kelių dienų ar laiko keitimo dienos planą keisk paspaudęs redaguoti"}
+    <button className="taskBlockEdit" disabled={saving} aria-label={`Redaguoti planą: ${task.title}`} title="Tempk į kitą dieną arba paspausk redaguoti. Shift+←→ — diena, Shift+↑↓ — laikas."
       onClick={(e) => {if (e.detail===0 || !moved.current) actions.edit(task);}}
-      onKeyDown={(e) => {if(!online||!segment.gestureSafe||!e.shiftKey)return;const steps:Record<string,number>={ArrowDown:15,ArrowUp:-15,ArrowRight:1440,ArrowLeft:-1440};const step=steps[e.key];if(!step)return;e.preventDefault();const ns=new Date(start.getTime()+step*60000);setSaving(true);void actions.move(task,ns).finally(()=>setSaving(false));}}
-      onPointerDown={(e) => {moved.current=false;if (!online || !segment.gestureSafe || e.button !== 0) return;moveGesture.current={x:e.clientX,y:e.clientY,grab:e.clientY-e.currentTarget.closest(".eventBlock")!.getBoundingClientRect().top};moved.current=false;e.currentTarget.setPointerCapture(e.pointerId);}}
-      onPointerMove={(e) => {const g=moveGesture.current;if (!g) return;const dx=e.clientX-g.x,dy=e.clientY-g.y;if (moved.current || Math.hypot(dx,dy)>5) {moved.current=true;setOffset({x:dx,y:dy});const hintLane=document.elementsFromPoint(e.clientX,e.clientY).find(el=>el instanceof HTMLElement && el.classList.contains("dayLane")) as HTMLElement|undefined;const sourceLane=e.currentTarget.closest(".dayLane") as HTMLElement|undefined;if(hintLane?.dataset.day){try{actions.setDragHint(taskDropHint(hintLane,e.clientY,g.grab,task.duration_minutes));setCrossedDay(hintLane.dataset.day!==sourceLane?.dataset.day);}catch{actions.setDragHint(null);setCrossedDay(false);}}else{actions.setDragHint(null);setCrossedDay(false);}}}}
+      onKeyDown={(e) => {if(!online||!e.shiftKey)return;const steps:Record<string,[number,number]>={ArrowDown:[0,15],ArrowUp:[0,-15],ArrowRight:[1,0],ArrowLeft:[-1,0]};const step=steps[e.key];if(!step)return;e.preventDefault();keyboardMove(...step);}}
+      onPointerDown={(e) => {moved.current=false;if (!online || e.button !== 0) return;moveGesture.current={x:e.clientX,y:e.clientY,grabOffset:sourceGrabOffset(e.currentTarget,e.clientY)};moved.current=false;e.currentTarget.setPointerCapture(e.pointerId);}}
+      onPointerMove={(e) => {const g=moveGesture.current;if (!g) return;const dx=e.clientX-g.x,dy=e.clientY-g.y;if (moved.current || Math.hypot(dx,dy)>5) {moved.current=true;setOffset({x:dx,y:dy});scrollCalendarAtPointer(e.currentTarget,e.clientY);const hintLane=calendarLaneAt(e.clientX,e.clientY),sourceLane=e.currentTarget.closest(".dayLane") as HTMLElement|undefined,candidate=hintLane&&laneDateCandidates(hintLane,e.clientY)[0];if(hintLane&&candidate){actions.setDragHint(dragHintFor(hintLane,candidate,task.duration_minutes));setCrossedDay(hintLane.dataset.day!==sourceLane?.dataset.day);}else{actions.setDragHint(null);setCrossedDay(false);}}}}
       onPointerCancel={() => {moveGesture.current=null;setOffset(null);setCrossedDay(false);actions.setDragHint(null);}}
       onPointerUp={(e) => {
-        if (!moveGesture.current) return;const grab=moveGesture.current.grab;moveGesture.current=null;e.currentTarget.releasePointerCapture(e.pointerId);
+        if (!moveGesture.current) return;const grabOffset=moveGesture.current.grabOffset;moveGesture.current=null;e.currentTarget.releasePointerCapture(e.pointerId);
         setCrossedDay(false);actions.setDragHint(null);
         if (!moved.current) return;
         const beneath=document.elementsFromPoint(e.clientX,e.clientY);
-        const lane=beneath.find((element) => element instanceof HTMLElement && element.classList.contains("dayLane")) as HTMLElement | undefined;
+        const lane=calendarLaneAt(e.clientX,e.clientY);
         const unplanned=beneath.some((element) => element instanceof HTMLElement && element.classList.contains("taskList"));
         setOffset(null);
-        if (lane?.dataset.day) {try {const date=dateAtMinute(new Date(lane.dataset.day+"T00:00:00"),e.clientY-lane.getBoundingClientRect().top-grab);setSaving(true);void actions.move(task,date).finally(() => setSaving(false));} catch(error) {actions.report(error);}}
+        if (lane?.dataset.day) {const candidates=laneDateCandidates(lane,e.clientY).map(candidate=>new Date(candidate.getTime()-grabOffset));if(!candidates.length)actions.report(new Error("Pasirinktas laikas neegzistuoja dėl vasaros laiko."));else if(candidates.length===2)setRepeated({mode:"move",candidates});else {setSaving(true);void actions.move(task,candidates[0]).finally(() => setSaving(false));}}
         else if (unplanned) {setSaving(true);void actions.move(task,null).finally(() => setSaving(false));}
       }}><span>{segment.continuesBefore ? "← Tęsinys · " : ""}{start.toLocaleTimeString("lt-LT",{hour:"2-digit",minute:"2-digit"})} · {durationLabel(preview ?? task.duration_minutes)}{segment.continuesAfter ? " →" : ""}</span><strong>✓ {task.title}</strong></button>
     <button className="taskBlockDone" disabled={!online} aria-label={`Užbaigti: ${task.title}`} onClick={() => actions.complete(task)}>✓</button>
-    {segment.gestureSafe && <button className="taskResize" disabled={!online||saving} aria-label={`Keisti trukmę: ${task.title}`} title="Tempk trukmei keisti; rodyklės keičia po 15 min." onDragStart={(e) => {e.preventDefault();e.stopPropagation();}}
-      onPointerDown={(e) => {if (e.button !== 0) return;e.preventDefault();e.stopPropagation();e.currentTarget.setPointerCapture(e.pointerId);gesture.current={y:e.clientY,duration:task.duration_minutes,next:task.duration_minutes};setPreview(task.duration_minutes);}}
-      onPointerMove={(e) => {const g=gesture.current;if (!g) return;g.next=Math.min(1440,Math.max(15,Math.round((g.duration+e.clientY-g.y)/15)*15));setPreview(g.next);}}
-      onPointerUp={(e) => {const g=gesture.current;if (!g) return;gesture.current=null;e.currentTarget.releasePointerCapture(e.pointerId);if (g.next !== task.duration_minutes) void commit(g.next);else setPreview(null);}}
-      onPointerCancel={() => {gesture.current=null;setPreview(null);}}
+    {!segment.continuesAfter && <button className="taskResize" disabled={!online||saving} aria-label={`Keisti trukmę: ${task.title}`} title="Tempk trukmei keisti per dienas; rodyklės keičia po 15 min." onDragStart={(e) => {e.preventDefault();e.stopPropagation();}}
+      onPointerDown={(e) => {if (e.button !== 0) return;e.preventDefault();e.stopPropagation();e.currentTarget.setPointerCapture(e.pointerId);gesture.current={mode:"resize"};setPreview(task.duration_minutes);}}
+      onPointerMove={(e) => {if (!gesture.current) return;scrollCalendarAtPointer(e.currentTarget,e.clientY);const lane=calendarLaneAt(e.clientX,e.clientY),candidate=lane&&laneDateCandidates(lane,e.clientY)[0];if(!lane||!candidate)return;const next=Math.round((candidate.getTime()-start.getTime())/60000);if(next<15||next>1440){actions.setDragHint(null);return;}actions.setDragHint(dragHintFor(lane,candidate,15));setPreview(next);}}
+      onPointerUp={(e) => {if (!gesture.current) return;gesture.current=null;e.currentTarget.releasePointerCapture(e.pointerId);actions.setDragHint(null);const lane=calendarLaneAt(e.clientX,e.clientY),candidates=(lane?laneDateCandidates(lane,e.clientY):[]).filter(candidate=>{const minutes=(candidate.getTime()-start.getTime())/60000;return minutes>=15&&minutes<=1440;});if(!candidates.length){setPreview(null);actions.report(new Error("Užduoties trukmė turi būti nuo 15 minučių iki 24 valandų."));}else if(candidates.length===2)setRepeated({mode:"resize",candidates});else {const next=Math.round((candidates[0].getTime()-start.getTime())/60000);if(next!==task.duration_minutes)void commit(next);else setPreview(null);}}}
+      onPointerCancel={() => {gesture.current=null;setPreview(null);actions.setDragHint(null);}}
       onKeyDown={(e) => {if (e.key === "ArrowUp" || e.key === "ArrowDown") {e.preventDefault();void commit(Math.min(1440,Math.max(15,task.duration_minutes+(e.key === "ArrowDown" ? 15 : -15))));}}}>═</button>}
+    {repeated&&<RepeatedHourChoice title={repeated.mode==="move"?"Pasirink, į kurį laiko egzempliorių perkelti užduotį.":"Pasirink, kuriuo laiko egzemplioriumi baigiasi užduotis."} candidates={repeated.candidates} onChoose={finishChoice} onCancel={()=>{setRepeated(null);setPreview(null);}}/>}
   </div>;
 }
 function Month({ days, anchor, events, tasks, onCreate }: { days: Date[]; anchor: Date; events: CalEvent[]; tasks: Task[]; onCreate: (d: Date) => void }) { const eventActions=useContext(EventActions); const taskActions=useContext(TaskActions); return <div className="monthGrid">{dayNames.map((name) => <div className="weekday" key={name}>{name}</div>)}{days.map((day) => { const items: Array<{type:"event";value:CalEvent}|{type:"task";value:Task}> = [...events.filter((event) => touchesDay(new Date(event.start.dateTime || `${event.start.date}T00:00:00`),new Date(event.end.dateTime || `${event.end.date}T00:00:00`),day)).map((event) => ({type:"event" as const,value:event})), ...tasks.filter((task) => !task.completed && task.scheduled_at && touchesDay(new Date(task.scheduled_at),new Date(Date.parse(task.scheduled_at)+task.duration_minutes*60000),day)).map((task) => ({type:"task" as const,value:task})), ...tasks.filter((task) => !task.completed && !task.scheduled_at && task.due_date && task.due_date===localInput(day).slice(0,10)).map((task) => ({type:"task" as const,value:task}))]; return <button className={`${day.getMonth() !== anchor.getMonth() ? "outside" : ""} ${sameDay(day, new Date()) ? "today" : ""}`} onDoubleClick={() => onCreate(day)} key={day.toISOString()}><strong>{day.getDate()}</strong>{items.slice(0, 3).map((item, i) => { const ec=item.type==="event"?item.value.calendarColor:undefined; return <span key={i} className={item.type==="event"?"monthEvent":undefined} style={{cursor:"pointer",...(ec?{...calendarColorStyle(ec),paddingLeft:"5px"}:{})}} title={item.type==="event"?`${item.value.accountLabel||item.value.provider} · ${item.value.calendarName||item.value.calendarId}`:item.value.title} onClick={(e) => { e.stopPropagation(); if (item.type === "event") eventActions.edit(item.value); else taskActions.edit(item.value); }}>{item.type === "event" ? (item.value.summary || "Įvykis") : `✓ ${item.value.title}`}</span>; })}{items.length > 3 && <small>+{items.length - 3} daugiau</small>}</button>; })}</div>; }

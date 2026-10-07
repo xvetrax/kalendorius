@@ -73,7 +73,7 @@ npm start
 npm run worker
 ```
 
-`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo, užduočių pradžios ir dienos ritualų pranešimų workerį, pasikartojančių serijų konversiją, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus bei Lord Howe vasaros / žiemos laiko ribas ir saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-06 pilnas ciklas baigtas su 364/364 Node testais ir 65/65 Playwright scenarijais.
+`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo, užduočių pradžios ir dienos ritualų pranešimų workerį, pasikartojančių serijų skaidymą, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus bei Lord Howe vasaros / žiemos laiko ribas ir saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-07 pilnas ciklas baigtas su 370/370 Node testų ir 66/66 Playwright scenarijais.
 
 `test:smoke` paleidžia tik lokalią produkcinę kopiją su laikina DB ir neprijungtomis integracijomis. Tikrina CSS / JS / favicon, OAuth klaidas, CSRF, atjungimo API bei užduoties sukūrimą, planavimą, perkėlimą, trukmę, išplanavimą ir užbaigimą. Tikrina, kad terminas nekinta ir pasenusi plano versija atmetama. Užbaigęs pašalina savo testinę DB.
 
@@ -127,11 +127,11 @@ Kalendoriaus data parenkama naršyklėje, o ne įrašoma produkcinio surinkimo m
 
 Dienos / savaitės tinklelis apima 00:00–24:00, planavimas apvalinamas kas 15 min. (paskutinė pradžia 23:45). Pradžioje rodoma sritis nuo maždaug 07:00; iki nakties nuslink žemyn. Vienu metu vykstantys įvykiai ir užduotys dalijasi stulpeliais. Per vidurnaktį trunkantis darbas rodomas kiekvieną paliestą dieną, ir mėnesio rodinyje. Trumpuose blokuose prioritetas teikiamas pavadinimui; tikslų laiką matysi redaktoriuje.
 
-Kelių dienų blokai ir laikrodžio persukimo dienų blokai šiame etape keičiami redaktoriumi, ne tempiant. 23 / 25 val. dienos pažymimos antraštėje; neegzistuojantis arba pasikartojantis Vilniaus valandos laikas atmetamas planuojant tinklelyje. Kartojamos valandos atskiros juostos ir jos egzemplioriaus pasirinkimas redaktoriuje dar neįgyvendinti. Tai nėra pilnas visų laiko zonų / DST scenarijų palaikymas.
+Kelių dienų blokai tempiami tarp matomų dienų išlaikant absoliučią trukmę; įvykio pabaigos kraštą taip pat galima tempti per dienų ribas. Artėjant prie matomos tinklelio srities viršaus ar apačios kalendorius automatiškai slenka, o violetinis lauko indikatorius rodo numatomą vietą. 23 / 25 val. dienos pažymimos antraštėje: neegzistuojanti valanda atmetama, o pasikartojančiai valandai programa paprašo pasirinkti pirmą arba antrą egzempliorių su UTC poslinkiu. Užduoties trukmė dėl duomenų modelio tebėra ribojama iki 24 valandų; įvykio trukmė gali apimti kelias dienas.
 
 Savo organizuojamus įvykius galima kurti, redaguoti ir šalinti pasirinktame rašomame kalendoriuje. Redaktorius valdo pavadinimą, aprašymą, vietą, laiko zoną, visos dienos datas, matomumą, laisvas / užimtas būseną bei priminimus. Ne pasikartojantį įvykį galima konvertuoti tarp laiko ir visos dienos režimų. Tempimas ir krašto tempimas veikia dienos / savaitės rodiniuose; sudėtingesniems pakeitimams naudok redaktorių. Susitikimui su dalyviais prieš išsaugojimą būtinas atskiras patvirtinimas.
 
-Naujam įvykiui galima pasirinkti kasdienį, savaitinį, mėnesinį arba metinį kartojimą, intervalą, savaitės dienas ir pabaigą pagal datą ar pasikartojimų skaičių. Pasikartojančio įvykio redaktorius atskiria vieno egzemplioriaus pakeitimą nuo visos serijos kartojimo taisyklės. Tiekėjo taisyklė, kurios programa negali saugiai išversti, rodoma tik skaitymui. Veiksmas **šis ir visi būsimi** dar neįgyvendintas, nes jam reikia perskirti seriją ir saugiai perkelti jos išimtis. Specialius Google įvykių tipus ir ne savo organizuojamus įvykius redaguok originaliame kalendoriuje.
+Naujam įvykiui galima pasirinkti kasdienį, savaitinį, mėnesinį arba metinį kartojimą, intervalą, savaitės dienas ir pabaigą pagal datą ar pasikartojimų skaičių. Pasikartojančio įvykio redaktorius atskiria vieno egzemplioriaus pakeitimą, visos serijos taisyklę ir **šį bei visus būsimus**. Pastarasis veiksmas sutrumpina seną seriją ir sukuria naują nuo pasirinkto egzemplioriaus; kadangi tiekėjai neperkelia būsimų išimčių atominiu būdu, prieš veiksmą reikia aiškiai patvirtinti jų atstatymą. Stabilus operacijos ID leidžia pakartoti neaiškaus atsakymo operaciją nesukuriant antros naujos serijos. Tiekėjo taisyklė, kurios programa negali saugiai išversti, rodoma tik skaitymui. Specialius Google įvykių tipus ir ne savo organizuojamus įvykius redaguok originaliame kalendoriuje.
 
 Kūrimo forma visą atidarymo laiką naudoja tą patį operacijos ID. Google gauna deterministinį įvykio ID, Microsoft — stabilų `transactionId`; neaiškų atsakymą galima kartoti nesukuriant antro įvykio. Po pirmo bandymo pakeistas turinys su tuo pačiu operacijos ID atmetamas, todėl tokiu atveju uždaryk formą, patikrink kalendorių ir pradėk naują kūrimą.
 
@@ -171,13 +171,10 @@ Patikra atliekama su izoliuotomis imitacinėmis API. Tai negarantuoja atominio �
 
 ## Likę darbai ir vykdymo eilė
 
-Pirmiausia atliekama aukščiau aprašyta gyvų Google ir Microsoft paskyrų bei realių PWA įrenginių priėmimo patikra ir taisomi jos metu rasti neatitikimai. Po jos patobulinimai vykdomi šia eilės tvarka:
+Pirmiausia atliekama aukščiau aprašyta gyvų Google ir Microsoft paskyrų bei realių PWA įrenginių priėmimo patikra ir taisomi jos metu rasti neatitikimai. Artimiausi likę patobulinimai:
 
-1. pasikartojančios serijos veiksmas **šis ir visi būsimi**, turint saugų serijos skaidymo bei išimčių perkėlimo modelį;
-2. automatinis kalendoriaus slinkimas tempiant ir aiškus laiko taikinys;
-3. pilnas kelių dienų / DST tempimas bei aiškus pasikartojančios valandos egzemplioriaus pasirinkimas;
-4. fizinių telefonų, klaviatūros ir jutiklinio valdymo prieinamumo auditas;
-5. PWA-4 — ribotas paskutinio pasirinkto dienos plano skaitymas be interneto, be offline redagavimo.
+1. fizinių telefonų, klaviatūros ir jutiklinio valdymo prieinamumo auditas;
+2. PWA-4 — ribotas paskutinio pasirinkto dienos plano skaitymas be interneto, be offline redagavimo.
 
 Papildomas priežiūros darbas: pridėti senų užbaigtų kalendoriaus kūrimo operacijų registro valymo politiką. Detalūs priėmimo kriterijai ir etapų tvarka pateikti [PRODUCT_PLAN.md](PRODUCT_PLAN.md) bei [PWA_PLAN.md](PWA_PLAN.md).
 

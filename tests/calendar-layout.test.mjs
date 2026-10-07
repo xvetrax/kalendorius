@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {layoutDay, dateAtMinute, dayBounds, touchesDay} from "../lib/calendar-layout.ts";
+import {autoScrollDelta,datesAtMinute,layoutDay, dateAtMinute, dayBounds, touchesDay} from "../lib/calendar-layout.ts";
 process.env.TZ = "Europe/Vilnius";
 const day = new Date("2026-09-15T00:00:00");
 const item = (key, start, end) => ({key, start:new Date(`2026-09-15T${start}:00`), end:new Date(`2026-09-15T${end}:00`)});
@@ -29,6 +29,17 @@ test("DST day bounds use calendar days, unsafe wall times are rejected", () => {
   assert.equal((dayBounds(fall).end-dayBounds(fall).start)/3600000,25);
   assert.throws(()=>dateAtMinute(spring,210),/laiko/);assert.throws(()=>dateAtMinute(fall,210),/laiko/);
   assert.equal(dateAtMinute(spring,270).getHours(),4);
+});
+test("DST candidate selection exposes both repeated hours and explicit choices",()=>{
+  const normal=new Date("2026-09-15T00:00:00"),spring=new Date("2026-03-29T00:00:00"),fall=new Date("2026-10-25T00:00:00");
+  assert.equal(datesAtMinute(normal,570).length,1);
+  assert.equal(datesAtMinute(spring,210).length,0);
+  const repeated=datesAtMinute(fall,210);assert.equal(repeated.length,2);assert.notEqual(repeated[0].getTimezoneOffset(),repeated[1].getTimezoneOffset());
+  assert.equal(dateAtMinute(fall,210,"earlier").getTime(),repeated[0].getTime());assert.equal(dateAtMinute(fall,210,"later").getTime(),repeated[1].getTime());
+});
+test("drag auto-scroll accelerates only near or beyond visible edges",()=>{
+  assert.equal(autoScrollDelta(500,100,900),0);assert.ok(autoScrollDelta(110,100,900)<0);assert.ok(autoScrollDelta(890,100,900)>0);
+  assert.equal(autoScrollDelta(100,100,900),-28);assert.equal(autoScrollDelta(900,100,900),28);
 });
 test("invalid intervals are excluded and output is deterministic", () => {
   const items=[item("b","09:00","10:00"),item("a","09:00","10:00"),item("invalid","12:00","11:00")];

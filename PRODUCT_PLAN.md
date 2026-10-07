@@ -115,7 +115,7 @@ Priimta, kai sutartiniai testai su imitacine Graph paslauga įrodo: 0 kalendoria
 - [x] Modernus išdėstymas, abiejų temų palaikymas, redaktoriai, paieška, klaviatūra, mobilus rodinys.
 - [x] Kairė navigacija, centrinis kalendorius, suskleidžiama dešinė juosta, šviesi / tamsi / sistemos tema, nustatymų langas, ⌘ / Ctrl K paieška ir atskiri mobilūs rodiniai. Pilnas klaviatūros bei jutiklinis valdymas dar nebaigtas.
 - [x] Visos dienos ir kelių dienų įvykiai, persidengimai, dabartinis laikas, konfliktai ir 24 val. pasiekiamumas.
-- [x] 24 val. dienos / savaitės tinklelis, bendri įvykių ir užduočių persidengimo stulpeliai, naktinių blokų skaidymas ir dabartinio laiko linija. Kelių dienų bei DST tempimas ir kartojamos valandos pasirinkimas lieka nebaigti.
+- [x] 24 val. dienos / savaitės tinklelis, bendri įvykių ir užduočių persidengimo stulpeliai, naktinių blokų skaidymas, dabartinio laiko linija, automatinis slinkimas tempiant, kelių dienų įvykio perkėlimas / dydžio keitimas ir aiškus pasikartojančios DST valandos pasirinkimas.
 
 Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įskaitant perkėlimą į kitą savaitę, trukmę, atšaukimą, HTTP klaidą ir datos pokyčius ties 2026-03-29 bei 2026-10-25 Vilniuje.
 
@@ -125,7 +125,7 @@ Priimta, kai pagrindinis scenarijus praeina naršyklėje pele ir be pelės, įsk
 - [x] Teisingas tuščias kalendorių pasirinkimas ir kūrimas / redagavimas / šalinimas pasirinktame ne numatytajame kalendoriuje; įvykio tapatybė apima kalendoriaus ID.
 - [x] Sukūrimas, detalus redagavimas ir pašalinimas: pavadinimas, aprašymas, vieta, pradžia / pabaiga, laiko zona, visos dienos įvykis, matomumas, laisvas / užimtas, priminimai. Naujų ir esamų laiko įvykių redaktoriai valdo IANA laiko zoną, o nepasikartojantys įvykiai konvertuojami tarp laiko bei visos dienos režimų.
 - [x] Dalyviai, kvietimų atnaujinimas, dalyvavimo atsakymas ir metaduomenų išsaugojimas; Google Meet / Teams pagal kalendoriaus ir paskyros galimybes. RSVP veiksmas patikrintas sintetiniais Google ir Microsoft tiekėjais.
-- [x] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus ir serijos redagavimas. „Šį ir būsimus“ sąmoningai nerodoma, kol nebus atskirai patikrintas serijos skaidymas ir išimčių perkėlimas.
+- [x] Kasdien / kas savaitę / kas mėnesį / kas metus, intervalai, savaitės dienos, pabaiga; atskiro egzemplioriaus, visos serijos ir „šio bei visų būsimų“ redagavimas. Pastarasis saugiai sutrumpina seną seriją ir nedubliuodamas sukuria naują, o naudotojas aiškiai patvirtina būsimų tiekėjo išimčių atstatymą.
 - [ ] ETag / versijų konfliktai, išoriniai pakeitimai ir 401/403/429 apdorojami; nedubliuojantis Google ir Microsoft įvykių kūrimas po neaiškaus atsakymo įgyvendintas ir patikrintas imitacine API, liko gyvos Graph paskyros patikra.
 - [x] Atskirai įvertinti Google focus time / out-of-office / working location ir Outlook papildomas galimybes pagal viešą API bei paskyros licenciją. Nepalaikomas funkcijas pažymėti galimybių lentelėje.
 
@@ -201,9 +201,9 @@ Detalus įdiegimo, saugaus podėlio, ryšio būsenos, Web Push, platformų patik
 
 Įgyvendinimo eilė po gyvų paskyrų ir PWA priėmimo patikros:
 
-1. [ ] **Pasikartojantys įvykiai — „šis ir visi būsimi“.** Suprojektuoti saugų serijos skaidymą, išimčių perkėlimą, tiekėjų versijų konfliktus ir aiškų poveikio patvirtinimą; patikrinti Google bei Microsoft sintetiniais adapteriais ir gyvomis bandomosiomis paskyromis.
-2. [ ] **Automatinis slinkimas tempiant.** Dienos ir savaitės tinklelyje slinkti artėjant prie matomos srities krašto, išlaikyti aiškų laiko taikinį ir neleisti netyčiniam perkėlimui po nesėkmingos operacijos.
-3. [ ] **Pilnas kelių dienų ir DST tempimas.** Leisti saugiai perkelti bei keisti kelių dienų blokus, pasirinkti konkretų pasikartojančios valandos egzempliorių ir apibrėžti elgseną 23 bei 25 valandų dienomis.
+1. [x] **Pasikartojantys įvykiai — „šis ir visi būsimi“.** Google ir Microsoft serija skaidoma dviem versijuotais tiekėjo veiksmais, nauja serija turi stabilų operacijos ID, neaiškią baigtį galima saugiai kartoti, o būsimų išimčių atstatymas rodomas ir patvirtinamas prieš veiksmą. Liko gyvų paskyrų priėmimo patikra.
+2. [x] **Automatinis slinkimas tempiant.** Dienos ir savaitės tinklelis slenka prie matomos srities kraštų ir rodo aiškų 15 minučių laiko taikinį; nesėkminga mutacija išlaiko serverio būseną.
+3. [x] **Pilnas kelių dienų ir DST tempimas.** Įvykius galima perkelti ir keisti per dienų ribas išlaikant absoliučią trukmę; 23 valandų dienoje neegzistuojantis laikas atmetamas, o 25 valandų dienoje pasirenkamas pirmas arba antras kartojamos valandos egzempliorius. Užduočių trukmės 24 valandų riba išlieka sąmoninga duomenų modelio taisyklė.
 4. [ ] **Fizinių įrenginių prieinamumo auditas.** Patikrinti telefonų lietimą, klaviatūros navigaciją, fokusą, ekrano skaitytuvų pavadinimus, kontrastą ir valdiklių dydžius realiuose macOS, Windows, Android bei iPhone įrenginiuose; rastas problemas taisyti atskirais patikrintais commitais.
 5. [ ] **PWA-4 — ribotas dienos planas be interneto.** Išsaugoti tik naudotojo aiškiai pasirinktą paskutinį dienos planą su galiojimo laiku, naudotojo izoliacija ir visišku išvalymu atsijungus; kūrimo bei redagavimo nepridėti.
 
@@ -545,3 +545,11 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, bendros komandų darbo 
 - Gyvas Google kalendorių katalogas grąžino `401`, tačiau nustatymų kalendorių pasirinkimo komponentas klaidos objektą priėmė kaip sėkmingą sąrašą ir nulūžo skaitydamas neegzistuojantį `items`. Komponentas dabar tikrina HTTP būseną bei atsakymo formą ir vietoje runtime klaidos rodo tiekėjo sesijos pranešimą; neprijungto tiekėjo krovimo būsena neberodoma.
 - Regresinis naršyklės scenarijus atidaro nustatymus su Google `401`, patvirtina matomą pakartotinio prisijungimo pranešimą ir tikrina, kad nebūtų `pageerror`.
 - Patikra: `git diff --check`, `npm run typecheck`, 264/264 `npm test`, `npm run build` ir 38/38 `npm run test:e2e` scenarijai praėjo.
+
+### 2026-10-07 — serijos skaidymas, automatinis slinkimas ir kelių dienų / DST tempimas
+
+- Pasikartojančio Google arba Microsoft įvykio redaktorius siūlo atskirai keisti visą seriją arba pasirinktą bei visus būsimus egzempliorius. Antras veiksmas sutrumpina pradinę seriją ties pasirinktu egzemplioriumi ir sukuria naują seriją su pakoreguota pabaiga; pirmojo egzemplioriaus skaidyti neleidžiama.
+- Skaidymas tikrina jungtį, kalendorių, master ir egzemplioriaus versijas, originalią pasikartojimo datą bei laiką. Prieš veiksmą būtina patvirtinti, kad būsimos tiekėjo išimtys ir atšaukimai bus atstatyti. Google naudoja deterministinį ID, Microsoft — stabilų `transactionId`; neaiškią baigtį galima pakartoti tuo pačiu operacijos ID. Google Meet serijai sukuriama nauja Meet konferencija su stabiliu `requestId`.
+- Tempiant laiko tinklelį jis automatiškai slenka prie viršutinio arba apatinio krašto ir rodo ryškesnį 15 minučių tikslą. Įvykiai perkeliami bei jų pabaiga keičiama per dienų ribas išlaikant absoliučią trukmę; klaviatūros dienos žingsnis išlaiko sieninį laiką.
+- DST tarpelyje neegzistuojantis laikas atmetamas. Kartojamos žiemos laiko valandos atveju dialogas aiškiai siūlo pirmą arba antrą egzempliorių ir parodo UTC poslinkį. Užduotims palikta 15–1440 minučių duomenų modelio riba, o įvykiai gali trukti ilgiau nei parą.
+- Patikra: `git diff --check`, `npm run typecheck`, 370/370 `npm test`, `npm run build`, 66/66 `npm run test:e2e`, `test:smoke`, `test:calendars`, `test:tasks` ir produkcinis Docker web / worker / backup-restore smoke testas praėjo. Tikros Google bei Microsoft paskyros ir fizinių įrenginių lietimas šiame automatiniame cikle nekeisti.
