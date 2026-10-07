@@ -1,6 +1,7 @@
 "use client";
 
 import {createPortal} from "react-dom";
+import {useEffect,useRef} from "react";
 import {autoScrollDelta,datesAtMinute,minuteOfDay} from "@/lib/calendar-layout";
 
 export function calendarLaneAt(x:number,y:number){
@@ -30,6 +31,20 @@ function offsetLabel(date:Date){
 }
 
 export function RepeatedHourChoice({title,candidates,onChoose,onCancel}:{title:string;candidates:Date[];onChoose:(date:Date)=>void;onCancel:()=>void}){
+  const panel=useRef<HTMLElement>(null),cancel=useRef(onCancel);cancel.current=onCancel;
+  useEffect(()=>{
+    const previous=document.activeElement as HTMLElement|null;
+    panel.current?.querySelector<HTMLElement>("button")?.focus();
+    function key(event:KeyboardEvent){
+      if(event.key==="Escape"){event.preventDefault();cancel.current();return;}
+      if(event.key!=="Tab")return;
+      const controls=Array.from(panel.current?.querySelectorAll<HTMLElement>("button:not(:disabled)")||[]),first=controls[0],last=controls.at(-1);
+      if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
+      else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+    }
+    document.addEventListener("keydown",key);
+    return()=>{document.removeEventListener("keydown",key);previous?.focus();};
+  },[]);
   if(typeof document==="undefined"||candidates.length!==2)return null;
-  return createPortal(<div className="modalBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onCancel();}}><section className="modal repeatedHourDialog" role="dialog" aria-modal="true" aria-labelledby="repeated-hour-title"><h2 id="repeated-hour-title">Pasirink pasikartojančią valandą</h2><p>{title} Ši valanda tą dieną pasitaiko du kartus.</p><div className="repeatedHourActions">{candidates.map((candidate,index)=><button type="button" className="newButton" key={candidate.toISOString()} onClick={()=>onChoose(candidate)}>{index===0?"Pirmas kartas":"Antras kartas"}<small>{candidate.toLocaleTimeString("lt-LT",{hour:"2-digit",minute:"2-digit"})} · {offsetLabel(candidate)}</small></button>)}</div><button type="button" className="ghostButton" onClick={onCancel}>Atšaukti</button></section></div>,document.body);
+  return createPortal(<div className="modalBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onCancel();}}><section ref={panel} className="modal repeatedHourDialog" role="dialog" aria-modal="true" aria-labelledby="repeated-hour-title"><h2 id="repeated-hour-title">Pasirink pasikartojančią valandą</h2><p>{title} Ši valanda tą dieną pasitaiko du kartus.</p><div className="repeatedHourActions">{candidates.map((candidate,index)=><button type="button" className="newButton" key={candidate.toISOString()} onClick={()=>onChoose(candidate)}>{index===0?"Pirmas kartas":"Antras kartas"}<small>{candidate.toLocaleTimeString("lt-LT",{hour:"2-digit",minute:"2-digit"})} · {offsetLabel(candidate)}</small></button>)}</div><button type="button" className="ghostButton" onClick={onCancel}>Atšaukti</button></section></div>,document.body);
 }

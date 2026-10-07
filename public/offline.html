@@ -13,8 +13,17 @@
       <img src="/pwa/icon-192.png" width="72" height="72" alt="">
       <p class="eyebrow">DIENOS PLANAS</p>
       <h1>Nėra interneto ryšio</h1>
-      <p>Privatūs kalendoriaus ir užduočių duomenys šiame puslapyje nesaugomi. Prisijunk prie interneto ir bandyk dar kartą.</p>
+      <p id="offline-message">Tikrinama, ar šiame įrenginyje yra galiojantis paskutinės pasirinktos dienos planas.</p>
+      <section id="offline-plan" hidden aria-labelledby="offline-plan-title">
+        <div class="planHeading">
+          <div><p class="eyebrow">TIK SKAITYMUI</p><h2 id="offline-plan-title"></h2></div>
+          <small id="offline-plan-age"></small>
+        </div>
+        <ul id="offline-plan-items"></ul>
+        <p class="privacyNote">Šioje kopijoje nėra aprašymų, dalyvių, nuorodų ar prisijungimo žetonų. Redaguoti galėsi atkūrus ryšį.</p>
+      </section>
       <a href="/">Bandyti dar kartą</a>
     </main>
+    <script src="/pwa/offline-plan.js" defer></script>
   </body>
 </html>

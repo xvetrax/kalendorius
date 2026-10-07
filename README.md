@@ -73,7 +73,7 @@ npm start
 npm run worker
 ```
 
-`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo, užduočių pradžios ir dienos ritualų pranešimų workerį, pasikartojančių serijų skaidymą, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus bei Lord Howe vasaros / žiemos laiko ribas ir saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-07 pilnas ciklas baigtas su 370/370 Node testų ir 66/66 Playwright scenarijais.
+`npm test` apima automatinius regresinius testus, įskaitant kelių naudotojų DB izoliaciją, viešą OIDC paskyros sukūrimą, senos vieno naudotojo schemos saugų atmetimą, imitacines Google / Microsoft paslaugas, „Free“ bloko ryšį / pakartojimą, įvykių API maršrutus, nedubliuojantį kūrimą po neaiškaus atsakymo, patvarų fokusavimo, užduočių pradžios ir dienos ritualų pranešimų workerį, pasikartojančių serijų skaidymą, versijų konfliktus, dalyvių patvirtinimą, abiejų tiekėjų OAuth lenktynes, kalendoriaus persidengimus, vidurnaktį, Vilniaus bei Lord Howe vasaros / žiemos laiko ribas ir saugų temos parinkimą. Testai nenaudoja tikrų paskyrų ar raktų. 2026-10-07 pilnas ciklas baigtas su 374/374 Node testais ir 74/74 Playwright scenarijais.
 
 `test:smoke` paleidžia tik lokalią produkcinę kopiją su laikina DB ir neprijungtomis integracijomis. Tikrina CSS / JS / favicon, OAuth klaidas, CSRF, atjungimo API bei užduoties sukūrimą, planavimą, perkėlimą, trukmę, išplanavimą ir užbaigimą. Tikrina, kad terminas nekinta ir pasenusi plano versija atmetama. Užbaigęs pašalina savo testinę DB.
 
@@ -81,7 +81,7 @@ npm run worker
 
 `test:tasks` tikrina produkcinius vietinių, Google Tasks ir Microsoft To Do užduočių maršrutus: kūrimą, planavimą, perkėlimą, trukmę, užbaigimą, atkūrimą ir ištrynimą. Naudojama laikina DB ir tik sintetiniai tiekėjai; išorinis tinklas užblokuotas. `node tests/tasks-smoke.mjs --preview` palieka tą kopiją `http://127.0.0.1:3102` naršyklės patikrai iki Ctrl+C.
 
-`test:e2e` po produkcinio build parenka laisvą vietinį prievadą, sukuria unikalią laikiną SQLite bazę ir paleidžia atskirą produkcinį serverį. Testai niekada neperima jau veikiančio `:3000` serverio. Baigus ar testams nepraėjus laikinas katalogas su DB pašalinamas. Rinkinys tikrina vietinių užduočių pilną CRUD ir išlikimą, nesėkmingo kūrimo rollback, matomus tinklo klaidų pranešimus, lėtą atsakymą, tikrą vienos dienos mobilų tinklelį, prieinamus formų laukus ir konkrečią 2026-03-29 Vilniaus 23 valandų DST dieną. Tiesioginis `playwright test` sąmoningai atmetamas; naudok npm komandą, kad testai negalėtų paliesti naudotojo DB.
+`test:e2e` po produkcinio build parenka laisvą vietinį prievadą, sukuria unikalią laikiną SQLite bazę ir paleidžia atskirą produkcinį serverį. Testai niekada neperima jau veikiančio `:3000` serverio. Baigus ar testams nepraėjus laikinas katalogas su DB pašalinamas. Rinkinys tikrina vietinių užduočių pilną CRUD ir išlikimą, nesėkmingo kūrimo rollback, matomus tinklo klaidų pranešimus, lėtą atsakymą, tikrą vienos dienos mobilų tinklelį, modalų fokusą, mėnesio valdiklių semantiką, mobilių taikinių dydį, offline plano išsaugojimą bei išvalymą ir konkrečią 2026-03-29 Vilniaus 23 valandų DST dieną. Tiesioginis `playwright test` sąmoningai atmetamas; naudok npm komandą, kad testai negalėtų paliesti naudotojo DB.
 
 `test:docker` sukuria laikiną produkcinį image ir duomenų katalogą, įrašo dvi Google bei dvi Microsoft jungtis, patikrina web ir pranešimų workerio health būsenas, pilnos kopijos atsisiuntimą, duomenų pakeitimo rollback per atkūrimą ir antrą paleidimą su ta pačia baze. Testas nenaudoja `.env` paslapčių ar veikiančio `:3000` serverio ir pabaigoje pašalina savo konteinerius, image bei laikinus duomenis. Jam reikia veikiančio Docker daemon.
 
@@ -169,12 +169,17 @@ Prieš šalinimą rodoma dabartinė užduočių suma, reikia tiksliai įvesti s�
 
 Patikra atliekama su izoliuotomis imitacinėmis API. Tai negarantuoja atominio šalinimo, jei kitoje programoje sąrašas pasikeičia tarp paskutinio perskaitymo ir tiekėjo DELETE; gyvų paskyrų ir Google sąrašo `If-Match` elgsena dar nepatvirtinta. Jei tiekėjas pašalina sąrašą, bet atsakymas prarandamas, vietiniai planai išsaugomi, kol rezultatas nėra patvirtintas; juos galima peržiūrėti ir sutvarkyti nustatymuose.
 
+## Dienos planas be interneto
+
+Prisijungus prie interneto programėlė po sėkmingo užduočių ir abiejų kalendoriaus tiekėjų įkėlimo šiame įrenginyje išsaugo tuo metu pasirinktos dienos planą. Kopija galioja 48 valandas ir turi tik pavadinimą, laiką bei šaltinį; aprašymai, pastabos, dalyviai, vietos, nuorodos, tiekėjų ID ir OAuth duomenys nesaugomi.
+
+Nutrūkus ryšiui perkrovus įdiegtą PWA arba puslapį rodomas paskutinis galiojantis planas. Jis skirtas tik skaityti: be interneto negalima kurti, keisti, užbaigti ar šalinti įrašų. Naujas sėkmingai įkeltas pasirinktos dienos planas pakeičia ankstesnį. Atsijungimas, atsijungimas dėl pasibaigusios sesijos, programos paskyros ištrynimas ir kito programos naudotojo sesijos patvirtinimas išvalo ankstesnę kopiją iš IndexedDB.
+
+Prieš kelionę ar kitą laiką be ryšio, dar būdamas prisijungęs atverk norimą dieną ir palauk, kol jos užduotys bei kalendoriai bus įkelti be klaidos. Tada galima trumpam išjungti tinklą ir perkrauti puslapį, kad būtų patikrintas offline ekranas.
+
 ## Likę darbai ir vykdymo eilė
 
-Pirmiausia atliekama aukščiau aprašyta gyvų Google ir Microsoft paskyrų bei realių PWA įrenginių priėmimo patikra ir taisomi jos metu rasti neatitikimai. Artimiausi likę patobulinimai:
-
-1. fizinių telefonų, klaviatūros ir jutiklinio valdymo prieinamumo auditas;
-2. PWA-4 — ribotas paskutinio pasirinkto dienos plano skaitymas be interneto, be offline redagavimo.
+Pirmiausia atliekama aukščiau aprašyta gyvų Google ir Microsoft paskyrų bei realių PWA įrenginių priėmimo patikra ir taisomi jos metu rasti neatitikimai. PWA-4 automatinis įgyvendinimas užbaigtas. Liko realių macOS, Windows, Android bei iPhone įrenginių diegimo, OAuth, Web Push, offline plano ir [prieinamumo priėmimo patikra](ACCESSIBILITY_AUDIT.md).
 
 Papildomas priežiūros darbas: pridėti senų užbaigtų kalendoriaus kūrimo operacijų registro valymo politiką. Detalūs priėmimo kriterijai ir etapų tvarka pateikti [PRODUCT_PLAN.md](PRODUCT_PLAN.md) bei [PWA_PLAN.md](PWA_PLAN.md).
 

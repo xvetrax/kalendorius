@@ -70,6 +70,62 @@ test("atidarant programėlę pratęsiamas ilgalaikis prisijungimo slapukas", asy
   expect(remainingDays).toBeLessThanOrEqual(30.01);
 });
 
+test("sėkmingai įkeltas pasirinktos dienos planas išsaugomas izoliuotame IndexedDB", async ({ page }) => {
+  await page.goto("/");
+  await expect.poll(async()=>page.evaluate(async()=>{
+    const databases=await indexedDB.databases();
+    if(!databases.some(database=>database.name==="dienos-planas-offline"))return null;
+    const request=indexedDB.open("dienos-planas-offline",1);
+    const db=await new Promise<IDBDatabase>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+    const transaction=db.transaction(["snapshots","meta"],"readonly"),metaRequest=transaction.objectStore("meta").get("active-user");
+    const meta=await new Promise<{value?:string}|undefined>((resolve,reject)=>{metaRequest.onsuccess=()=>resolve(metaRequest.result);metaRequest.onerror=()=>reject(metaRequest.error);});
+    if(!meta?.value){db.close();return null;}
+    const snapshotRequest=transaction.objectStore("snapshots").get(meta.value),value=await new Promise<Record<string,unknown>|undefined>((resolve,reject)=>{snapshotRequest.onsuccess=()=>resolve(snapshotRequest.result);snapshotRequest.onerror=()=>reject(snapshotRequest.error);});db.close();return value||null;
+  })).not.toBeNull();
+  const stored=await page.evaluate(async()=>{
+    const request=indexedDB.open("dienos-planas-offline",1),db=await new Promise<IDBDatabase>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+    const tx=db.transaction("snapshots","readonly"),all=tx.objectStore("snapshots").getAll(),value=await new Promise<Array<{userKey:string;expiresAt:number;capturedAt:number}>>((resolve,reject)=>{all.onsuccess=()=>resolve(all.result);all.onerror=()=>reject(all.error);});db.close();return value;
+  });
+  expect(stored).toHaveLength(1);
+  expect(stored[0].userKey).toBe("user:1");
+  expect(stored[0].expiresAt-stored[0].capturedAt).toBe(48*60*60*1000);
+});
+
+test("prisijungus kitu naudotoju svetima offline kopija išvaloma prieš plano įkėlimą", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(async()=>{
+    const request=indexedDB.open("dienos-planas-offline",1),db=await new Promise<IDBDatabase>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+    const tx=db.transaction(["snapshots","meta"],"readwrite");
+    tx.objectStore("snapshots").clear();tx.objectStore("snapshots").put({version:1,userKey:"user:999",day:"2026-10-07",capturedAt:1,expiresAt:Date.now()+60_000,items:[{kind:"task",title:"Svetimas planas",allDay:true,source:"Vietinė",provider:"local"}]});
+    tx.objectStore("meta").clear();tx.objectStore("meta").put({key:"active-user",value:"user:999"});
+    await new Promise<void>((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});db.close();
+  });
+  await page.route("**/api/tasks?envelope=1",route=>route.abort("connectionrefused"));
+  const auth=page.waitForResponse(response=>response.url().endsWith("/api/auth/me"));
+  await page.reload();await auth;
+  await expect.poll(()=>page.evaluate(async()=>{
+    const request=indexedDB.open("dienos-planas-offline",1),db=await new Promise<IDBDatabase>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+    const tx=db.transaction(["snapshots","meta"],"readonly"),snapshots=tx.objectStore("snapshots").count(),meta=tx.objectStore("meta").count();
+    const values=await Promise.all([snapshots,meta].map(request=>new Promise<number>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);})));db.close();return values;
+  })).toEqual([0,0]);
+});
+
+test("sėkmingas atsijungimas išvalo offline dienos planą", async ({ page }) => {
+  await page.route("**/api/auth/logout",route=>route.fulfill({status:200,json:{ok:true}}));
+  await page.route("**/login",route=>route.fulfill({status:200,contentType:"text/html",body:"<!doctype html><html lang='lt'><body><h1>Prisijungimas</h1></body></html>"}));
+  await page.goto("/");
+  await expect.poll(()=>page.evaluate(()=>indexedDB.databases().then(databases=>databases.some(database=>database.name==="dienos-planas-offline")))).toBe(true);
+  await page.getByRole("button",{name:"Nustatymai",exact:true}).click();
+  await page.getByRole("button",{name:"Atsijungti",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Prisijungimas"})).toBeVisible();
+  const remaining=await page.evaluate(async()=>{
+    const request=indexedDB.open("dienos-planas-offline",1),db=await new Promise<IDBDatabase>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+    const tx=db.transaction(["snapshots","meta"],"readonly"),snapshots=tx.objectStore("snapshots").count(),meta=tx.objectStore("meta").count();
+    const values=await Promise.all([snapshots,meta].map(request=>new Promise<number>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);})));db.close();return values;
+  });
+  expect(remaining).toEqual([0,0]);
+});
+
 test("nauja versija siūloma aiškiu veiksmu ir saugo atidarytą redagavimą", async ({ page }) => {
   await page.goto("/");
   await page.waitForLoadState("networkidle");

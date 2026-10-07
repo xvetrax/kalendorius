@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dienos-planas-public-";
-const CACHE_VERSION = "v3";
+const CACHE_VERSION = "v4";
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const OFFLINE_URL = "/offline.html";
 const PUBLIC_ASSETS = [
@@ -7,6 +7,7 @@ const PUBLIC_ASSETS = [
   "/manifest.webmanifest",
   "/favicon.svg",
   "/pwa/offline.css",
+  "/pwa/offline-plan.js",
   "/pwa/icon-192.png",
   "/pwa/icon-512.png",
   "/pwa/icon-maskable-512.png",

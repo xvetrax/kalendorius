@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {usePwaRuntime} from "@/app/pwa-runtime";
 import {logoutPushContext} from "@/app/push-client";
+import {clearOfflineDayPlans} from "@/lib/offline-day-plan";
 
 interface Identity {
   provider: "google" | "microsoft";
@@ -85,6 +86,7 @@ export function UserAccountPanel() {
         headers: { "Origin": window.location.origin },
       });
       if (res.ok) {
+        await clearOfflineDayPlans().catch(() => undefined);
         window.location.href = "/login";
       } else {
         const data = await res.json().catch(() => ({}));

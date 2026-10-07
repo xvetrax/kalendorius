@@ -37,4 +37,22 @@ test.describe("mobile viewport", () => {
     await expect(page.locator(".dayHead")).toHaveCount(1);
     await expect(page.locator(".dayLane")).toHaveCount(1);
   });
+
+  test("touch controls keep at least a 44px target", async ({ page }) => {
+    await page.goto("/");
+    for(const control of [
+      page.getByRole("button",{name:"Atnaujinti duomenis"}),
+      page.getByRole("button",{name:"Išvaizdos nustatymai"}),
+      page.getByRole("button",{name:"Užduotys",exact:true}),
+    ]){
+      const box=await control.boundingBox();
+      expect(box).toBeTruthy();
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+    await page.getByRole("button",{name:"Nustatymai",exact:true}).click();
+    const close=await page.getByRole("button",{name:"Uždaryti"}).boundingBox();
+    expect(close?.width).toBeGreaterThanOrEqual(44);
+    expect(close?.height).toBeGreaterThanOrEqual(44);
+  });
 });

@@ -23,13 +23,13 @@ test("Google and Outlook events keep distinct colors and open from month view",a
   const outlookColor=await page.locator(".eventBlock.outlook").evaluate(element=>getComputedStyle(element).backgroundColor);
   expect(googleColor).not.toBe(outlookColor);
   await page.getByRole("button",{name:"Mėnuo",exact:true}).click();
-  await page.locator(".monthGrid span").filter({hasText:"Google spalva"}).click();
+  await page.locator(".monthGrid .monthItem").filter({hasText:"Google spalva"}).click();
   await expect(page.getByRole("dialog",{name:"Kalendoriaus įvykis"}).getByLabel("Pavadinimas")).toHaveValue("Google spalva");
   await page.getByRole("dialog",{name:"Kalendoriaus įvykis"}).getByRole("button",{name:"Uždaryti"}).click();
-  await page.locator(".monthGrid span").filter({hasText:"Outlook spalva"}).click();
+  await page.locator(".monthGrid .monthItem").filter({hasText:"Outlook spalva"}).click();
   await expect(page.getByRole("dialog",{name:"Kalendoriaus įvykis"}).getByLabel("Pavadinimas")).toHaveValue("Outlook spalva");
   await page.getByRole("dialog",{name:"Kalendoriaus įvykis"}).getByRole("button",{name:"Uždaryti"}).click();googleItems=[];
-  await page.getByRole("button",{name:"Atnaujinti duomenis"}).click();await expect(page.locator(".monthGrid span").filter({hasText:"Google spalva"})).toHaveCount(0);
+  await page.getByRole("button",{name:"Atnaujinti duomenis"}).click();await expect(page.locator(".monthGrid .monthItem").filter({hasText:"Google spalva"})).toHaveCount(0);
 });
 
 test("two Google accounts use different full card colors and show event origin",async({page})=>{
@@ -74,7 +74,7 @@ test("Google due-date task appears on its day, opens in month view and shows a d
   const handleBox=await handle.boundingBox(),targetBox=await targetSlot.boundingBox();expect(handleBox).toBeTruthy();expect(targetBox).toBeTruthy();
   await page.mouse.move(handleBox!.x+handleBox!.width/2,handleBox!.y+handleBox!.height/2);await page.mouse.down();await page.mouse.move(targetBox!.x+targetBox!.width/2,targetBox!.y+targetBox!.height/2,{steps:8});
   await expect(lane.locator(".dropHint")).toBeVisible();await page.mouse.move(2,2);await page.mouse.up();await expect(page.locator(".dropHint")).toHaveCount(0);
-  await page.getByRole("button",{name:"Mėnuo",exact:true}).click();await page.locator(".monthGrid span").filter({hasText:"Google dienos užduotis"}).click();
+  await page.getByRole("button",{name:"Mėnuo",exact:true}).click();await page.locator(".monthGrid .monthItem").filter({hasText:"Google dienos užduotis"}).click();
   await expect(page.getByRole("dialog",{name:"Užduotis ir jos planas"}).getByLabel("Pavadinimas")).toHaveValue("Google dienos užduotis");
 });
 

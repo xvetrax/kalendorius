@@ -195,7 +195,7 @@ Detalus įdiegimo, saugaus podėlio, ryšio būsenos, Web Push, platformų patik
 - [ ] **PWA-1:** manifestas, ikonų rinkinys, diegimo sąsaja ir standalone išdėstymas įgyvendinti bei automatiškai patikrinti; liko reali macOS / Android diegimo, OAuth ir sesijos patikra.
 - [x] **PWA-2:** saugus viešų statinių resursų service worker, offline būsena, ryšio apsaugos ir valdomas programėlės atnaujinimas įgyvendinti bei automatiškai patikrinti.
 - [ ] **PWA-3:** naudotojo valdomos Push prenumeratos, atskiras patvarus worker, fokusavimo pabaigos, užduoties pradžios bei ryto / vakaro ritualų priminimai įgyvendinti ir automatiškai patikrinti; liko gyva kelių platformų pristatymo patikra.
-- [ ] **PWA-4:** suplanuotas penktas patobulinimas — ribotas paskutinio pasirinkto dienos plano skaitymas be interneto; offline redagavimas lieka atskiras konfliktų valdymo projektas.
+- [x] **PWA-4:** ribotas paskutinio pasirinkto dienos plano skaitymas be interneto įgyvendintas su 48 valandų galiojimu, naudotojo izoliacija ir išvalymu atsijungus; offline redagavimas lieka atskiras konfliktų valdymo projektas.
 
 ### J. Tolimesni kalendoriaus ir PWA patobulinimai
 
@@ -204,8 +204,8 @@ Detalus įdiegimo, saugaus podėlio, ryšio būsenos, Web Push, platformų patik
 1. [x] **Pasikartojantys įvykiai — „šis ir visi būsimi“.** Google ir Microsoft serija skaidoma dviem versijuotais tiekėjo veiksmais, nauja serija turi stabilų operacijos ID, neaiškią baigtį galima saugiai kartoti, o būsimų išimčių atstatymas rodomas ir patvirtinamas prieš veiksmą. Liko gyvų paskyrų priėmimo patikra.
 2. [x] **Automatinis slinkimas tempiant.** Dienos ir savaitės tinklelis slenka prie matomos srities kraštų ir rodo aiškų 15 minučių laiko taikinį; nesėkminga mutacija išlaiko serverio būseną.
 3. [x] **Pilnas kelių dienų ir DST tempimas.** Įvykius galima perkelti ir keisti per dienų ribas išlaikant absoliučią trukmę; 23 valandų dienoje neegzistuojantis laikas atmetamas, o 25 valandų dienoje pasirenkamas pirmas arba antras kartojamos valandos egzempliorius. Užduočių trukmės 24 valandų riba išlieka sąmoninga duomenų modelio taisyklė.
-4. [ ] **Fizinių įrenginių prieinamumo auditas.** Patikrinti telefonų lietimą, klaviatūros navigaciją, fokusą, ekrano skaitytuvų pavadinimus, kontrastą ir valdiklių dydžius realiuose macOS, Windows, Android bei iPhone įrenginiuose; rastas problemas taisyti atskirais patikrintais commitais.
-5. [ ] **PWA-4 — ribotas dienos planas be interneto.** Išsaugoti tik naudotojo aiškiai pasirinktą paskutinį dienos planą su galiojimo laiku, naudotojo izoliacija ir visišku išvalymu atsijungus; kūrimo bei redagavimo nepridėti.
+4. [ ] **Fizinių įrenginių prieinamumo auditas.** Automatinis pagrindas užbaigtas: skip nuoroda, matomas fokusas, modalų fokuso ciklas ir grąžinimas, semantinis mėnesio rodinys, gyvi būsenos pranešimai bei mobilių valdiklių dydžiai padengti Playwright. Liko [realūs macOS, Windows, Android ir iPhone bandymai](ACCESSIBILITY_AUDIT.md) su klaviatūra, lietimu ir ekrano skaitytuvais.
+5. [x] **PWA-4 — ribotas dienos planas be interneto.** Saugoma tik sėkmingai įkelta pasirinkta diena, 48 valandų kopija izoliuota pagal aktyvų naudotoją ir visiškai išvaloma atsijungus, ištrynus paskyrą arba pasibaigus sesijai. Kūrimo ir redagavimo nėra.
 
 Kiekvienas punktas yra atskiras darbo paketas su tiksliniais testais darbo metu, pilnu regresijos ciklu po didesnio pakeitimo, nepriklausoma peržiūra ir atskiru commit bei push į `origin`.
 
@@ -553,3 +553,10 @@ AI automatinis planavimas, vieši rezervavimo puslapiai, bendros komandų darbo 
 - Tempiant laiko tinklelį jis automatiškai slenka prie viršutinio arba apatinio krašto ir rodo ryškesnį 15 minučių tikslą. Įvykiai perkeliami bei jų pabaiga keičiama per dienų ribas išlaikant absoliučią trukmę; klaviatūros dienos žingsnis išlaiko sieninį laiką.
 - DST tarpelyje neegzistuojantis laikas atmetamas. Kartojamos žiemos laiko valandos atveju dialogas aiškiai siūlo pirmą arba antrą egzempliorių ir parodo UTC poslinkį. Užduotims palikta 15–1440 minučių duomenų modelio riba, o įvykiai gali trukti ilgiau nei parą.
 - Patikra: `git diff --check`, `npm run typecheck`, 370/370 `npm test`, `npm run build`, 66/66 `npm run test:e2e`, `test:smoke`, `test:calendars`, `test:tasks` ir produkcinis Docker web / worker / backup-restore smoke testas praėjo. Tikros Google bei Microsoft paskyros ir fizinių įrenginių lietimas šiame automatiniame cikle nekeisti.
+
+### 2026-10-07 — prieinamumo pagrindas ir PWA-4
+
+- Pagrindinis turinys gavo skip nuorodą ir matomą klaviatūros fokusą. Modalai bei kartojamos DST valandos pasirinkimas uždaro fokusą viduje, reaguoja į `Escape` ir grąžina fokusą. Mėnesio įrašai tapo atskirais semantiniais mygtukais, o būsenos pranešimas — mandagiu gyvu regionu su atskiru uždarymu.
+- Telefonuose padidinti svarbiausi antraštės, modalų ir veiksmų lietimo taikiniai, tempimo rankenos bei pridėtas didelio kontrasto palaikymas. Automatinę dalį dengia naršyklės scenarijai; likusi fizinių macOS, Windows, Android ir iPhone įrenginių matrica aprašyta [ACCESSIBILITY_AUDIT.md](ACCESSIBILITY_AUDIT.md).
+- Po sėkmingo užduočių ir abiejų kalendoriaus tiekėjų įkėlimo išsaugoma viena pasirinktos dienos kopija. Ji galioja 48 valandas, saugo tik pavadinimą, laiką ir kilmę, o offline karkase pateikiama tik skaityti. Atsijungimas, paskyros ištrynimas ir patvirtinta pasibaigusi sesija išvalo IndexedDB saugyklą.
+- Patikra: `git diff --check`, `npm run typecheck`, 374/374 `npm test`, `npm run build`, 74/74 `npm run test:e2e`, `test:smoke`, `test:calendars`, `test:tasks` ir produkcinis Docker web / worker / backup-restore smoke testas praėjo. Gyvos paskyros ir fiziniai įrenginiai šiame automatiniame cikle nekeičiami.

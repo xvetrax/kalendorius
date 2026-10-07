@@ -1,6 +1,6 @@
 # „Dienos planas“ PWA įgyvendinimo planas
 
-Atnaujinta: 2026-10-06. Būsena: PWA-1a, PWA-2, PWA-3a, PWA-3b1, PWA-3b2a ir PWA-3b2b įgyvendinimas bei automatinė patikra užbaigti; PWA-1b ir PWA-3 liko realių įrenginių, gyvos OAuth sesijos, gyvo kelių kortelių atnaujinimo ir Web Push priėmimo patikra. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
+Atnaujinta: 2026-10-07. Būsena: PWA-1a, PWA-2, PWA-3 ir PWA-4 įgyvendinimas bei automatinė patikra užbaigti; PWA-1b, PWA-3 ir PWA-4 liko realių įrenginių, gyvos OAuth sesijos, gyvo kelių kortelių atnaujinimo, Web Push ir offline plano priėmimo patikra. Gyva kelių paskyrų MA-8b patikra užbaigiama lygiagrečiai pagal [kelių Google ir Microsoft paskyrų etapą](MULTI_ACCOUNT_PLAN.md).
 
 ## Įgyvendinimo eiga
 
@@ -13,6 +13,7 @@ Atnaujinta: 2026-10-06. Būsena: PWA-1a, PWA-2, PWA-3a, PWA-3b1, PWA-3b2a ir PWA
 - [x] **PWA-3b1:** scenarijų nuostatų ir patvaraus `notification_jobs` registro pagrindas, per įrenginį atskirtos pristatymo būsenos, atskiras Docker worker ir fokusavimo pabaigos priminimas.
 - [x] **PWA-3b2a:** užduoties pradžios priminimas pagal programėlės planą, pasirenkamas išankstinis laikas, atominių užduoties pakeitimų ir darbų eilės suderinimas bei atkūrimas iš pilnos kopijos.
 - [x] **PWA-3b2b:** ryto / vakaro ritualų priminimai su naudotojo IANA laiko zona, aiškia DST taisykle ir dviejų valandų serverio pertraukos atkūrimo langu.
+- [x] **PWA-4:** tik skaitomas pasirinktos dienos planas IndexedDB saugykloje, 48 valandų galiojimas, vieno aktyvaus naudotojo izoliacija ir išvalymas atsijungus.
 
 ### PWA-1b perdavimo būsena
 
@@ -194,9 +195,11 @@ Techninis pagrindas: [oficialus Next.js PWA vadovas](https://nextjs.org/docs/app
 - Atšaukus leidimą arba ištrynus paskyrą, nauji pranešimai nebesiunčiami.
 - Patikrinta Android Chrome, macOS Chrome / Safari ir bent viename iPhone su įdiegta PWA.
 
-## PWA-4 — ribotas darbas be interneto (suplanuotas penktas patobulinimas)
+## PWA-4 — ribotas darbas be interneto
 
-Šis etapas vykdomas po pasikartojančių įvykių, tempimo ir fizinių įrenginių prieinamumo darbų. Pirmiausia leidžiama tik perskaityti paskutinį naudotojo aiškiai pasirinktą dienos planą. Duomenys laikomi IndexedDB, raktinami pagal naudotojo ID, turi galiojimo laiką ir visiškai ištrinami atsijungus.
+Etapas įgyvendintas kaip tik skaitoma paskutinio sėkmingai įkelto pasirinktos dienos plano kopija. Ji laikoma IndexedDB, galioja 48 valandas ir turi vieno aktyvaus naudotojo raktą. Išsaugomi tik pavadinimai, laikai ir tekstinė paskyros / kalendoriaus arba užduočių sąrašo kilmė. Aprašymai, pastabos, dalyviai, vietos, nuorodos, tiekėjų ID ir OAuth duomenys neįtraukiami.
+
+Service worker toliau netalpina privataus API į Cache Storage. Viešas offline karkasas pats perskaito tik galiojančią IndexedDB kopiją ir pateikia ją su `textContent`. Naujas planas pakeičia ankstesnį. Kopija išvaloma sėkmingai atsijungus, ištrynus programos paskyrą, serveriui patvirtinus, kad sesija nebegalioja arba aptikus kito programos naudotojo sesiją. Offline režime nėra kūrimo, redagavimo, užbaigimo ar šalinimo veiksmų.
 
 Offline kūrimas ar redagavimas yra atskiras projektas. Jam reikės patvarios veiksmų eilės, idempotentiškų operacijų ID, konfliktų ekrano ir aiškių Google / Microsoft versijų taisyklių. Jis neįtraukiamas į pradinį PWA leidimą.
 
@@ -209,6 +212,7 @@ Offline kūrimas ar redagavimas yra atskiras projektas. Jam reikės patvarios ve
 - Service worker antraštės, versijos pakeitimas ir senų podėlių valymas.
 - Draudimas talpinti `/api/*`, `/login`, backup ar OAuth atsakymus į Cache Storage.
 - Offline ekrano Playwright scenarijus ir saugus atsistatymas grįžus ryšiui.
+- Vienos dienos atranka, 48 valandų galiojimas, pasibaigusios kopijos nerodymas, privataus turinio laukų nebuvimas, naudotojo izoliacija ir išvalymas atsijungus.
 - Push prenumeratų naudotojų izoliacija, CSRF, ištrynimas, 404 / 410 valymas ir pranešimų idempotentiškumas.
 - Pilnas `npm test`, `npm run typecheck`, `npm run build`, smoke ir aktualūs Playwright scenarijai po kiekvieno didesnio PWA etapo.
 
@@ -243,4 +247,4 @@ Kiekviena užbaigta eilutė yra atskiras patikrintas commit ir push į aktyvią 
 
 ## Toliau rekomenduojama apimtis
 
-Pirmiausia užbaigiamas PWA-1b bei PWA-3 gyvas priėmimas realiuose macOS, Android ir iPhone įrenginiuose: diegimas, OAuth grįžimas, kelių kortelių atnaujinimas ir visi keturi pranešimų scenarijai. Po bendro kalendoriaus patobulinimų eilės vykdomas PWA-4 — ribotas paskutinio pasirinkto dienos plano skaitymas be interneto, aiškiai apibrėžus galiojimo laiką ir duomenų išvalymą. Offline redagavimas į PWA-4 neįtraukiamas.
+Pirmiausia užbaigiamas PWA-1b, PWA-3 ir PWA-4 gyvas priėmimas realiuose macOS, Android ir iPhone įrenginiuose: diegimas, OAuth grįžimas, kelių kortelių atnaujinimas, visi keturi pranešimų scenarijai ir 48 valandų offline plano rodymas bei išvalymas. Kartu vykdomas [fizinių įrenginių prieinamumo auditas](ACCESSIBILITY_AUDIT.md). Offline redagavimas į PWA-4 neįtraukiamas.

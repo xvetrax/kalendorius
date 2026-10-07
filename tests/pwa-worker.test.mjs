@@ -24,7 +24,7 @@ async function loadWorker({ network = async () => new Response("network") } = {}
       async open() {
         return { async addAll(requests) { cachedRequests.push(...requests); } };
       },
-      async keys() { return ["dienos-planas-public-v0", "dienos-planas-public-v1", "dienos-planas-public-v2", "kitas-cache"]; },
+    async keys() { return ["dienos-planas-public-v0", "dienos-planas-public-v1", "dienos-planas-public-v2", "dienos-planas-public-v3", "kitas-cache"]; },
       async delete(name) { deleted.push(name); return true; },
       async match(request) {
         const path = typeof request === "string" ? request : new URL(request.url).pathname;
@@ -87,6 +87,7 @@ test("service worker podėlyje laiko tik aiškiai leistus viešus failus", async
   assert.ok(paths.includes("/offline.html"));
   assert.ok(paths.includes("/manifest.webmanifest"));
   assert.ok(paths.includes("/pwa/icon-192.png"));
+  assert.ok(paths.includes("/pwa/offline-plan.js"));
   assert.ok(paths.every((path) => !path.startsWith("/api/") && path !== "/login"));
   assert.ok(worker.cachedRequests.every((request) => request.credentials === "omit"));
 });
@@ -122,7 +123,7 @@ test("aktyvuojant pašalinamas tik senas programėlės podėlis", async () => {
   const activate = lifetimeEvent();
   worker.listeners.get("activate")(activate.event);
   await activate.done();
-  assert.deepEqual(worker.deleted, ["dienos-planas-public-v0", "dienos-planas-public-v1", "dienos-planas-public-v2"]);
+  assert.deepEqual(worker.deleted, ["dienos-planas-public-v0", "dienos-planas-public-v1", "dienos-planas-public-v2", "dienos-planas-public-v3"]);
 });
 
 test("atnaujinimo žinutė išlaiko workerį gyvą iki skipWaiting pabaigos", async () => {

@@ -27,6 +27,7 @@ import {InstallAppPanel, usePwaInstall} from "@/app/(settings)/InstallAppPanel";
 import {PushNotificationsPanel} from "@/app/(settings)/PushNotificationsPanel";
 import {usePwaRuntime} from "@/app/pwa-runtime";
 import {logoutPushContext} from "@/app/push-client";
+import {buildOfflineDaySnapshot,clearOfflineDayPlans,ensureOfflineDayPlanUser,saveOfflineDayPlan} from "@/lib/offline-day-plan";
 
 type View = "calendar" | "tasks" | "focus";
 type Mode = "day" | "workweek" | "week" | "month";
@@ -98,13 +99,14 @@ export default function Planner() {
   const [focusNotificationOperationId,setFocusNotificationOperationId]=useState<string|null>(null);
   const [focusRestored,setFocusRestored]=useState(false);
   const [dragHint,setDragHint]=useState<{day:string;minute:number;height:number}|null>(null);
+  const [offlineReadyDay,setOfflineReadyDay]=useState<string|null>(null);
 
   // Auth context — resolved from /api/auth/me (server-verified session only)
   const [me,setMe]=useState<{id:number;role:"admin"|"member"}|null|"loading">("loading");
   useEffect(()=>{
     fetch("/api/auth/me").then(async res=>{
-      if(res.status===401){window.location.href="/login";return;}
-      if(res.ok){const data=await res.json().catch(()=>({}));setMe({id:data.id,role:data.role});}
+      if(res.status===401){await clearOfflineDayPlans().catch(()=>undefined);window.location.href="/login";return;}
+      if(res.ok){const data=await res.json().catch(()=>({}));await ensureOfflineDayPlanUser(data.id).catch(()=>undefined);setMe({id:data.id,role:data.role});}
       else setMe(null);
     }).catch(()=>setMe(null));
   },[]);
@@ -183,9 +185,20 @@ export default function Planner() {
       const auth=rejected.find(r=>r.reason instanceof HttpError && r.reason.status===401);
       setToast(auth ? `${(auth.reason as HttpError).message} Atidaryk nustatymus ir prisijunk iš naujo.` : "Dalies duomenų atnaujinti nepavyko. Išsaugoti duomenys tebėra rodomi.");
     }
+    if(ts.status==="fulfilled"&&me.status==="fulfilled"&&ge.status==="fulfilled"&&!ts.value.warnings.length&&!partialWarnings.length){
+      const day=localInput(anchor).slice(0,10);
+      setOfflineReadyDay(day);
+    }
     setLoading(false);
   }
   useEffect(() => { if(!clock)return;load().catch(() => { setToast("Nepavyko atnaujinti duomenų"); setLoading(false); }); }, [anchor, mode, Boolean(clock)]);
+  useEffect(()=>{
+    if(!pwaRuntime.online||!offlineReadyDay||me==="loading"||!me)return;
+    const selectedDay=localInput(anchor).slice(0,10);
+    if(selectedDay!==offlineReadyDay)return;
+    const snapshot=buildOfflineDaySnapshot({userId:me.id,day:selectedDay,tasks,events});
+    void saveOfflineDayPlan(snapshot).catch(()=>undefined);
+  },[anchor,events,me,offlineReadyDay,pwaRuntime.online,tasks]);
   useEffect(() => { try {const saved = localStorage.getItem("mirror-free"); setMirrorFree(saved === "true");} catch {} }, []);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search); const result = params.get("oauth"); const provider = params.get("integration") === "microsoft" ? "Microsoft" : "Google";
@@ -366,20 +379,21 @@ export default function Planner() {
     finally{setDisconnecting(null);}
   }
 
-  return <EventActions.Provider value={{report,edit:(event)=>setEditingEvent({event}),move:moveEvent,setDragHint}}><TaskActions.Provider value={{report,edit:setEditingTask,move:async (task,date) => {if (date) await planTask(task,date);else {try {const updated=await patchTask(task,{scheduled_at:null,mirror_requested:false});setToast(updated.mirror_error || "Užduotis grąžinta į neplanuotas.");} catch(error) {report(error);}}},complete:(task) => { void patchTask(task, {completed:!task.completed}).catch(report); },resize:async (task,minutes) => { try {const updated=await patchTask(task,{duration_minutes:minutes});setToast(updated.mirror_error || `Trukmė pakeista: ${durationLabel(minutes)}`);} catch(error) {report(error);} },setDragHint}}><main className={`appShell ${panelOpen ? "withPanel" : "withoutPanel"}`} data-mobile-panel={mobilePanelOpen || undefined}>
+  return <EventActions.Provider value={{report,edit:(event)=>setEditingEvent({event}),move:moveEvent,setDragHint}}><TaskActions.Provider value={{report,edit:setEditingTask,move:async (task,date) => {if (date) await planTask(task,date);else {try {const updated=await patchTask(task,{scheduled_at:null,mirror_requested:false});setToast(updated.mirror_error || "Užduotis grąžinta į neplanuotas.");} catch(error) {report(error);}}},complete:(task) => { void patchTask(task, {completed:!task.completed}).catch(report); },resize:async (task,minutes) => { try {const updated=await patchTask(task,{duration_minutes:minutes});setToast(updated.mirror_error || `Trukmė pakeista: ${durationLabel(minutes)}`);} catch(error) {report(error);} },setDragHint}}><div className={`appShell ${panelOpen ? "withPanel" : "withoutPanel"}`} data-mobile-panel={mobilePanelOpen || undefined}>
+    <a className="skipLink" href="#main-content">Pereiti prie pagrindinio turinio</a>
     <aside className="rail" aria-label="Pagrindinė navigacija">
       <button className="brand" aria-label="Dienos planas – šiandien" onClick={()=>{changeView("calendar");setAnchor(new Date());}}><span className="brandMark"><Icon name="calendar"/></span><span>Dienos planas<small>Tavo laikas. Tavo ritmu.</small></span></button>
       <div className="navCaption">DARBO ERDVĖ</div>
       <nav aria-label="Rodiniai"><Rail active={view==="calendar"} icon="calendar" label="Kalendorius" onClick={()=>changeView("calendar")}/><Rail active={view==="tasks"} icon="tasks" label="Užduotys" badge={openTasks.length} onClick={()=>changeView("tasks")}/><Rail active={view==="focus"} icon="focus" label="Fokusas" onClick={()=>changeView("focus")}/><Rail active={settingsOpen} icon="settings" label="Nustatymai" onClick={()=>setSettingsOpen(true)}/></nav>
       <div className="navFooter"><span className="eyebrow">TAVO KALENDORIAI</span><span><i className="providerDot outlook"/>{outlook ? "Outlook prijungtas" : "Outlook neprijungtas"}</span><span><i className="providerDot google"/>{google ? "Google prijungtas" : "Google neprijungtas"}</span><button onClick={()=>setSettingsOpen(true)}>Tvarkyti paskyras →</button><small>Privati darbo erdvė</small></div>
     </aside>
-    <section className="mainSurface">
+    <main className="mainSurface" id="main-content" tabIndex={-1}>
       <header className="topHeader">
         <div className="pageHeading"><span className="eyebrow">DIENOS PLANAS</span><h1>{view==="calendar" ? "Laikas tavo dienai" : view==="tasks" ? "Visi tavo darbai" : "Erdvė susikaupti"}</h1></div>
         <div className="search"><Icon name="search"/><input ref={searchInput} aria-label="Ieškoti užduočių ir įvykių" value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>{if(e.key==="Escape")setSearch("");}} placeholder="Ieškoti užduočių ir įvykių"/>{search ? <button aria-label="Išvalyti paiešką" onClick={()=>{setSearch("");searchInput.current?.focus();}}>×</button> : <kbd>⌘ / Ctrl K</kbd>}</div>
         <div className="headerActions"><button className="iconButton" aria-label="Atnaujinti duomenis" title="Atnaujinti duomenis" disabled={loading||!pwaRuntime.online} onClick={()=>{setLoading(true);void load().catch(error=>{setLoading(false);report(error);});}}>↻</button><button className="iconButton" aria-label="Išvaizdos nustatymai" title="Išvaizdos nustatymai" onClick={()=>setSettingsOpen(true)}><Icon name={theme==="dark" ? "moon" : "sun"}/></button>{view==="calendar" && <button className="iconButton panelToggle" aria-label={panelOpen ? "Slėpti užduočių juostą" : "Rodyti užduočių juostą"} title={panelOpen ? "Slėpti užduočių juostą" : "Rodyti užduočių juostą"} aria-expanded={panelOpen} aria-controls="task-panel" onClick={()=>{if(isMobile)setMobilePanelOpen(!mobilePanelOpen);else collapse(!collapsed);}}><Icon name="panel"/></button>}<button className="newButton" disabled={!pwaRuntime.online} aria-label={view==="calendar" ? "Naujas įvykis" : "Nauja užduotis"} onClick={()=>view==="calendar" ? setEventDate(new Date()) : setTaskModal(true)}><Icon name="plus"/><span>{view==="calendar" ? "Įvykis" : "Užduotis"}</span></button></div>
       </header>
-      {toast && <button role="status" className="toast" onClick={() => setToast("")}>{toast}<span>×</span></button>}
+      {toast && <div role="status" aria-live="polite" className="toast"><span>{toast}</span><button type="button" aria-label="Uždaryti pranešimą" onClick={() => setToast("")}>×</button></div>}
       {view === "calendar" && !clock && <div className="loading" role="status" aria-label="Kraunamas kalendorius"><i/><i/><i/></div>}
       {view === "calendar" && clock && <Calendar mode={mode} setMode={changeMode} anchor={anchor} setAnchor={setAnchor} days={days} monthDays={monthDays} events={calendarEvents} tasks={calendarTasks} loading={loading} move={move} onDrop={dropTask} onCreate={(date)=>{if(pwaRuntime.online)setEventDate(date);else setToast("Nėra interneto ryšio — naujo įvykio sukurti negalima.");}} dragHint={dragHint}/>}
       {view === "tasks" && <TaskBoard tasks={tasks.filter((task) => `${task.title} ${task.notes || ""}`.toLowerCase().includes(search.toLowerCase()))} onDone={(task) => { void patchTask(task, { completed: !task.completed }).catch(report); }} onFocus={startFocus} onAdd={() => setTaskModal(true)}/>}
@@ -388,7 +402,7 @@ export default function Planner() {
         onToggle={() => toggleFocus(focusTask||openTasks[0])} onReset={resetFocus} onSelect={startFocus}
         onDone={() => { const task=focusTask||openTasks[0];if(!task)return;void patchTask(task,{completed:true}).then(()=>{setFocusTask(null);resetFocus();}).catch(report); }}/>
       }
-    </section>
+    </main>
     <aside className="taskPanel" id="task-panel" aria-label="Neplanuotos užduotys" hidden={!panelOpen}>
       <header className="panelHeader"><div><span className="eyebrow">DARBŲ DĖŽUTĖ</span><h1>{clock ? clock.toLocaleDateString("lt-LT", { weekday: "long", day: "numeric", month: "long" }) : "Šiandien"}</h1></div><button className="roundButton" disabled={!pwaRuntime.online} aria-label="Nauja užduotis" onClick={() => setTaskModal(true)}><Icon name="plus"/></button></header>
       <section className="dayLoad"><div><strong>{durationLabel(todayMinutes)}</strong><span>suplanuota darbams</span></div><div className="progress"><i style={{ width: `${Math.min(100, todayMinutes / 480 * 100)}%` }}/></div><small>{todayEvents.length} įvykiai · {todayTasks.length} užduotys</small></section>
@@ -405,7 +419,7 @@ export default function Planner() {
     {editingTask && <TaskEditor task={editingTask} outlook={outlook} microsoftAccounts={(microsoftIntegration.connections??[]).filter(connection=>connection.status==="active")} taskLists={taskLists} onDelete={()=>deleteTask(editingTask)} onClose={() => setEditingTask(null)} onSave={async (patch) => { await patchTask(editingTask, patch); setEditingTask(null); }} onProviderChanged={()=>{setToast("Google Tasks hierarchija atnaujinta.");void load();}} onMoved={(moved)=>{setTasks(current=>current.map(item=>item.key===editingTask.key?moved:item));setFocusTask(current=>current?.key===editingTask.key?moved:current);setToast("Užduotis perkelta.");void load();}}/>}
     {taskModal && <TaskModal lists={taskLists} destination={taskDestination} onDestination={setTaskDestination} onClose={() => setTaskModal(false)} onSave={async (data) => { await createTask(data); setTaskModal(false); setToast("Užduotis sukurta"); }}/>}
     {eventDate && <EventModal initial={eventDate} outlook={outlook} google={google} outlookReady={outlookReady} googleReady={googleReady} onClose={() => setEventDate(null)} onSave={async () => { setEventDate(null); setToast("Įvykis sukurtas"); await load(); }}/>}
-  </main></TaskActions.Provider></EventActions.Provider>;
+  </div></TaskActions.Provider></EventActions.Provider>;
 }
 
 function Rail({active,icon,label,badge,onClick}:{active:boolean;icon:IconName;label:string;badge?:number;onClick:()=>void}) {return <button className={active ? "active" : ""} onClick={onClick} title={label} aria-label={label} aria-current={active ? "page" : undefined}><Icon name={icon}/><span className="navLabel">{label}</span>{badge ? <i>{badge}</i> : null}</button>;}
@@ -535,7 +549,27 @@ function TaskBlock({ task, segment }: { task: Task; segment:DaySegment }) {
     {repeated&&<RepeatedHourChoice title={repeated.mode==="move"?"Pasirink, į kurį laiko egzempliorių perkelti užduotį.":"Pasirink, kuriuo laiko egzemplioriumi baigiasi užduotis."} candidates={repeated.candidates} onChoose={finishChoice} onCancel={()=>{setRepeated(null);setPreview(null);}}/>}
   </div>;
 }
-function Month({ days, anchor, events, tasks, onCreate }: { days: Date[]; anchor: Date; events: CalEvent[]; tasks: Task[]; onCreate: (d: Date) => void }) { const eventActions=useContext(EventActions); const taskActions=useContext(TaskActions); return <div className="monthGrid">{dayNames.map((name) => <div className="weekday" key={name}>{name}</div>)}{days.map((day) => { const items: Array<{type:"event";value:CalEvent}|{type:"task";value:Task}> = [...events.filter((event) => touchesDay(new Date(event.start.dateTime || `${event.start.date}T00:00:00`),new Date(event.end.dateTime || `${event.end.date}T00:00:00`),day)).map((event) => ({type:"event" as const,value:event})), ...tasks.filter((task) => !task.completed && task.scheduled_at && touchesDay(new Date(task.scheduled_at),new Date(Date.parse(task.scheduled_at)+task.duration_minutes*60000),day)).map((task) => ({type:"task" as const,value:task})), ...tasks.filter((task) => !task.completed && !task.scheduled_at && task.due_date && task.due_date===localInput(day).slice(0,10)).map((task) => ({type:"task" as const,value:task}))]; return <button className={`${day.getMonth() !== anchor.getMonth() ? "outside" : ""} ${sameDay(day, new Date()) ? "today" : ""}`} onDoubleClick={() => onCreate(day)} key={day.toISOString()}><strong>{day.getDate()}</strong>{items.slice(0, 3).map((item, i) => { const ec=item.type==="event"?item.value.calendarColor:undefined; return <span key={i} className={item.type==="event"?"monthEvent":undefined} style={{cursor:"pointer",...(ec?{...calendarColorStyle(ec),paddingLeft:"5px"}:{})}} title={item.type==="event"?`${item.value.accountLabel||item.value.provider} · ${item.value.calendarName||item.value.calendarId}`:item.value.title} onClick={(e) => { e.stopPropagation(); if (item.type === "event") eventActions.edit(item.value); else taskActions.edit(item.value); }}>{item.type === "event" ? (item.value.summary || "Įvykis") : `✓ ${item.value.title}`}</span>; })}{items.length > 3 && <small>+{items.length - 3} daugiau</small>}</button>; })}</div>; }
+function Month({ days, anchor, events, tasks, onCreate }: { days: Date[]; anchor: Date; events: CalEvent[]; tasks: Task[]; onCreate: (d: Date) => void }) {
+  const eventActions=useContext(EventActions),taskActions=useContext(TaskActions);
+  return <div className="monthGrid">{dayNames.map(name=><div className="weekday" key={name}>{name}</div>)}{days.map(day=>{
+    const items:Array<{type:"event";value:CalEvent}|{type:"task";value:Task}>=[
+      ...events.filter(event=>touchesDay(new Date(event.start.dateTime||`${event.start.date}T00:00:00`),new Date(event.end.dateTime||`${event.end.date}T00:00:00`),day)).map(event=>({type:"event" as const,value:event})),
+      ...tasks.filter(task=>!task.completed&&task.scheduled_at&&touchesDay(new Date(task.scheduled_at),new Date(Date.parse(task.scheduled_at)+task.duration_minutes*60000),day)).map(task=>({type:"task" as const,value:task})),
+      ...tasks.filter(task=>!task.completed&&!task.scheduled_at&&task.due_date===localInput(day).slice(0,10)).map(task=>({type:"task" as const,value:task})),
+    ];
+    const dayLabel=day.toLocaleDateString("lt-LT",{weekday:"long",year:"numeric",month:"long",day:"numeric"});
+    return <section aria-label={dayLabel} className={`monthDay ${day.getMonth()!==anchor.getMonth()?"outside":""} ${sameDay(day,new Date())?"today":""}`} key={day.toISOString()}>
+      <button type="button" className="monthDayCreate" aria-label={`${dayLabel} – naujas įvykis`} title="Kurti naują įvykį" onClick={()=>onCreate(day)}><strong>{day.getDate()}</strong></button>
+      {items.slice(0,3).map((item,index)=>{
+        const color=item.type==="event"?item.value.calendarColor:undefined;
+        const label=item.type==="event"?(item.value.summary||"Įvykis"):`✓ ${item.value.title}`;
+        const origin=item.type==="event"?`${item.value.accountLabel||item.value.provider} · ${item.value.calendarName||item.value.calendarId}`:item.value.title;
+        return <button type="button" key={`${item.type}-${index}`} className={`monthItem${item.type==="event"?" monthEvent":""}`} style={color?calendarColorStyle(color):undefined} title={origin} onClick={()=>item.type==="event"?eventActions.edit(item.value):taskActions.edit(item.value)}>{label}</button>;
+      })}
+      {items.length>3&&<small>+{items.length-3} daugiau</small>}
+    </section>;
+  })}</div>;
+}
 
 function TaskBoard({ tasks, onDone, onFocus, onAdd }: { tasks: Task[]; onDone: (t: Task) => void; onFocus: (t: Task) => void; onAdd: () => void }) {
   const actions=useContext(TaskActions);
@@ -561,7 +595,7 @@ function Modal({ eyebrow, title, onClose, children }: { eyebrow: string; title: 
     function key(event: KeyboardEvent) {
       if (event.key === "Escape") { event.preventDefault(); close.current(); }
       if (event.key !== "Tab") return;
-      const controls = Array.from(panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]') || []);
+      const controls = Array.from(panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]') || []).filter(element=>element.getClientRects().length>0&&element.getAttribute("aria-disabled")!=="true");
       const first = controls[0], last = controls.at(-1);
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }

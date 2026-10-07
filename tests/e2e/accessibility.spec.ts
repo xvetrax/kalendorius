@@ -23,6 +23,37 @@ test.describe("accessibility", () => {
     expect(focused).not.toBe("BODY");
   });
 
+  test("skip link reaches the main content", async ({ page }) => {
+    await page.goto("/");
+    await page.keyboard.press("Tab");
+    const skip=page.getByRole("link",{name:"Pereiti prie pagrindinio turinio"});
+    await expect(skip).toBeFocused();
+    await skip.press("Enter");
+    await expect(page.locator("#main-content")).toBeFocused();
+  });
+
+  test("dialog traps focus, closes with Escape and restores its trigger", async ({ page }) => {
+    await page.goto("/");
+    const trigger=page.getByRole("button",{name:"Nustatymai",exact:true});
+    await trigger.focus();
+    await trigger.press("Enter");
+    const dialog=page.getByRole("dialog",{name:"Nustatymai"});
+    const first=dialog.getByRole("button",{name:"Uždaryti"});
+    await expect(first).toBeFocused();
+    await first.press("Shift+Tab");
+    await expect(dialog.locator("button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]").filter({visible:true}).last()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  });
+
+  test("month view does not nest interactive controls", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button",{name:"Mėnuo",exact:true}).click();
+    await expect(page.locator("button button, button a, a button")).toHaveCount(0);
+    await expect(page.locator(".monthDayCreate").first()).toHaveAccessibleName(/naujas įvykis/);
+  });
+
   test("new task dialog exposes labeled form controls", async ({ page }) => {
     await page.goto("/");
     await page.waitForLoadState("networkidle");

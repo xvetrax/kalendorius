@@ -17,8 +17,8 @@ test("confirmed Outlook mirrors collapse into the task, while unrelated same-ID 
   await expect(page.getByRole("button",{name:"Redaguoti įvykį: Kitas įvykis",exact:true})).toHaveCount(1);
   await expect(page.locator(".dayLoad small")).toHaveText("1 įvykiai · 1 užduotys");
   await page.getByRole("button",{name:"Mėnuo",exact:true}).click();
-  await expect(page.locator(".monthGrid span").filter({hasText:`✓ ${task.title}`})).toHaveCount(1);
-  await expect(page.locator(".monthGrid span").filter({hasText:"Kitas įvykis"})).toHaveCount(1);
+  await expect(page.locator(".monthGrid .monthItem").filter({hasText:`✓ ${task.title}`})).toHaveCount(1);
+  await expect(page.locator(".monthGrid .monthItem").filter({hasText:"Kitas įvykis"})).toHaveCount(1);
   // A moved source event is visible again until its time matches the local plan.
   events[0].start.dateTime="2026-09-23T10:00:00Z";events[0].end.dateTime="2026-09-23T10:30:00Z";
   await page.reload();await page.getByRole("button",{name:"Diena",exact:true}).click();
