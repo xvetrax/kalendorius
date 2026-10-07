@@ -181,6 +181,6 @@ Prieš kelionę ar kitą laiką be ryšio, dar būdamas prisijungęs atverk nori
 
 Pirmiausia atliekama aukščiau aprašyta gyvų Google ir Microsoft paskyrų bei realių PWA įrenginių priėmimo patikra ir taisomi jos metu rasti neatitikimai. PWA-4 automatinis įgyvendinimas užbaigtas. Liko realių macOS, Windows, Android bei iPhone įrenginių diegimo, OAuth, Web Push, offline plano ir [prieinamumo priėmimo patikra](ACCESSIBILITY_AUDIT.md).
 
-Papildomas priežiūros darbas: pridėti senų užbaigtų kalendoriaus kūrimo operacijų registro valymo politiką. Detalūs priėmimo kriterijai ir etapų tvarka pateikti [PRODUCT_PLAN.md](PRODUCT_PLAN.md) bei [PWA_PLAN.md](PWA_PLAN.md).
+Papildomas priežiūros darbas: pridėti senų užbaigtų kalendoriaus kūrimo operacijų registro valymo politiką. Tolimesnė kasdienės patirties kryptis — „Mano diena“, greitas įvedimas, saugus atšaukimas ir paaiškinami planavimo pasiūlymai — aprašyta [DAILY_EXPERIENCE_PLAN.md](DAILY_EXPERIENCE_PLAN.md). Bendri priėmimo kriterijai ir etapų tvarka pateikti [PRODUCT_PLAN.md](PRODUCT_PLAN.md) bei [PWA_PLAN.md](PWA_PLAN.md).
 
 Viešam diegimui naudok HTTPS ir prieš pirmą paleidimą nustatyk `INITIAL_ADMIN_EMAIL`. Administratoriaus rolė leidžia valdyti naudotojų būseną bei roles, tačiau nesuteikia prieigos prie jų užduočių, kalendorių ar OAuth žetonų.

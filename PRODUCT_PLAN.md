@@ -209,6 +209,20 @@ Detalus įdiegimo, saugaus podėlio, ryšio būsenos, Web Push, platformų patik
 
 Kiekvienas punktas yra atskiras darbo paketas su tiksliniais testais darbo metu, pilnu regresijos ciklu po didesnio pakeitimo, nepriklausoma peržiūra ir atskiru commit bei push į `origin`.
 
+### K. Kasdienė patirtis ir išmanus planavimas
+
+Detalus „Mano dienos“, greito įvedimo, saugaus atšaukimo, darbo / asmeninių režimų, paaiškinamų planavimo pasiūlymų, savaitės apžvalgos, vizualinio poliravimo ir white-label pagrindo planas pateiktas [DAILY_EXPERIENCE_PLAN.md](DAILY_EXPERIENCE_PLAN.md).
+
+1. [ ] **DX-1:** „Mano diena“, bendra greito įvedimo forma ir komandų paletė.
+2. [ ] **DX-2:** versijuotas saugių veiksmų atšaukimas ir riboto galiojimo veiksmų žurnalas.
+3. [ ] **DX-3:** darbo, asmeniniai ir fokusavimo režimai su darbo valandomis bei kalendorių / sąrašų atranka.
+4. [ ] **DX-4:** deterministiniai, paaiškinami ir tik po patvirtinimo pritaikomi dienos planavimo pasiūlymai.
+5. [ ] **DX-5:** dienos uždarymas ir savaitės apžvalga be darbuotojų stebėjimo metrikų.
+6. [ ] **DX-6:** dizaino tokenai, tankio režimai, nuoseklios būsenos ir PWA nuorodos / ženkleliai / Wake Lock.
+7. [ ] **DX-7:** vieno diegimo white-label konfigūracija; kelių nuomininkų SaaS ir mokėjimai lieka atskiras etapas.
+
+Pirmas vykdomas paketas yra DX-1. Jis nekeičia DB schemos ar tiekėjų API ir turi būti užbaigtas vienu didesniu implementacijos paketu prieš pilną testų ciklą.
+
 ## Darbo eiga ir ribos
 
 ### 2026-09-24 Google Calendar ir Outlook RSVP
