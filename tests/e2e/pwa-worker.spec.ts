@@ -36,8 +36,13 @@ test("navigacija be ryšio rodo izoliuotą paskutinės dienos planą tik skaitym
     await expect(page.getByText("Offline užduotis")).toBeVisible();
     await expect(page.getByText("TIK SKAITYMUI")).toBeVisible();
     await expect(page.getByText(/aprašymų, dalyvių, nuorodų/)).toBeVisible();
-    await expect(page.getByRole("button")).toHaveCount(0);
+    const retry=page.getByRole("button",{name:"Bandyti dar kartą"});
+    await expect(retry).toBeVisible();
     await expect(page.locator("body")).not.toContainText("E2E Admin");
+    await retry.click();
+    await expect(page.getByRole("status")).toContainText("Serverio dar nepavyksta pasiekti");
+    await context.setOffline(false);
+    await expect(page.getByRole("navigation",{name:"Rodiniai"})).toBeVisible();
   } finally {
     await context.setOffline(false);
   }

@@ -24,7 +24,7 @@ async function loadWorker({ network = async () => new Response("network") } = {}
       async open() {
         return { async addAll(requests) { cachedRequests.push(...requests); } };
       },
-    async keys() { return ["dienos-planas-public-v0", "dienos-planas-public-v1", "dienos-planas-public-v2", "dienos-planas-public-v3", "kitas-cache"]; },
+    async keys() { return ["dienos-planas-public-v0", "dienos-planas-public-v1", "dienos-planas-public-v2", "dienos-planas-public-v3", "dienos-planas-public-v4", "kitas-cache"]; },
       async delete(name) { deleted.push(name); return true; },
       async match(request) {
         const path = typeof request === "string" ? request : new URL(request.url).pathname;
@@ -123,7 +123,7 @@ test("aktyvuojant pašalinamas tik senas programėlės podėlis", async () => {
   const activate = lifetimeEvent();
   worker.listeners.get("activate")(activate.event);
   await activate.done();
-  assert.deepEqual(worker.deleted, ["dienos-planas-public-v0", "dienos-planas-public-v1", "dienos-planas-public-v2", "dienos-planas-public-v3"]);
+  assert.deepEqual(worker.deleted, ["dienos-planas-public-v0", "dienos-planas-public-v1", "dienos-planas-public-v2", "dienos-planas-public-v3", "dienos-planas-public-v4"]);
 });
 
 test("atnaujinimo žinutė išlaiko workerį gyvą iki skipWaiting pabaigos", async () => {

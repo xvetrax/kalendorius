@@ -52,9 +52,9 @@ function gateway() {
     },
   };
 }
-function fixture(t, {migrate = true} = {}) {
+function fixture(t, {migrate = true, notifications} = {}) {
   const db = new DatabaseSync(":memory:"); schema(db); if (migrate) migrateTaskPlanning(db);
-  const graph = gateway(); const service = createTaskService(db,TEST_USER_ID,[graph]);
+  const graph = gateway(); const service = createTaskService(db,TEST_USER_ID,[graph],undefined,notifications);
   t.after(() => db.close()); return {db,graph,service};
 }
 const ref = (task) => ({id:task.id,source:task.source,account_id:task.account_id,list_id:task.list_id,schedule_version:task.schedule_version});
@@ -82,6 +82,24 @@ test("local and Microsoft identities coexist even with identical ids; local writ
   local = await service.update({...ref(local),title:"Pakeista",scheduled_at:start});
   await service.remove(ref(local));
   assert.equal(graph.calls.length,0); assert.equal(graph.remote.size,1);
+});
+
+test("creation stores an explicitly scheduled work time in the local plan", async (t) => {
+  const {service,graph}=fixture(t);
+  const local=await service.create({title:"Greita vietinė",scheduled_at:start,duration_minutes:45});
+  assert.equal(local.scheduled_at,start);assert.equal(local.duration_minutes,45);assert.equal(local.schedule_version,0);
+  graph.calls.length=0;
+  const remote=await service.create({source:"microsoft",account_id:"account-a",list_id:"list-a",title:"Greita Microsoft",scheduled_at:"2026-10-26T10:00:00+02:00",duration_minutes:60});
+  assert.equal(remote.scheduled_at,"2026-10-26T08:00:00.000Z");assert.equal(remote.duration_minutes,60);
+  assert.equal(graph.calls.filter(call=>call.method==="PATCH").length,0);
+});
+
+test("a failed initial notification rolls a new local task and plan back together", async (t) => {
+  const notifications={sync(){throw new Error("notification failure");},cancel(){},move(){}};
+  const {db,service}=fixture(t,{notifications});
+  await assert.rejects(service.create({title:"Atominė užduotis",scheduled_at:start}),/notification failure/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM tasks WHERE user_id=?").get(TEST_USER_ID).count,0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM task_plans WHERE user_id=?").get(TEST_USER_ID).count,0);
 });
 
 test("Microsoft planning, moving, duration and unscheduling persist without any provider writes", async (t) => {

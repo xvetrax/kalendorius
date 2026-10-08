@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "dienos-planas-public-";
-const CACHE_VERSION = "v4";
+const CACHE_VERSION = "v5";
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const OFFLINE_URL = "/offline.html";
 const PUBLIC_ASSETS = [

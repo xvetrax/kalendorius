@@ -32,8 +32,11 @@ test.describe("task CRUD", () => {
     await page.waitForLoadState("networkidle");
     const input = page.locator('input[placeholder*="Pridėti"]');
     const title = `E2E-lifecycle-${Date.now()}`;
+    await input.fill(title);await input.press("Enter");
+    const preview=page.getByRole("dialog",{name:"Nauja užduotis"});
+    await expect(preview.getByLabel("Pavadinimas")).toHaveValue(title);
     const [, response] = await Promise.all([
-      input.fill(title).then(() => input.press("Enter")),
+      preview.getByRole("button",{name:"Sukurti",exact:true}).click(),
       page.waitForResponse((r) => r.url().includes("/api/tasks") && r.request().method() === "POST"),
     ]);
     expect(response.status()).toBeLessThan(300);

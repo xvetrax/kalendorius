@@ -9,7 +9,7 @@ export type RemoteTaskSource = "microsoft" | "google";
 export type TaskList = { key: string; source: RemoteTaskSource; account_id: string; connection_id?: number; account_label?: string; list_id: string; name: string; writable: boolean; stale?: boolean;
   version?: string; can_rename?: boolean; can_delete?: boolean; management_reason?: string; etag?: string };
 export type Task = {
-  id: number | string; source: "local" | RemoteTaskSource; account_id?: string; connection_id?: number; list_id?: string; list_name?: string;
+  id: number | string; source: "local" | RemoteTaskSource; account_id?: string; account_label?: string; connection_id?: number; list_id?: string; list_name?: string;
   due_date?: string | null; readonly_reason?: string; source_url?: string; parent_id?: string;
   key: string; title: string; notes: string; due_at: string | null; scheduled_at: string | null;
   duration_minutes: number; completed: number; project: string; priority: "low" | "normal" | "high";
@@ -330,7 +330,7 @@ export function createTaskService(
     const isGoogle = list.source === "google";
     const due = task.dueDateTime?.dateTime;
     return { id: identifier(task.id), key: remoteKey(list.account_id, list.list_id, task.id, list.source), source: list.source,
-      account_id: list.account_id, connection_id:list.connection_id, list_id: list.list_id, list_name: list.name,
+      account_id: list.account_id, account_label:list.account_label, connection_id:list.connection_id, list_id: list.list_id, list_name: list.name,
       source_url: isGoogle ? googleTaskLink(task.webViewLink) : "https://to-do.office.com/tasks/",
       ...(isGoogle && typeof task.parent === "string" ? {parent_id:task.parent} : {}),
       ...(list.writable ? {} : {readonly_reason:"Šis specialus sąrašas rodomas tik skaitymui. Darbo laiką galima planuoti vietoje."}),
@@ -818,13 +818,25 @@ export function createTaskService(
     if (source === "google" && input.due_at) throw new TaskError("Google Tasks palaiko tik dieną. Naudok due_date, ne due_at.");
     if (source !== "google" && input.due_date !== undefined) throw new TaskError("Šiam šaltiniui naudok due_at.");
     const dueDate = source === "google" ? dateOnly(input.due_date ?? null) : null;
+    const scheduledAt = input.scheduled_at === undefined ? null : dateValue(input.scheduled_at, true);
     const values = { title: title(input.title), notes: text(input.notes ?? ""), due_at: input.due_at ? dateValue(input.due_at, true) : null,
       duration_minutes: duration(input.duration_minutes ?? 30), project: text(input.project ?? (source === "local" ? "Asmeniniai" : source === "google" ? "Google Tasks" : "Microsoft To Do"), 200),
       priority: priority(input.priority ?? "normal"), tags: text(input.tags ?? "", 1000), energy: text(input.energy ?? "medium", 30) };
     if (source === "local") {
-      const result = db.prepare("INSERT INTO tasks(user_id, title, notes, due_at, duration_minutes, project, priority, tags, energy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(userId, values.title, values.notes, values.due_at, values.duration_minutes, values.project, values.priority, values.tags, values.energy);
-      return get({ id: Number(result.lastInsertRowid), source });
+      db.exec("BEGIN IMMEDIATE");
+      let id:number,task:Task;
+      try{
+        const result = db.prepare("INSERT INTO tasks(user_id, title, notes, due_at, duration_minutes, project, priority, tags, energy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(userId, values.title, values.notes, values.due_at, values.duration_minutes, values.project, values.priority, values.tags, values.energy);
+        id=Number(result.lastInsertRowid);task=get({id,source});
+        if(scheduledAt){
+          ensurePlan(task);
+          db.prepare("UPDATE task_plans SET scheduled_at=?,duration_minutes=? WHERE task_key=? AND user_id=?").run(scheduledAt,values.duration_minutes,task.key,userId);
+          notifications.sync(task.key,scheduledAt,0);
+        }
+        db.exec("COMMIT");
+      }catch(error){db.exec("ROLLBACK");throw error;}
+      return get({id:id!,source});
     }
     const requestedAccount=input.account_id===undefined?null:identifier(input.account_id);
     const requestedConnection=input.connection_id===undefined?undefined:Number(input.connection_id);
@@ -847,8 +859,15 @@ export function createTaskService(
     const body = source === "google" ? {title:values.title,notes:values.notes,...(dueDate ? {due:dueDate + "T00:00:00.000Z"} : {})} : {title:values.title,body:{content:values.notes,contentType:"text"},importance:values.priority,...(values.due_at ? {dueDateTime:{dateTime:values.due_at.replace(/Z$/,""),timeZone:"UTC"}} : {})};
     const result = await provider.request(path,{method:"POST",body:JSON.stringify(body)});
     requireAccount(account,source);
-    const task = mapped(result, destination); cache(task); ensurePlan(task);
-    db.prepare("UPDATE task_plans SET duration_minutes=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=? AND user_id=?").run(values.duration_minutes, values.project, values.tags, values.energy, source === "google" ? values.priority : null, task.key, userId);
+    const task = mapped(result, destination);
+    db.exec("BEGIN IMMEDIATE");
+    try{
+      cache(task);ensurePlan(task);
+      db.prepare("UPDATE task_plans SET scheduled_at=?, duration_minutes=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=? AND user_id=?").run(scheduledAt,values.duration_minutes, values.project, values.tags, values.energy, source === "google" ? values.priority : null, task.key, userId);
+      if(scheduledAt)notifications.sync(task.key,scheduledAt,0);
+      db.exec("COMMIT");
+    }
+    catch(error){db.exec("ROLLBACK");throw error;}
     return decorate(task);
   }
   async function update(input: Input) {

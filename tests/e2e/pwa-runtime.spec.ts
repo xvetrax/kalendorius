@@ -93,6 +93,13 @@ test("sėkmingai įkeltas pasirinktos dienos planas išsaugomas izoliuotame Inde
 
 test("prisijungus kitu naudotoju svetima offline kopija išvaloma prieš plano įkėlimą", async ({ page }) => {
   await page.goto("/");
+  await expect.poll(()=>page.evaluate(async()=>{
+    const databases=await indexedDB.databases();
+    if(!databases.some(database=>database.name==="dienos-planas-offline"))return false;
+    const request=indexedDB.open("dienos-planas-offline",1),db=await new Promise<IDBDatabase>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+    if(!db.objectStoreNames.contains("snapshots")||!db.objectStoreNames.contains("meta")){db.close();return false;}
+    const tx=db.transaction("meta","readonly"),active=tx.objectStore("meta").get("active-user"),value=await new Promise<{value?:string}|undefined>((resolve,reject)=>{active.onsuccess=()=>resolve(active.result);active.onerror=()=>reject(active.error);});db.close();return value?.value==="user:1";
+  })).toBe(true);
   await page.evaluate(async()=>{
     const request=indexedDB.open("dienos-planas-offline",1),db=await new Promise<IDBDatabase>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
     const tx=db.transaction(["snapshots","meta"],"readwrite");

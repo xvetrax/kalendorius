@@ -1,7 +1,8 @@
 (() => {
   "use strict";
   const DB_NAME="dienos-planas-offline",DB_VERSION=1,SNAPSHOT_STORE="snapshots",META_STORE="meta",ACTIVE_KEY="active-user";
-  const message=document.getElementById("offline-message"),plan=document.getElementById("offline-plan"),title=document.getElementById("offline-plan-title"),age=document.getElementById("offline-plan-age"),items=document.getElementById("offline-plan-items");
+  const message=document.getElementById("offline-message"),plan=document.getElementById("offline-plan"),title=document.getElementById("offline-plan-title"),age=document.getElementById("offline-plan-age"),items=document.getElementById("offline-plan-items"),retry=document.getElementById("offline-retry"),retryStatus=document.getElementById("offline-retry-status");
+  let retrying=false;
 
   function openDb(){return new Promise((resolve,reject)=>{const request=indexedDB.open(DB_NAME,DB_VERSION);request.onupgradeneeded=()=>{const db=request.result;if(!db.objectStoreNames.contains(SNAPSHOT_STORE))db.createObjectStore(SNAPSHOT_STORE,{keyPath:"userKey"});if(!db.objectStoreNames.contains(META_STORE))db.createObjectStore(META_STORE,{keyPath:"key"});};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});}
   function requestValue(request){return new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});}
@@ -21,5 +22,22 @@
     const db=await openDb();
     try{const metaTransaction=db.transaction(META_STORE,"readonly"),meta=await requestValue(metaTransaction.objectStore(META_STORE).get(ACTIVE_KEY));if(!meta||typeof meta.value!=="string")return;const snapshotTransaction=db.transaction(SNAPSHOT_STORE,"readonly"),snapshot=await requestValue(snapshotTransaction.objectStore(SNAPSHOT_STORE).get(meta.value));if(!valid(snapshot)||snapshot.expiresAt<=Date.now())return;render(snapshot);}finally{db.close();}
   }
+  async function retryOnline(){
+    if(retrying)return;
+    retrying=true;retry.disabled=true;retry.textContent="Tikrinama…";retryStatus.textContent="Tikrinamas ryšys su programėlės serveriu.";
+    try{
+      const response=await fetch(`/api/health?offline-retry=${Date.now()}`,{cache:"no-store",credentials:"same-origin"});
+      if(!response.ok)throw new Error("unavailable");
+      retryStatus.textContent="Ryšys atkurtas. Atidaroma programėlė…";
+      const target=new URL("/",location.origin);target.searchParams.set("offline-retry",String(Date.now()));location.replace(target.href);
+    }catch{
+      retryStatus.textContent="Serverio dar nepavyksta pasiekti. Patikrink ryšį ir bandyk dar kartą.";
+      retrying=false;retry.disabled=false;retry.textContent="Bandyti dar kartą";
+    }
+  }
+  retry.addEventListener("click",()=>void retryOnline());
+  window.addEventListener("online",()=>void retryOnline());
+  window.addEventListener("pageshow",()=>{if(navigator.onLine)void retryOnline();});
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&navigator.onLine)void retryOnline();});
   load().catch(()=>undefined).finally(()=>{if(plan.hidden)message.textContent="Galiojančio offline dienos plano šiame įrenginyje nėra. Prisijunk prie interneto ir atverk norimą dieną.";});
 })();

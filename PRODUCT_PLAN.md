@@ -195,7 +195,7 @@ Detalus įdiegimo, saugaus podėlio, ryšio būsenos, Web Push, platformų patik
 - [ ] **PWA-1:** manifestas, ikonų rinkinys, diegimo sąsaja ir standalone išdėstymas įgyvendinti bei automatiškai patikrinti; liko reali macOS / Android diegimo, OAuth ir sesijos patikra.
 - [x] **PWA-2:** saugus viešų statinių resursų service worker, offline būsena, ryšio apsaugos ir valdomas programėlės atnaujinimas įgyvendinti bei automatiškai patikrinti.
 - [ ] **PWA-3:** naudotojo valdomos Push prenumeratos, atskiras patvarus worker, fokusavimo pabaigos, užduoties pradžios bei ryto / vakaro ritualų priminimai įgyvendinti ir automatiškai patikrinti; liko gyva kelių platformų pristatymo patikra.
-- [x] **PWA-4:** ribotas paskutinio pasirinkto dienos plano skaitymas be interneto įgyvendintas su 48 valandų galiojimu, naudotojo izoliacija ir išvalymu atsijungus; offline redagavimas lieka atskiras konfliktų valdymo projektas.
+- [x] **PWA-4:** ribotas paskutinio pasirinkto dienos plano skaitymas be interneto įgyvendintas su 48 valandų galiojimu, naudotojo izoliacija ir išvalymu atsijungus; ryšio atkūrimas tikrina serverį ir automatiškai sugrąžina programėlę po įrenginio pabudimo; offline redagavimas lieka atskiras konfliktų valdymo projektas.
 
 ### J. Tolimesni kalendoriaus ir PWA patobulinimai
 
@@ -213,7 +213,7 @@ Kiekvienas punktas yra atskiras darbo paketas su tiksliniais testais darbo metu,
 
 Detalus „Mano dienos“, greito įvedimo, saugaus atšaukimo, darbo / asmeninių režimų, paaiškinamų planavimo pasiūlymų, savaitės apžvalgos, vizualinio poliravimo ir white-label pagrindo planas pateiktas [DAILY_EXPERIENCE_PLAN.md](DAILY_EXPERIENCE_PLAN.md).
 
-1. [ ] **DX-1:** „Mano diena“, bendra greito įvedimo forma ir komandų paletė.
+1. [x] **DX-1:** „Mano diena“, bendra greito įvedimo forma ir komandų paletė. Užbaigta ir pilnai patikrinta 2026-10-07.
 2. [ ] **DX-2:** versijuotas saugių veiksmų atšaukimas ir riboto galiojimo veiksmų žurnalas.
 3. [ ] **DX-3:** darbo, asmeniniai ir fokusavimo režimai su darbo valandomis bei kalendorių / sąrašų atranka.
 4. [ ] **DX-4:** deterministiniai, paaiškinami ir tik po patvirtinimo pritaikomi dienos planavimo pasiūlymai.
@@ -221,7 +221,7 @@ Detalus „Mano dienos“, greito įvedimo, saugaus atšaukimo, darbo / asmenini
 6. [ ] **DX-6:** dizaino tokenai, tankio režimai, nuoseklios būsenos ir PWA nuorodos / ženkleliai / Wake Lock.
 7. [ ] **DX-7:** vieno diegimo white-label konfigūracija; kelių nuomininkų SaaS ir mokėjimai lieka atskiras etapas.
 
-Pirmas vykdomas paketas yra DX-1. Jis nekeičia DB schemos ar tiekėjų API ir turi būti užbaigtas vienu didesniu implementacijos paketu prieš pilną testų ciklą.
+Kitas vykdomas paketas yra DX-2: saugus „Atšaukti“ ir veiksmų žurnalas. Jo DB, idempotentiškumo ir backup / restore sutartis turi būti suprojektuota prieš UI pakeitimus.
 
 ## Darbo eiga ir ribos
 

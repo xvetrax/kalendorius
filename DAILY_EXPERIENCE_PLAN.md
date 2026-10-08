@@ -1,6 +1,6 @@
 # Kasdienės patirties ir išmanaus planavimo įgyvendinimo planas
 
-Atnaujinta: 2026-10-07. Būsena: suplanuota, įgyvendinimas nepradėtas.
+Atnaujinta: 2026-10-08. Būsena: **DX-1 / paketas A įgyvendintas ir patikrintas; kitas etapas – DX-2**.
 
 ## Tikslas
 
@@ -20,7 +20,13 @@ Pagrindinis produkto skirtumas: viename privačiame plane suderinti keli darbo i
 
 ## DX-1 — „Mano diena“ ir greitas įvedimas
 
-**Prioritetas:** pirmas. **Duomenų migracija:** nereikalinga.
+**Būsena:** ✅ užbaigta 2026-10-07. **Duomenų migracija:** nereikalinga.
+
+Įgyvendinta atskira „Mano diena“ su artimiausiu įvykiu, šiandienos ir vėluojančiomis užduotimis, laisvais tarpais bei 09:00–17:00 talpos suvestine. Darbo valandos šiame etape yra viena aiškiai rodoma numatytoji reikšmė; naudotojo režimai ir individualios valandos priklauso DX-3.
+
+Šoninis greitas įvedimas ir `Cmd/Ctrl + Shift + A` naudoja bendrą peržiūrą su deterministiniu lietuvišku parseriu, aiškiai pasirinkta paskyra bei sąrašu ir atskirais termino bei darbo laiko laukais. `Cmd/Ctrl + K` atidaro klaviatūra valdomą komandų paletę. Tikslus naujos užduoties darbo laikas vienu kūrimo veiksmu įrašomas į vietinį planą; Google tiekėjui jis neperduodamas.
+
+PWA neprisijungusio plano ekranas tikrina tikrą programėlės serverio būseną. Mygtukas parodo patikros rezultatą, o grįžus ryšiui, pabudus įrenginiui arba vėl parodžius programėlės langą automatiškai grįžtama į programėlę.
 
 ### Sąsaja
 
@@ -178,7 +184,7 @@ Pagrindinis produkto skirtumas: viename privačiame plane suderinti keli darbo i
 
 | Paketas | Apimtis | Pilno testavimo vartai |
 | --- | --- | --- |
-| A | DX-1 „Mano diena“, bendra greito įvedimo forma ir komandų paletė | typecheck, Node, build, visas E2E, HTTP ir Docker smoke |
+| ✅ A | DX-1 „Mano diena“, bendra greito įvedimo forma ir komandų paletė | praėjo: typecheck, 382 Node, build, 79 E2E, HTTP, kalendorių, užduočių ir Docker smoke |
 | B | DX-2 atšaukimas ir veiksmų žurnalas | papildomai idempotentiškumo, versijų lenktynių, backup/restore ir gyvų paskyrų ribotas bandymas |
 | C | DX-3 režimai ir darbo laiko nuostatos | papildomai kelių paskyrų izoliacija, pašalintų jungčių valymas ir DST |
 | D | DX-4 planavimo peržiūra bei atominiu būdu pritaikomi pasiūlymai | papildomai deterministinio algoritmo, konfliktų, 23/25 val. dienų ir neaiškios baigties testai |
@@ -196,6 +202,6 @@ Kiekvienas paketas įgyvendinamas didesne vientisa apimtimi, o pilnas testų rin
 - Komandinis kalendorių dalinimasis, vadovo stebėsena ir darbuotojų produktyvumo reitingai.
 - Mokėjimai, prenumeratų planai ir bendras kelių klientų SaaS duomenų sluoksnis.
 
-## Pirmas vykdomas žingsnis
+## Kitas vykdomas žingsnis
 
-Pradėti nuo **paketo A**: sukurti „Mano dienos“ informacijos architektūrą, iškelti esamą greitą užduoties kūrimą į bendrą komponentą ir tik tada pridėti komandų paletę. Šis paketas nekeičia tiekėjų API ar DB schemos, todėl suteikia didžiausią kasdienės patirties pagerėjimą su mažiausia duomenų rizika.
+Pradėti **paketą B / DX-2**: riboto laiko „Atšaukti“ veiksmus ir naudotojui priklausantį veiksmų žurnalą. Pirmiausia suprojektuoti idempotentišką serverio sutartį ir backup / restore įtaką, tik tada jungti pranešimo veiksmą sąsajoje.

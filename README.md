@@ -173,7 +173,7 @@ Patikra atliekama su izoliuotomis imitacinėmis API. Tai negarantuoja atominio �
 
 Prisijungus prie interneto programėlė po sėkmingo užduočių ir abiejų kalendoriaus tiekėjų įkėlimo šiame įrenginyje išsaugo tuo metu pasirinktos dienos planą. Kopija galioja 48 valandas ir turi tik pavadinimą, laiką bei šaltinį; aprašymai, pastabos, dalyviai, vietos, nuorodos, tiekėjų ID ir OAuth duomenys nesaugomi.
 
-Nutrūkus ryšiui perkrovus įdiegtą PWA arba puslapį rodomas paskutinis galiojantis planas. Jis skirtas tik skaityti: be interneto negalima kurti, keisti, užbaigti ar šalinti įrašų. Naujas sėkmingai įkeltas pasirinktos dienos planas pakeičia ankstesnį. Atsijungimas, atsijungimas dėl pasibaigusios sesijos, programos paskyros ištrynimas ir kito programos naudotojo sesijos patvirtinimas išvalo ankstesnę kopiją iš IndexedDB.
+Nutrūkus ryšiui perkrovus įdiegtą PWA arba puslapį rodomas paskutinis galiojantis planas. Jis skirtas tik skaityti: be interneto negalima kurti, keisti, užbaigti ar šalinti įrašų. Mygtukas **Bandyti dar kartą** patikrina programėlės serverį ir parodo rezultatą; atkūrus ryšį, pabudus įrenginiui arba vėl parodžius programėlės langą tikrinama automatiškai ir grįžtama į programėlę. Naujas sėkmingai įkeltas pasirinktos dienos planas pakeičia ankstesnį. Atsijungimas, atsijungimas dėl pasibaigusios sesijos, programos paskyros ištrynimas ir kito programos naudotojo sesijos patvirtinimas išvalo ankstesnę kopiją iš IndexedDB.
 
 Prieš kelionę ar kitą laiką be ryšio, dar būdamas prisijungęs atverk norimą dieną ir palauk, kol jos užduotys bei kalendoriai bus įkelti be klaidos. Tada galima trumpam išjungti tinklą ir perkrauti puslapį, kad būtų patikrintas offline ekranas.
 

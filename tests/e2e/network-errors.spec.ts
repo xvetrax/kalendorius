@@ -42,7 +42,11 @@ test.describe("network error handling", () => {
     const input = page.locator('input[placeholder*="Pridėti"]');
     await input.fill(title);
     await input.press("Enter");
-    await expect(page.getByRole("status")).toContainText("Sintetinė kūrimo klaida.");
+    const preview=page.getByRole("dialog",{name:"Nauja užduotis"});
+    await preview.getByRole("button",{name:"Sukurti",exact:true}).click();
+    await expect(preview.getByRole("alert")).toContainText("Sintetinė kūrimo klaida.");
+    await expect(preview.getByLabel("Pavadinimas")).toHaveValue(title);
+    await page.keyboard.press("Escape");
     await expect(input).toHaveValue(title);
     await expect(page.locator(".taskCard").filter({ hasText: title })).toHaveCount(0);
 
