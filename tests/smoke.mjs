@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -13,7 +14,19 @@ const port = reservation.address().port;
 await new Promise((resolve) => reservation.close(resolve));
 const origin = `http://127.0.0.1:${port}`;
 const databasePath = path.join(temp, "planner.db");
-const env = { ...process.env, NODE_ENV: "production", PORT: String(port), HOSTNAME: "127.0.0.1", APP_ORIGIN: origin, DATABASE_PATH: path.relative(process.cwd(), databasePath) };
+process.env.DATABASE_PATH = databasePath;
+process.env.MULTI_USER_DATABASE_PATH = databasePath;
+const { db, createSession, SESSION_COOKIE } = await import(pathToFileURL(path.resolve("lib/db-multi.ts")).href);
+const user = db.prepare("INSERT INTO users (display_name, primary_email, role, status) VALUES (?, ?, 'admin', 'active')").run("Smoke Admin", "smoke@example.test");
+const { rawToken } = createSession(Number(user.lastInsertRowid));
+const sessionCookie = `${SESSION_COOKIE}=${rawToken}`;
+const nativeFetch = globalThis.fetch;
+globalThis.fetch = (input, init = {}) => {
+  const headers = new Headers(init.headers);
+  headers.set("Cookie", sessionCookie);
+  return nativeFetch(input, { ...init, headers });
+};
+const env = { ...process.env, NODE_ENV: "production", PORT: String(port), HOSTNAME: "127.0.0.1", APP_ORIGIN: origin, DATABASE_PATH: databasePath, MULTI_USER_DATABASE_PATH: databasePath };
 // No live provider calls or credentials are needed for this regression check.
 for (const provider of ["GOOGLE", "MICROSOFT"]) {
   for (const suffix of ["CLIENT_ID", "CLIENT_SECRET", "REDIRECT_URI"]) env[`${provider}_${suffix}`] = "";
@@ -30,6 +43,32 @@ try {
     await delay(200);
   }
   assert.ok(ready, "Serveris turi pasileisti");
+  const publicPwaAssets = [
+    ["/manifest.webmanifest", "application/manifest+json"],
+    ["/sw.js", "application/javascript"],
+    ["/offline.html", "text/html"],
+    ["/pwa/offline.css", "text/css"],
+    ["/pwa/icon-192.png", "image/png"],
+    ["/pwa/icon-512.png", "image/png"],
+    ["/pwa/icon-maskable-512.png", "image/png"],
+    ["/pwa/apple-touch-icon.png", "image/png"],
+  ];
+  for (const [asset, expectedType] of publicPwaAssets) {
+    const response = await nativeFetch(new URL(asset, origin), { redirect: "manual" });
+    assert.equal(response.status, 200, `${asset} turi būti viešas prieš prisijungimą`);
+    assert.ok((response.headers.get("content-type") || "").startsWith(expectedType), `${asset} MIME tipas`);
+  }
+  const workerResponse = await nativeFetch(new URL("/sw.js", origin));
+  assert.equal(workerResponse.headers.get("cache-control"), "no-cache, no-store, must-revalidate");
+  assert.match(workerResponse.headers.get("content-security-policy") || "", /connect-src 'self'/);
+  assert.match(workerResponse.headers.get("x-content-type-options") || "", /nosniff/);
+  const workerSource = await workerResponse.text();
+  assert.ok(!workerSource.includes("/api/tasks"), "Service worker negali turėti privataus API podėlio taisyklės");
+  assert.equal(
+    (await nativeFetch(`${origin}/api/tasks`)).status,
+    401,
+    "PWA vieši failai negali atverti privataus API",
+  );
   const html = await (await fetch(origin)).text();
   assert.match(html, /aria-label="Kraunamas kalendorius"/, "SSR neturi įrašyti build dienos datos į kalendorių");
   assert.ok(!html.includes('class="calendarToolbar"'), "Datos rodinys atsiranda tik žinant naršyklės laiką");
@@ -77,7 +116,7 @@ try {
   response=await patch({scheduled_at:null}); task=await response.json();
   assert.equal(task.scheduled_at,null); assert.equal(task.due_at,deadline);
   assert.equal((await patch({duration_minutes:0})).status,400);
-  const updated = await fetch(`${origin}/api/tasks`, { method: "PATCH", headers, body: JSON.stringify({ id, completed: true }) });
+  const updated = await patch({completed:true});
   assert.equal(updated.status, 200);
   const tasks = await (await fetch(`${origin}/api/tasks`)).json();
   assert.equal(tasks.find((task) => task.id === id).completed, 1);

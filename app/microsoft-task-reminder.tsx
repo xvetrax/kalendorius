@@ -38,7 +38,7 @@ async function snapshotResponse(response: Response): Promise<ReminderSnapshot> {
 
 function referenceFor(task: Task) {
   if (!task.account_id || !task.list_id) throw new Error("Trūksta Microsoft To Do užduoties nuorodos. Atnaujink užduočių sąrašą.");
-  return { source: "microsoft" as const, account_id: task.account_id, list_id: task.list_id, id: String(task.id) };
+  return { source: "microsoft" as const, account_id: task.account_id, ...(task.connection_id ? {connection_id:String(task.connection_id)} : {}), list_id: task.list_id, id: String(task.id) };
 }
 
 function reminderUrl(task: Task) {

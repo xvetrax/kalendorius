@@ -18,6 +18,7 @@ export const upstream = {
   calls: [], microsoft: microsoftSeed(), google: googleSeed(),
   reset() {
     this.calls.length = 0; this.microsoft = microsoftSeed(); this.google = googleSeed();
+    this.failGoogleTaskGetOnce = false;
     this.microsoftLists = new Map([["microsoft-list", {id:"microsoft-list",displayName:"Microsoft darbai",wellknownListName:"defaultList"}]]);
     this.googleLists = new Map([["google-list", {id:"google-list",title:"Google darbai",etag:"google-list-v1",_revision:1}]]);
     this.microsoftListTasks = new Map([["microsoft-list",this.microsoft]]);
@@ -42,6 +43,37 @@ function taskApi(source, url, init) {
   if (!match) return Response.json({error: "Unknown fixture endpoint"}, {status: 404});
   const listId=decodeURIComponent(match[1]), map=taskMap(source,listId);
   if (!map) return Response.json({error: "Missing task list"}, {status: 404});
+  if(source === "microsoft"&&match[2]){
+    const checklist=match[2].match(/^([^/]+)\/checklistItems(?:\/([^/]+))?$/);
+    if(checklist){
+      const task=map.get(decodeURIComponent(checklist[1]));
+      if(!task)return Response.json({error:"Missing task"},{status:404});
+      const items=task.checklistItems||(task.checklistItems=[]),stepId=checklist[2]?decodeURIComponent(checklist[2]):null;
+      if(!stepId&&method==="GET")return Response.json({value:items.map(clone)});
+      if(!stepId&&method==="POST"){
+        const created={id:`step-${upstream.calls.length}`,displayName:String(body(init)?.displayName||""),isChecked:body(init)?.isChecked===true};
+        items.push(created);return taskResponse(created);
+      }
+      const index=items.findIndex(item=>item.id===stepId);
+      if(index<0)return Response.json({error:"Missing checklist item"},{status:404});
+      if(method==="GET")return taskResponse(items[index]);
+      if(method==="PATCH"){Object.assign(items[index],body(init));return taskResponse(items[index]);}
+      if(method==="DELETE"){items.splice(index,1);return new Response(null,{status:204});}
+      return Response.json({error:"Unsupported fixture operation"},{status:405});
+    }
+  }
+  if (source === "google" && match[2]?.endsWith("/move") && method === "POST") {
+    const id=decodeURIComponent(match[2].slice(0,-"/move".length)),task=map.get(id);
+    const destinationId=url.searchParams.get("destinationTasklist"),destination=destinationId ? taskMap(source,destinationId) : undefined;
+    if (!task || destinationId&&!destination) return Response.json({error:"Missing task or destination list"},{status:404});
+    if(destination){map.delete(id);destination.set(id,task);return taskResponse(task);}
+    const parent=url.searchParams.get("parent"),previous=url.searchParams.get("previous");
+    if(parent)task.parent=parent;else delete task.parent;
+    const entries=[...map.entries()].filter(([key])=>key!==id),insertAfter=previous?entries.findIndex(([key])=>key===previous):-1;
+    const target=insertAfter>=0?insertAfter+1:entries.findIndex(([,value])=>(value.parent||null)===(parent||null));
+    entries.splice(target<0?entries.length:target,0,[id,task]);map.clear();for(const entry of entries)map.set(...entry);
+    return taskResponse(task);
+  }
   if (!match[2] && method === "GET") return Response.json(source === "google" ? {items: [...map.values()].map(clone)} : {value: [...map.values()].map(clone)});
   if (!match[2] && method === "POST") {
     const id = `${source}-created-${map.size + 1}`;
@@ -54,7 +86,13 @@ function taskApi(source, url, init) {
   const id = decodeURIComponent(match[2]);
   const task = map.get(id);
   if (!task) return Response.json({error: "Missing task"}, {status: 404});
-  if (method === "GET") return taskResponse(task);
+  if (method === "GET") {
+    if (source === "google" && upstream.failGoogleTaskGetOnce) {
+      upstream.failGoogleTaskGetOnce = false;
+      return Response.json({error: "Synthetic confirmation failure"}, {status: 503});
+    }
+    return taskResponse(task);
+  }
   if (method === "PATCH") {
     const ifMatch=new Headers(init?.headers).get("If-Match");
     if (ifMatch && ifMatch !== task["@odata.etag"]) return Response.json({error:"Version mismatch"},{status:412});

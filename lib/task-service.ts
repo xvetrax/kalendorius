@@ -1,30 +1,55 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
+import { graphRecurrence, parseTaskRecurrence, providerRecurrence, sameTaskRecurrence, taskRecurrenceDate } from "./task-recurrence.ts";
+import { ProviderError } from "./provider-error.ts";
+import { OUTLOOK_MIRROR_BODY } from "./outlook-mirror-link.ts";
+import type { TaskStartNotificationHooks } from "./notification-jobs.ts";
+import type { ActionJournalHooks, ActionSummary } from "./action-journal.ts";
 
 export type RemoteTaskSource = "microsoft" | "google";
-export type TaskList = { key: string; source: RemoteTaskSource; account_id: string; list_id: string; name: string; writable: boolean; stale?: boolean;
+export type TaskList = { key: string; source: RemoteTaskSource; account_id: string; connection_id?: number; account_label?: string; list_id: string; name: string; writable: boolean; stale?: boolean;
   version?: string; can_rename?: boolean; can_delete?: boolean; management_reason?: string; etag?: string };
 export type Task = {
-  id: number | string; source: "local" | RemoteTaskSource; account_id?: string; list_id?: string; list_name?: string;
+  id: number | string; source: "local" | RemoteTaskSource; account_id?: string; account_label?: string; connection_id?: number; list_id?: string; list_name?: string;
   due_date?: string | null; readonly_reason?: string; source_url?: string; parent_id?: string;
   key: string; title: string; notes: string; due_at: string | null; scheduled_at: string | null;
   duration_minutes: number; completed: number; project: string; priority: "low" | "normal" | "high";
   tags: string; energy: string; schedule_version: number; legacy_schedule: number;
-  mirror_requested: number; mirror_event_id: string | null; mirror_error: string | null; stale?: boolean;
+  mirror_requested: number; mirror_event_id: string | null; mirror_account_id: string | null;
+  mirror_connection_id: number | null; mirror_error: string | null; stale?: boolean;
+  undo?: ActionSummary;
+};
+export type TaskStep = { id:string; displayName:string; isChecked:boolean };
+export type GoogleTaskOrderItem = {
+  id:string; title:string; parent_id:string|null; hidden:boolean; completed:boolean;
+  can_be_parent:boolean; parent_block_reason?:string;
+};
+export type GoogleTaskOrderSnapshot = {
+  task_id:string; parent_id:string|null; previous_id:string|null; items:GoogleTaskOrderItem[]; version:string;
+  readonly_reason?:string;
+};
+export type MirrorCleanup = {
+  task_key:string; source:RemoteTaskSource; title:string; mirror_event_id:string|null;
+  mirror_account_id:string|null; mirror_connection_id:number|null; orphaned_at:string; can_retry:boolean;
 };
 type Input = Record<string, unknown>;
 type Plan = {
   task_key: string; scheduled_at: string | null; duration_minutes: number; schedule_version: number;
   legacy_schedule: number; mirror_requested: number; mirror_event_id: string | null;
-  mirror_account_id: string | null; mirror_transaction_id: string | null; mirror_error: string | null; mirror_create_payload: string | null;
+  mirror_account_id: string | null; mirror_connection_id: number | null; mirror_transaction_id: string | null; mirror_error: string | null; mirror_create_payload: string | null;
+  mirror_orphaned_at: string | null; mirror_orphan_title: string | null;
   project: string | null; tags: string | null; energy: string | null; local_priority: Task["priority"] | null;
 };
+type PendingGoogleMove = { setting_key: string; account_id: string; source_list_id: string; destination_list_id: string;
+  old_task_id: string; old_key: string; schedule_version: number; moved_id: string | null };
 export type TaskGateway = {
   connected(): boolean;
   cachedAccountId(): string | null;
+  connectionId?(): number | null;
   accountId(): Promise<string>;
   defaultListId?(): Promise<string>;
   request(path: string, init?: RequestInit): Promise<any>;
+  label?(): string;
 };
 
 export class TaskError extends Error {
@@ -32,6 +57,7 @@ export class TaskError extends Error {
   constructor(message: string, status = 400) { super(message); this.status = status; }
 }
 const locks = new Map<string, Promise<unknown>>();
+const ORPHAN_MIRROR_ERROR="Užduotis pašalinta šaltinyje. Pašalink likusį Outlook bloką nustatymuose.";
 async function serial<T>(key: string, action: () => Promise<T>) {
   const previous = locks.get(key) || Promise.resolve();
   const current = previous.catch(() => {}).then(action);
@@ -92,19 +118,38 @@ function googleTaskLink(value: unknown) {
 // Called after the original tasks schema/migrations. This migration is atomic
 // and preserves the original ambiguous due_at value as a deadline AND snapshot.
 export function migrateTaskPlanning(db: DatabaseSync) {
+  // Schema-only migration: creates tables and adds missing columns.
+  // Not scoped to a specific user — safe to call at startup on the old single-user DB.
   db.exec("BEGIN IMMEDIATE");
   try {
     db.exec(`CREATE TABLE IF NOT EXISTS task_plans (
       task_key TEXT PRIMARY KEY, scheduled_at TEXT, duration_minutes INTEGER NOT NULL DEFAULT 30,
       schedule_version INTEGER NOT NULL DEFAULT 0, legacy_schedule INTEGER NOT NULL DEFAULT 0,
       mirror_requested INTEGER NOT NULL DEFAULT 0, mirror_event_id TEXT, mirror_account_id TEXT,
-      mirror_transaction_id TEXT, mirror_error TEXT, project TEXT, tags TEXT, energy TEXT, mirror_create_payload TEXT
+      mirror_connection_id INTEGER,
+      mirror_transaction_id TEXT, mirror_error TEXT, project TEXT, tags TEXT, energy TEXT, mirror_create_payload TEXT,
+      mirror_orphaned_at TEXT, mirror_orphan_title TEXT
     ); CREATE TABLE IF NOT EXISTS remote_tasks (task_key TEXT PRIMARY KEY, account_id TEXT NOT NULL, list_id TEXT NOT NULL, task_json TEXT NOT NULL);`);
     const columns = db.prepare("PRAGMA table_info(task_plans)").all() as {name: string}[];
     if (!columns.some((column) => column.name === "mirror_create_payload")) db.exec("ALTER TABLE task_plans ADD COLUMN mirror_create_payload TEXT");
     if (!columns.some((column) => column.name === "local_priority")) db.exec("ALTER TABLE task_plans ADD COLUMN local_priority TEXT");
-    if (!(db.prepare("PRAGMA table_info(remote_tasks)").all() as {name:string}[]).some(c=>c.name === "source")) db.exec("ALTER TABLE remote_tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'microsoft'");
+    if (!columns.some((column) => column.name === "mirror_orphaned_at")) db.exec("ALTER TABLE task_plans ADD COLUMN mirror_orphaned_at TEXT");
+    if (!columns.some((column) => column.name === "mirror_orphan_title")) db.exec("ALTER TABLE task_plans ADD COLUMN mirror_orphan_title TEXT");
+    if (!columns.some((column) => column.name === "mirror_connection_id")) db.exec("ALTER TABLE task_plans ADD COLUMN mirror_connection_id INTEGER");
+    // H3: add user_id column if upgrading from pre-multi-user schema
+    if (!columns.some((column) => column.name === "user_id")) db.exec("ALTER TABLE task_plans ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1");
+    const remoteTaskColumns = db.prepare("PRAGMA table_info(remote_tasks)").all() as {name:string}[];
+    if (!remoteTaskColumns.some(c=>c.name === "source")) db.exec("ALTER TABLE remote_tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'microsoft'");
+    if (!remoteTaskColumns.some(c=>c.name === "user_id")) db.exec("ALTER TABLE remote_tasks ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1");
+    // Ensure (user_id, task_key) unique index exists for ON CONFLICT upserts
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS remote_tasks_user_task ON remote_tasks(user_id, task_key)");
     db.exec("CREATE TABLE IF NOT EXISTS remote_task_lists (list_key TEXT PRIMARY KEY, source TEXT NOT NULL, account_id TEXT NOT NULL, list_json TEXT NOT NULL)");
+    const remoteListColumns = db.prepare("PRAGMA table_info(remote_task_lists)").all() as {name:string}[];
+    if (!remoteListColumns.some(c=>c.name === "user_id")) db.exec("ALTER TABLE remote_task_lists ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1");
+    // Ensure (user_id, list_key) unique index exists for ON CONFLICT upserts
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS remote_task_lists_user_list ON remote_task_lists(user_id, list_key)");
+    // Create user_settings table if it does not exist (needed by H3 pending-move logic)
+    db.exec("CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(user_id, key))");
     if (!db.prepare("SELECT 1 FROM settings WHERE key = 'migration_task_plans_v1'").get()) {
       const legacy = db.prepare("SELECT id, due_at, duration_minutes FROM tasks WHERE due_at IS NOT NULL").all() as { id: number; due_at: string; duration_minutes: number }[];
       const insert = db.prepare("INSERT OR IGNORE INTO task_plans(task_key, scheduled_at, duration_minutes, legacy_schedule) VALUES (?, ?, ?, 1)");
@@ -117,34 +162,151 @@ export function migrateTaskPlanning(db: DatabaseSync) {
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }
 
-export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, google?: TaskGateway) {
-  function gateway(source: RemoteTaskSource) {
-    const result = source === "microsoft" ? microsoft : google;
-    if (!result || !result.connected()) throw new TaskError(`${source === "google" ? "Google Tasks" : "Microsoft"} paskyra neprijungta arba nesuteikti leidimai.`, 409);
-    return result;
+export function createTaskService(
+  db: DatabaseSync,
+  userId: number,
+  microsoftGateways: TaskGateway | TaskGateway[],
+  googleGateways?: TaskGateway | TaskGateway[],
+  taskStartNotifications?: TaskStartNotificationHooks,
+  actionJournal?: ActionJournalHooks,
+) {
+  const _msGateways: TaskGateway[] = Array.isArray(microsoftGateways) ? microsoftGateways : [microsoftGateways];
+  const _gGateways: TaskGateway[] = Array.isArray(googleGateways) ? googleGateways : (googleGateways ? [googleGateways] : []);
+  const notifications: TaskStartNotificationHooks = taskStartNotifications ?? {
+    sync() {},
+    cancel() {},
+    move() {},
+  };
+  const actions: ActionJournalHooks = actionJournal ?? {
+    capture() { return null; },
+    recordCreated() { return undefined; },
+    recordUpdated() { return undefined; },
+  };
+  function gatewayForAccount(source: RemoteTaskSource, accountId: string, connectionId?: number): TaskGateway {
+    const gateways = source === "microsoft" ? _msGateways : _gGateways;
+    const match = gateways.find(g => g.connected() && g.cachedAccountId() === accountId && (connectionId === undefined || g.connectionId?.() === connectionId));
+    if (!match) throw new TaskError(`${source === "google" ? "Google Tasks" : "Microsoft"} paskyra neprijungta arba nesuteikti leidimai.`, 409);
+    return match;
+  }
+  function gateway(source: RemoteTaskSource): TaskGateway {
+    const gateways = source === "microsoft" ? _msGateways : _gGateways;
+    const connected = gateways.filter(g => g.connected());
+    if (!connected.length) throw new TaskError(`${source === "google" ? "Google Tasks" : "Microsoft"} paskyra neprijungta arba nesuteikti leidimai.`, 409);
+    if (connected.length === 1) return connected[0];
+    throw new TaskError(`${source === "google" ? "Google Tasks" : "Microsoft"} paskyra neprijungta arba nesuteikti leidimai.`, 409);
   }
   function requireAccount(account: string, source: RemoteTaskSource = "microsoft") {
-    if (gateway(source).cachedAccountId() !== account) throw new TaskError("Paskyra pasikeitė. Atnaujink duomenis.", 409);
+    const gateways = source === "microsoft" ? _msGateways : _gGateways;
+    if (!gateways.some(g => g.connected() && g.cachedAccountId() === account))
+      throw new TaskError("Paskyra pasikeitė. Atnaujink duomenis.", 409);
   }
-  function plan(key: string) { return db.prepare("SELECT * FROM task_plans WHERE task_key = ?").get(key) as Plan | undefined; }
+  function plan(key: string) { return db.prepare("SELECT * FROM task_plans WHERE task_key = ? AND user_id = ?").get(key, userId) as Plan | undefined; }
   function decorate(base: Task): Task {
     const extra = plan(base.key);
     return { ...base, scheduled_at: extra?.scheduled_at ?? null, duration_minutes: extra?.duration_minutes ?? base.duration_minutes,
       schedule_version: extra?.schedule_version ?? 0, legacy_schedule: extra?.legacy_schedule ?? 0,
-      mirror_requested: extra?.mirror_requested ?? 0, mirror_event_id: extra?.mirror_event_id ?? null, mirror_error: extra?.mirror_error ?? null,
+      mirror_requested: extra?.mirror_requested ?? 0, mirror_event_id: extra?.mirror_event_id ?? null,
+      mirror_account_id: extra?.mirror_account_id ?? null, mirror_connection_id: extra?.mirror_connection_id ?? null,
+      mirror_error: extra?.mirror_error ?? null,
       project: extra?.project ?? base.project, tags: extra?.tags ?? base.tags, energy: extra?.energy ?? base.energy,
       priority: base.source === "google" ? extra?.local_priority ?? base.priority : base.priority };
   }
   function ensurePlan(task: Task) {
-    db.prepare("INSERT OR IGNORE INTO task_plans(task_key, duration_minutes) VALUES (?, ?)").run(task.key, task.duration_minutes || 30);
+    db.prepare("INSERT OR IGNORE INTO task_plans(user_id, task_key, duration_minutes) VALUES (?, ?, ?)").run(userId, task.key, task.duration_minutes || 30);
     return plan(task.key)!;
   }
+  function pendingMoveKey(oldKey: string) { return `task_move_pending:${createHash("sha256").update(oldKey).digest("hex")}`; }
+  function pendingMoves(account: string): PendingGoogleMove[] {
+    const rows = db.prepare("SELECT key,value FROM user_settings WHERE user_id = ? AND key LIKE 'task_move_pending:%'").all(userId) as {key:string;value:string}[];
+    return rows.flatMap(row=>{
+      try {
+        const value=JSON.parse(row.value) as Omit<PendingGoogleMove,"setting_key">;
+        return value.account_id===account && value.old_key && value.destination_list_id ? [{...value,setting_key:row.key}] : [];
+      } catch { return []; }
+    });
+  }
+  function writePendingMove(move: PendingGoogleMove) {
+    const {setting_key,...value}=move;
+    db.prepare("INSERT INTO user_settings(user_id,key,value) VALUES (?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP").run(userId,setting_key,JSON.stringify(value));
+  }
+  function applyMoveRows(move: PendingGoogleMove, moved: Task, expectedVersion?: number) {
+    const destinationPlan = plan(moved.key);
+    if (destinationPlan && moved.key !== move.old_key) throw new TaskError("Paskirties užduoties planas jau egzistuoja. Atnaujink duomenis.",409);
+    const existing = db.prepare("SELECT account_id,list_id,source,task_json FROM remote_tasks WHERE task_key=? AND user_id=?").get(moved.key,userId) as {account_id:string;list_id:string;source:string;task_json:string}|undefined;
+    if (existing) {
+      let existingId: unknown;
+      try { existingId=(JSON.parse(existing.task_json) as {id?:unknown}).id; } catch { /* Invalid cache is a conflict. */ }
+      if (existing.account_id!==move.account_id || existing.list_id!==move.destination_list_id || existing.source!=="google" || existingId!==moved.id) {
+        throw new TaskError("Paskirties užduoties vietiniai duomenys jau egzistuoja. Atnaujink duomenis.",409);
+      }
+    }
+    const oldPlan=plan(move.old_key);
+    if (oldPlan) {
+      const version=expectedVersion ?? oldPlan.schedule_version;
+      const changed=db.prepare(`UPDATE task_plans SET
+        task_key=?,
+        schedule_version=schedule_version+1,
+        scheduled_at=CASE WHEN ? THEN NULL ELSE scheduled_at END,
+        mirror_requested=CASE WHEN ? THEN 0 ELSE mirror_requested END,
+        mirror_error=CASE WHEN ? AND (mirror_event_id IS NOT NULL OR mirror_transaction_id IS NOT NULL)
+          THEN 'Užduotis užbaigta šaltinyje. Atverk ją ir išsaugok, kad pašalintum susietą Outlook bloką.' ELSE mirror_error END
+        WHERE task_key=? AND user_id=? AND schedule_version=?`)
+        .run(moved.key,moved.completed ? 1 : 0,moved.completed ? 1 : 0,moved.completed ? 1 : 0,move.old_key,userId,version);
+      if (changed.changes!==1) throw new TaskError("Planas jau pakeistas. Atnaujink duomenis ir bandyk dar kartą.",409);
+      notifications.move(move.old_key,moved.key,moved.completed ? null : oldPlan.scheduled_at,version+1);
+    } else {
+      notifications.move(move.old_key,moved.key,null,move.schedule_version+1);
+    }
+    db.prepare(`INSERT INTO remote_tasks(user_id,task_key,account_id,list_id,task_json,source) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(user_id,task_key) DO UPDATE SET account_id=excluded.account_id,list_id=excluded.list_id,task_json=excluded.task_json,source=excluded.source`)
+      .run(userId,moved.key,move.account_id,move.destination_list_id,JSON.stringify(moved),"google");
+    db.prepare("DELETE FROM remote_tasks WHERE task_key=? AND task_key<>? AND user_id=?").run(move.old_key,moved.key,userId);
+    db.prepare("DELETE FROM user_settings WHERE key=? AND user_id=?").run(move.setting_key,userId);
+  }
+  function reconcilePendingMoves(account: string, staged: {list:TaskList;tasks:Task[];fresh:boolean}[], warnings: string[]) {
+    for (const move of pendingMoves(account)) {
+      const source=staged.find(entry=>entry.list.list_id===move.source_list_id),destination=staged.find(entry=>entry.list.list_id===move.destination_list_id);
+      if (!source?.fresh || !destination?.fresh) { warnings.push("Google: laukiamas užduoties perkėlimo suderinimas."); continue; }
+      const sourceExists=source.tasks.some(task=>String(task.id)===move.old_task_id);
+      const expectedId=move.moved_id ?? move.old_task_id;
+      const candidates=destination.tasks.filter(task=>String(task.id)===expectedId);
+      if (sourceExists && !candidates.length) { db.prepare("DELETE FROM user_settings WHERE key=? AND user_id=?").run(move.setting_key,userId); continue; }
+      if (sourceExists || candidates.length!==1) { warnings.push("Google: nepavyko automatiškai suderinti nutrūkusio užduoties perkėlimo."); continue; }
+      db.exec("SAVEPOINT reconcile_google_move");
+      try {
+        applyMoveRows(move,candidates[0]);
+        db.exec("RELEASE reconcile_google_move");
+        warnings.push("Google: užbaigtas anksčiau nutrūkęs užduoties perkėlimas.");
+      } catch {
+        db.exec("ROLLBACK TO reconcile_google_move");db.exec("RELEASE reconcile_google_move");
+        warnings.push("Google: perkėlimas įvyko, bet vietiniam planui suderinti reikia atnaujinti duomenis.");
+      }
+    }
+  }
   function localTasks() {
-    return (db.prepare("SELECT * FROM tasks ORDER BY completed, COALESCE(due_at, '9999'), created_at DESC").all() as unknown as Task[])
+    return (db.prepare("SELECT * FROM tasks WHERE user_id = ? ORDER BY completed, COALESCE(due_at, '9999'), created_at DESC").all(userId) as unknown as Task[])
       .map((task) => decorate({ ...task, source: "local", key: localKey(task.id) }));
   }
   function cachedTasks(account: string, source: RemoteTaskSource, list?: string) {
-    return (db.prepare("SELECT task_json FROM remote_tasks WHERE account_id = ? AND source = ? AND (? IS NULL OR list_id = ?)").all(account, source, list ?? null, list ?? null) as {task_json: string}[]).map((row) => decorate(JSON.parse(row.task_json) as Task));
+    return (db.prepare("SELECT task_json FROM remote_tasks WHERE user_id = ? AND account_id = ? AND source = ? AND (? IS NULL OR list_id = ?)").all(userId, account, source, list ?? null, list ?? null) as {task_json: string}[]).map((row) => decorate(JSON.parse(row.task_json) as Task));
+  }
+  function mirrorCleanups():MirrorCleanup[] {
+    const rows=db.prepare(`SELECT task_key,mirror_event_id,mirror_account_id,mirror_connection_id,mirror_transaction_id,mirror_create_payload,mirror_orphaned_at,mirror_orphan_title
+      FROM task_plans WHERE user_id = ? AND mirror_orphaned_at IS NOT NULL
+      ORDER BY mirror_orphaned_at,task_key`).all(userId) as {task_key:string;mirror_event_id:string|null;mirror_account_id:string|null;mirror_connection_id:number|null;mirror_transaction_id:string|null;mirror_create_payload:string|null;mirror_orphaned_at:string;mirror_orphan_title:string|null}[];
+    return rows.flatMap(row=>{
+      try {
+        const parts=JSON.parse(row.task_key);
+        if (!Array.isArray(parts) || parts.length!==4 || (parts[0]!=="microsoft"&&parts[0]!=="google")) return [];
+        const source=parts[0] as RemoteTaskSource;
+        const needsProvider=Boolean(row.mirror_event_id || row.mirror_transaction_id || row.mirror_create_payload);
+        return [{task_key:row.task_key,source,title:row.mirror_orphan_title || "Ištrinta užduotis",mirror_event_id:row.mirror_event_id,
+          mirror_account_id:row.mirror_account_id,mirror_connection_id:row.mirror_connection_id,orphaned_at:row.mirror_orphaned_at,
+          can_retry:!needsProvider || Boolean(row.mirror_account_id &&
+            _msGateways.some(g => g.connected() && g.cachedAccountId()===row.mirror_account_id &&
+              (!row.mirror_connection_id || g.connectionId?.()===row.mirror_connection_id)))}];
+      } catch {return [];}
+    });
   }
   function reference(input: Input) {
     if (input.source !== undefined && input.source !== "local" && input.source !== "microsoft" && input.source !== "google") throw new TaskError("Nežinomas užduoties šaltinis.");
@@ -157,24 +319,26 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
   function get(input: Input): Task {
     const key = reference(input);
     if (!input.source || input.source === "local") {
-      const row = db.prepare("SELECT * FROM tasks WHERE id = ?").get(Number(input.id)) as unknown as Task | undefined;
+      const row = db.prepare("SELECT * FROM tasks WHERE id = ? AND user_id = ?").get(Number(input.id), userId) as unknown as Task | undefined;
       if (!row) throw new TaskError("Užduotis nerasta.", 404);
       return decorate({ ...row, source: "local", key });
     }
     requireAccount(input.account_id as string, input.source as RemoteTaskSource);
-    const row = db.prepare("SELECT task_json FROM remote_tasks WHERE task_key = ?").get(key) as { task_json: string } | undefined;
+    const row = db.prepare("SELECT task_json FROM remote_tasks WHERE task_key = ? AND user_id = ?").get(key, userId) as { task_json: string } | undefined;
     if (!row) throw new TaskError("Užduotis nerasta. Atnaujink sąrašą.", 404);
-    return decorate(JSON.parse(row.task_json) as Task);
+    const task=decorate(JSON.parse(row.task_json) as Task);
+    if(input.connection_id!==undefined&&(!Number.isSafeInteger(Number(input.connection_id))||task.connection_id!==Number(input.connection_id)))throw new TaskError("Užduoties jungtis pasikeitė. Atnaujink duomenis.",409);
+    return task;
   }
   function cache(task: Task) {
-    db.prepare("INSERT INTO remote_tasks(task_key, account_id, list_id, task_json, source) VALUES (?, ?, ?, ?, ?) ON CONFLICT(task_key) DO UPDATE SET task_json=excluded.task_json")
-      .run(task.key, task.account_id!, task.list_id!, JSON.stringify(task), task.source);
+    db.prepare("INSERT INTO remote_tasks(user_id, task_key, account_id, list_id, task_json, source) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, task_key) DO UPDATE SET task_json=excluded.task_json")
+      .run(userId, task.key, task.account_id!, task.list_id!, JSON.stringify(task), task.source);
   }
   function mapped(task: any, list: TaskList): Task {
     const isGoogle = list.source === "google";
     const due = task.dueDateTime?.dateTime;
     return { id: identifier(task.id), key: remoteKey(list.account_id, list.list_id, task.id, list.source), source: list.source,
-      account_id: list.account_id, list_id: list.list_id, list_name: list.name,
+      account_id: list.account_id, account_label:list.account_label, connection_id:list.connection_id, list_id: list.list_id, list_name: list.name,
       source_url: isGoogle ? googleTaskLink(task.webViewLink) : "https://to-do.office.com/tasks/",
       ...(isGoogle && typeof task.parent === "string" ? {parent_id:task.parent} : {}),
       ...(list.writable ? {} : {readonly_reason:"Šis specialus sąrašas rodomas tik skaitymui. Darbo laiką galima planuoti vietoje."}),
@@ -183,10 +347,11 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       ...(isGoogle ? {due_date: task.due ? dateOnly(String(task.due).slice(0,10)) : null} : {}),
       duration_minutes: 30, completed: task.status === "completed" ? 1 : 0,
       project: isGoogle ? "Google Tasks" : "Microsoft To Do", priority: isGoogle ? "normal" : task.importance || "normal", energy: "medium", tags: "",
-      scheduled_at: null, schedule_version: 0, legacy_schedule: 0, mirror_requested: 0, mirror_event_id: null, mirror_error: null };
+      scheduled_at: null, schedule_version: 0, legacy_schedule: 0, mirror_requested: 0, mirror_event_id: null,
+      mirror_account_id:null,mirror_connection_id:null,mirror_error: null };
   }
-  async function pages(source: RemoteTaskSource, path: string, query: string) {
-    const provider = gateway(source), values: any[] = [], visited = new Set<string>();
+  async function pagesFor(provider: TaskGateway, source: RemoteTaskSource, path: string, query: string) {
+    const values: any[] = [], visited = new Set<string>();
     let next: string | null = path + query;
     while (next) {
       if (visited.has(next) || visited.size >= 2000) throw new Error("Pasikartojantis arba per ilgas puslapiavimas");
@@ -210,11 +375,11 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     }
     return values;
   }
-  function mappedList(raw: any, source: RemoteTaskSource, account: string): TaskList {
+  function mappedList(raw: any, source: RemoteTaskSource, account: string, connectionId?:number): TaskList {
     const builtin = source === "microsoft" && raw.wellknownListName !== "none";
     const managed = source === "google" || (!builtin && raw.isOwner === true);
     const list: TaskList = {
-      key: JSON.stringify([source,account,identifier(raw.id)]), source, account_id:account, list_id:raw.id,
+      key: JSON.stringify([source,account,identifier(raw.id)]), source, account_id:account, ...(connectionId?{connection_id:connectionId}:{}), list_id:raw.id,
       name:String(source === "google" ? raw.title || "Google Tasks" : raw.displayName || "Microsoft To Do"),
       writable:source === "google" || !raw.wellknownListName || ["none","defaultList"].includes(raw.wellknownListName),
       can_rename:managed,can_delete:managed,
@@ -223,47 +388,54 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     };
     return {...list,version:fingerprint(list)};
   }
-  async function fetchLists(source: RemoteTaskSource, account: string): Promise<TaskList[]> {
-    const raw = await pages(source, source === "google" ? "/users/@me/lists" : "/me/todo/lists", source === "google" ? "?maxResults=1000" : "?$top=100");
+  async function fetchLists(source: RemoteTaskSource, account: string, connectionId?:number): Promise<TaskList[]> {
+    const provider = gatewayForAccount(source, account, connectionId);
+    const raw = await pagesFor(provider, source, source === "google" ? "/users/@me/lists" : "/me/todo/lists", source === "google" ? "?maxResults=1000" : "?$top=100");
     requireAccount(account, source);
-    const lists = raw.map(list => mappedList(list,source,account));
+    const lists = raw.map(list => mappedList(list,source,account,provider.connectionId?.()??undefined));
     return [...new Map(lists.map(list=>[list.key,list])).values()];
   }
   function cachedLists(source: RemoteTaskSource, account: string): TaskList[] {
-    return (db.prepare("SELECT list_json FROM remote_task_lists WHERE source=? AND account_id=?").all(source,account) as {list_json:string}[]).map(row=>JSON.parse(row.list_json));
+    return (db.prepare("SELECT list_json FROM remote_task_lists WHERE user_id = ? AND source=? AND account_id=?").all(userId,source,account) as {list_json:string}[]).map(row=>JSON.parse(row.list_json));
   }
   function saveList(list: TaskList) {
-    db.prepare("INSERT INTO remote_task_lists(list_key,source,account_id,list_json) VALUES (?,?,?,?) ON CONFLICT(list_key) DO UPDATE SET list_json=excluded.list_json")
-      .run(list.key,list.source,list.account_id,JSON.stringify(list));
+    db.prepare("INSERT INTO remote_task_lists(user_id,list_key,source,account_id,list_json) VALUES (?,?,?,?,?) ON CONFLICT(user_id,list_key) DO UPDATE SET list_json=excluded.list_json")
+      .run(userId,list.key,list.source,list.account_id,JSON.stringify(list));
   }
-  function listReference(input: Input): {source:RemoteTaskSource;account:string} {
+  function listReference(input: Input): {source:RemoteTaskSource;account:string;connectionId?:number} {
     if (input.source !== "google" && input.source !== "microsoft") throw new TaskError("Pasirink Google arba Microsoft sąrašą.");
     const source = input.source, account = identifier(input.account_id);
+    const connectionId=input.connection_id===undefined?undefined:Number(input.connection_id);
+    if(connectionId!==undefined&&(!Number.isSafeInteger(connectionId)||connectionId<=0))throw new TaskError("Neteisingas užduočių jungties ID.");
     requireAccount(account,source);
-    return {source,account};
+    gatewayForAccount(source,account,connectionId);
+    return {source,account,...(connectionId?{connectionId}:{})};
   }
   async function currentList(input: Input) {
-    const {source,account} = listReference(input), id=identifier(input.list_id);
-    const list=(await fetchLists(source,account)).find(list=>list.list_id===id);
+    const {source,account,connectionId} = listReference(input), id=identifier(input.list_id);
+    const list=(await fetchLists(source,account,connectionId)).find(list=>list.list_id===id);
     if (!list) throw new TaskError("Sąrašas neberastas. Atnaujink duomenis.",404);
     return list;
   }
   const listPath = (source:RemoteTaskSource,id?:string) => (source === "google" ? "/users/@me/lists" : "/me/todo/lists") + (id ? "/"+encodeURIComponent(id) : "");
   function matchingPlans(list: TaskList) {
-    return (db.prepare("SELECT * FROM task_plans").all() as Plan[]).filter(plan=>{
+    return (db.prepare("SELECT * FROM task_plans WHERE user_id = ?").all(userId) as Plan[]).filter(plan=>{
       try {const parts=JSON.parse(plan.task_key);return Array.isArray(parts) && parts.length===4 && parts[0]===list.source && parts[1]===list.account_id && parts[2]===list.list_id;}
       catch {return false;}
     });
   }
   async function listCatalog() {
-    const results=await Promise.all((["google","microsoft"] as const).map(source=>serial("task-provider:"+source,async()=>{
-      const provider=source === "google" ? google : microsoft;
-      if (!provider?.connected()) return {lists:[] as TaskList[],accounts:[] as {source:RemoteTaskSource;account_id:string}[],warnings:[] as string[]};
+    const entries: {source:RemoteTaskSource;provider:TaskGateway}[] = [
+      ..._gGateways.map(g=>({source:"google" as const,provider:g})),
+      ..._msGateways.map(g=>({source:"microsoft" as const,provider:g})),
+    ];
+    const results=await Promise.all(entries.map(({source,provider})=>serial("task-provider:"+source,async()=>{
+      if (!provider.connected()) return {lists:[] as TaskList[],accounts:[] as {source:RemoteTaskSource;account_id:string;connection_id:number|null;label:string}[],warnings:[] as string[]};
       let account=provider.cachedAccountId();
       try {
-        account=await provider.accountId();const lists=await fetchLists(source,account);
+        account=await provider.accountId();const accountLabel=provider.label?.() ?? account;const lists=await fetchLists(source,account).then(values=>values.map(list=>({...list,account_label:accountLabel})));
         for (const list of lists) saveList(list);
-        return {lists,accounts:[{source,account_id:account}],warnings:[]};
+        return {lists,accounts:[{source,account_id:account!,connection_id:provider.connectionId?.()??null,label:accountLabel}],warnings:[]};
       } catch {
         const same=account && provider.connected() && provider.cachedAccountId()===account;
         return {lists:same ? cachedLists(source,account!).map(list=>({...list,stale:true})) : [],accounts:[],warnings:[`${source === "google" ? "Google Tasks" : "Microsoft To Do"} sąrašų atnaujinti nepavyko. Bandyk atnaujinti dar kartą.`]};
@@ -272,20 +444,20 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     return {lists:results.flatMap(r=>r.lists),accounts:results.flatMap(r=>r.accounts),warnings:results.flatMap(r=>r.warnings)};
   }
   async function createList(input: Input) {
-    const {source,account}=listReference(input),name=listName(input.name);
-    const result=await gateway(source).request(listPath(source),{method:"POST",body:JSON.stringify(source === "google" ? {title:name} : {displayName:name})});
+    const {source,account,connectionId}=listReference(input),name=listName(input.name),provider=gatewayForAccount(source,account,connectionId);
+    const result=await provider.request(listPath(source),{method:"POST",body:JSON.stringify(source === "google" ? {title:name} : {displayName:name})});
     requireAccount(account,source);
-    const list=mappedList(result,source,account);saveList(list);return list;
+    const list=mappedList(result,source,account,provider.connectionId?.()??undefined);saveList(list);return list;
   }
   async function renameList(input: Input) {
     const name=listName(input.name),list=await currentList(input);
     if (!list.can_rename) throw new TaskError(list.management_reason!,403);
     if (input.version !== list.version) throw new TaskError("Sąrašas jau pakeistas. Atnaujink duomenis.",409);
-    const result=await gateway(list.source).request(listPath(list.source,list.list_id),{method:"PATCH",
+    const result=await gatewayForAccount(list.source,list.account_id,list.connection_id).request(listPath(list.source,list.list_id),{method:"PATCH",
       ...(list.etag ? {headers:{"If-Match":list.etag}} : {}),body:JSON.stringify(list.source === "google" ? {title:name} : {displayName:name})});
     requireAccount(list.account_id,list.source);
     if (result?.id !== list.list_id) throw new TaskError("Paslauga grąžino kitą sąrašą. Atnaujink duomenis.",502);
-    const updated=mappedList(result,list.source,list.account_id);
+    const updated=mappedList(result,list.source,list.account_id,list.connection_id);
     db.exec("BEGIN IMMEDIATE");
     try {saveList(updated);for (const task of cachedTasks(list.account_id,list.source,list.list_id)) cache({...task,list_name:updated.name});db.exec("COMMIT");}
     catch(error){db.exec("ROLLBACK");throw error;}
@@ -297,7 +469,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     const path=list.source === "google" ? `/lists/${encodeURIComponent(list.list_id)}/tasks` : `/me/todo/lists/${encodeURIComponent(list.list_id)}/tasks`;
     // Include hidden, completed and assigned Google tasks: deleting a list also
     // deletes Docs/Chat originals, even though normal planning excludes them.
-    const raw=await pages(list.source,path,list.source === "google" ? "?maxResults=100&showCompleted=true&showHidden=true&showDeleted=false&showAssigned=true" : "?$top=100");
+    const raw=await pagesFor(gatewayForAccount(list.source,list.account_id,list.connection_id),list.source,path,list.source === "google" ? "?maxResults=100&showCompleted=true&showHidden=true&showDeleted=false&showAssigned=true" : "?$top=100");
     requireAccount(list.account_id,list.source);
     const tasks=raw.filter(task=>!task.deleted).sort((a,b)=>identifier(a.id).localeCompare(identifier(b.id)));
     const plans=matchingPlans(list);
@@ -311,14 +483,17 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     if (preview.blocked_reason) throw new TaskError(preview.blocked_reason,409);
     if (input.confirm_name !== list.name || input.version !== list.version || input.confirmation !== preview.confirmation) throw new TaskError("Sąrašas arba jo užduotys pasikeitė. Peržiūrėk šalinimą iš naujo.",409);
     requireAccount(list.account_id,list.source);
-    await gateway(list.source).request(listPath(list.source,list.list_id),{method:"DELETE",...(list.etag ? {headers:{"If-Match":list.etag}} : {})});
+    await gatewayForAccount(list.source,list.account_id,list.connection_id).request(listPath(list.source,list.list_id),{method:"DELETE",...(list.etag ? {headers:{"If-Match":list.etag}} : {})});
     requireAccount(list.account_id,list.source);
     db.exec("BEGIN IMMEDIATE");
     try {
-      for (const plan of matchingPlans(list)) db.prepare("DELETE FROM task_plans WHERE task_key=?").run(plan.task_key);
-      db.prepare("DELETE FROM remote_tasks WHERE source=? AND account_id=? AND list_id=?").run(list.source,list.account_id,list.list_id);
-      db.prepare("DELETE FROM remote_task_lists WHERE list_key=?").run(list.key);
-      if (list.source === "microsoft") db.prepare("DELETE FROM settings WHERE key='microsoft_task_list_id' AND value=?").run(list.list_id);
+      for (const plan of matchingPlans(list)) {
+        notifications.cancel(plan.task_key);
+        db.prepare("DELETE FROM task_plans WHERE task_key=? AND user_id=?").run(plan.task_key,userId);
+      }
+      db.prepare("DELETE FROM remote_tasks WHERE user_id=? AND source=? AND account_id=? AND list_id=?").run(userId,list.source,list.account_id,list.list_id);
+      db.prepare("DELETE FROM remote_task_lists WHERE user_id=? AND list_key=?").run(userId,list.key);
+      if (list.source === "microsoft") db.prepare("DELETE FROM user_settings WHERE user_id=? AND key='microsoft_task_list_id' AND value=?").run(userId,list.list_id);
       db.exec("COMMIT");
     } catch(error){db.exec("ROLLBACK");throw error;}
   }
@@ -349,24 +524,29 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     dateOnly(parts[1]);
     return dateValue(value,true)!;
   }
-  async function currentReminder(input: Input) {
-    if (input.source !== "microsoft") throw new TaskError("Priminimai palaikomi tik Microsoft To Do užduotims.");
+  async function currentMicrosoftTask(input: Input, feature: "priminimai" | "kartojimas" | "žingsniai") {
+    const label=feature === "priminimai" ? "Priminimai palaikomi" : feature === "kartojimas" ? "Kartojimas palaikomas" : "Žingsniai palaikomi";
+    if (input.source !== "microsoft") throw new TaskError(`${label} tik Microsoft To Do užduotims.`);
     const id=identifier(input.id),list=await currentList(input);
+    const provider=gatewayForAccount("microsoft",list.account_id,list.connection_id);
     const path=`/me/todo/lists/${encodeURIComponent(list.list_id)}/tasks/${encodeURIComponent(id)}`;
-    const raw=await microsoft.request(path);
+    const raw=await provider.request(path);
     requireAccount(list.account_id);
     if (raw?.id !== id) throw new TaskError("Paslauga grąžino kitą užduotį. Atnaujink duomenis.",502);
-    return {raw,list,path,snapshot:reminderSnapshot(raw,list)};
+    return {raw,list,path,provider};
   }
-  async function readReminder(input: Input) {return (await currentReminder(input)).snapshot;}
+  async function readReminder(input: Input) {
+    const {raw,list}=await currentMicrosoftTask(input,"priminimai");
+    return reminderSnapshot(raw,list);
+  }
   async function updateReminder(input: Input) {
     if (typeof input.enabled !== "boolean" || typeof input.version !== "string" || !input.version) throw new TaskError("Pirmiausia perskaityk priminimą ir pasirink jo būseną.");
     const at=input.enabled ? reminderInstant(input.at) : null;
-    const {raw,list,path,snapshot}=await currentReminder(input);
+    const {raw,list,path,provider}=await currentMicrosoftTask(input,"priminimai"),snapshot=reminderSnapshot(raw,list);
     if (snapshot.readonly_reason) throw new TaskError(snapshot.readonly_reason,403);
     if (input.version !== snapshot.version) throw new TaskError("Microsoft priminimas arba užduotis jau pakeisti. Atnaujink priminimą ir patikrink laiką.",409);
     requireAccount(list.account_id);
-    const updated=await microsoft.request(path,{method:"PATCH",
+    const updated=await provider.request(path,{method:"PATCH",
       ...(typeof raw["@odata.etag"] === "string" ? {headers:{"If-Match":raw["@odata.etag"]}} : {}),
       body:JSON.stringify(input.enabled ? {isReminderOn:true,reminderDateTime:{dateTime:at!.replace(/Z$/,""),timeZone:"UTC"}} : {isReminderOn:false})});
     requireAccount(list.account_id);
@@ -374,106 +554,270 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     // A reminder never alters the local plan, cached task metadata or Outlook mirror.
     return reminderSnapshot(updated,list);
   }
-  async function listProvider(source: RemoteTaskSource) {
+  function recurrenceSnapshot(raw: any, list: TaskList) {
+    const parsed=providerRecurrence(raw?.recurrence),readonlyReason=!list.writable ? "Šio specialaus sąrašo kartojimo keisti negalima."
+      : raw?.status === "completed" ? "Užbaigtos užduoties kartojimą keisk atkūręs užduotį."
+      : !parsed.supported ? "Šios Microsoft kartojimo taisyklės programėlė negali saugiai pakeisti. Tvarkyk ją Microsoft To Do." : undefined;
+    const dueDate=typeof raw?.dueDateTime?.dateTime === "string" ? taskRecurrenceDate(raw.dueDateTime.dateTime.slice(0,10)) : null;
+    return {recurrence:parsed.recurrence,supported:parsed.supported,
+      suggested_start_date:dueDate,
+      version:fingerprint({key:remoteKey(list.account_id,list.list_id,identifier(raw?.id)),task:raw}),
+      ...(readonlyReason ? {readonly_reason:readonlyReason} : {})};
+  }
+  async function readRecurrence(input: Input) {
+    const {raw,list}=await currentMicrosoftTask(input,"kartojimas");
+    return recurrenceSnapshot(raw,list);
+  }
+  async function updateRecurrence(input: Input) {
+    if (typeof input.version !== "string" || !input.version || input.recurrence === undefined) throw new TaskError("Pirmiausia perskaityk kartojimo taisyklę ir pasirink jos būseną.");
+    const desired=input.recurrence === null ? null : parseTaskRecurrence(input.recurrence);
+    if (input.recurrence !== null && !desired) throw new TaskError("Neteisinga Microsoft To Do kartojimo taisyklė.");
+    const {raw,list,path,provider}=await currentMicrosoftTask(input,"kartojimas"),snapshot=recurrenceSnapshot(raw,list);
+    if (snapshot.readonly_reason) throw new TaskError(snapshot.readonly_reason, snapshot.supported ? 403 : 409);
+    if (input.version !== snapshot.version) throw new TaskError("Microsoft kartojimo taisyklė arba užduotis jau pakeista. Atnaujink kartojimą.",409);
+    requireAccount(list.account_id);
+    const updated=await provider.request(path,{method:"PATCH",
+      ...(typeof raw["@odata.etag"] === "string" ? {headers:{"If-Match":raw["@odata.etag"]}} : {}),
+      body:JSON.stringify({recurrence:desired ? graphRecurrence(desired) : null})});
+    requireAccount(list.account_id);
+    if (updated?.id !== raw.id) throw new TaskError("Kartojimo rezultato patvirtinti nepavyko. Atnaujink duomenis prieš kartodamas.",502);
+    const result=recurrenceSnapshot(updated,list);
+    if (!result.supported || !sameTaskRecurrence(result.recurrence,desired)) throw new TaskError("Microsoft nepatvirtino pasirinktos kartojimo taisyklės. Atnaujink duomenis prieš kartodamas.",502);
+    // Recurrence is provider-owned and never changes local planning or Outlook mirrors.
+    return result;
+  }
+  function taskStep(raw:any):TaskStep {
+    return {id:identifier(raw?.id),displayName:typeof raw?.displayName === "string" ? raw.displayName : "",isChecked:raw?.isChecked === true};
+  }
+  async function stepsSnapshot(input:Input) {
+    const {raw,list,path,provider}=await currentMicrosoftTask(input,"žingsniai"),stepPath=path+"/checklistItems";
+    const values=await pagesFor(provider,"microsoft",stepPath,"");
+    requireAccount(list.account_id);
+    const items:TaskStep[]=[],seen=new Set<string>();
+    for(const value of values){const item=taskStep(value);if(seen.has(item.id))throw new TaskError("Microsoft grąžino pasikartojantį žingsnį. Atnaujink duomenis.",502);seen.add(item.id);items.push(item);}
+    const readonlyReason=!list.writable ? "Šio specialaus sąrašo žingsnių keisti negalima."
+      : raw?.status === "completed" ? "Užbaigtos užduoties žingsnius keisk atkūręs užduotį." : undefined;
+    return {items,version:fingerprint({key:remoteKey(list.account_id,list.list_id,identifier(raw?.id)),task:raw,items}),
+      ...(readonlyReason ? {readonly_reason:readonlyReason} : {}),list,path:stepPath,provider};
+  }
+  function stepMutation(snapshot:Awaited<ReturnType<typeof stepsSnapshot>>,input:Input) {
+    if(typeof input.version!=="string"||!input.version)throw new TaskError("Pirmiausia atnaujink žingsnius.");
+    if(snapshot.readonly_reason)throw new TaskError(snapshot.readonly_reason,403);
+    if(input.version!==snapshot.version)throw new TaskError("Microsoft užduotis arba jos žingsniai jau pakeisti. Atnaujink žingsnius.",409);
+  }
+  function stepName(value:unknown) {
+    if(typeof value!=="string"||!value.trim()||value.length>1000)throw new TaskError("Įvesk žingsnio pavadinimą (iki 1000 simbolių).");
+    return value.trim();
+  }
+  function publicSteps(snapshot:Awaited<ReturnType<typeof stepsSnapshot>>) {
+    return {items:snapshot.items,version:snapshot.version,...(snapshot.readonly_reason?{readonly_reason:snapshot.readonly_reason}:{})};
+  }
+  async function readSteps(input:Input){return publicSteps(await stepsSnapshot(input));}
+  async function createStep(input:Input) {
+    const name=stepName(input.displayName),current=await stepsSnapshot(input);stepMutation(current,input);requireAccount(current.list.account_id);
+    const created=taskStep(await current.provider.request(current.path,{method:"POST",body:JSON.stringify({displayName:name,isChecked:false})}));
+    requireAccount(current.list.account_id);
+    if(created.displayName!==name||created.isChecked)throw new TaskError("Naujo žingsnio rezultato patvirtinti nepavyko. Atnaujink žingsnius.",502);
+    const result=await stepsSnapshot(input);
+    if(!result.items.some(item=>item.id===created.id&&item.displayName===name&&!item.isChecked))throw new TaskError("Naujo žingsnio patvirtinti nepavyko. Atnaujink žingsnius.",502);
+    return publicSteps(result);
+  }
+  async function updateStep(input:Input) {
+    const id=identifier(input.step_id),patch:Record<string,unknown>={};
+    if(input.isChecked!==undefined){if(typeof input.isChecked!=="boolean")throw new TaskError("Neteisinga žingsnio būsena.");patch.isChecked=input.isChecked;}
+    if(input.displayName!==undefined)patch.displayName=stepName(input.displayName);
+    if(!Object.keys(patch).length)throw new TaskError("Nėra žingsnio pakeitimų.");
+    const current=await stepsSnapshot(input);stepMutation(current,input);
+    const existing=current.items.find(item=>item.id===id);if(!existing)throw new TaskError("Žingsnis neberastas. Atnaujink duomenis.",404);
+    requireAccount(current.list.account_id);
+    const updated=taskStep(await current.provider.request(`${current.path}/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(patch)}));
+    requireAccount(current.list.account_id);
+    if(updated.id!==id||("isChecked" in patch&&updated.isChecked!==patch.isChecked)||("displayName" in patch&&updated.displayName!==patch.displayName))throw new TaskError("Žingsnio pakeitimo patvirtinti nepavyko. Atnaujink žingsnius.",502);
+    const result=await stepsSnapshot(input),confirmed=result.items.find(item=>item.id===id);
+    if(!confirmed||("isChecked" in patch&&confirmed.isChecked!==patch.isChecked)||("displayName" in patch&&confirmed.displayName!==patch.displayName))throw new TaskError("Žingsnio pakeitimo patvirtinti nepavyko. Atnaujink žingsnius.",502);
+    return publicSteps(result);
+  }
+  async function deleteStep(input:Input) {
+    const id=identifier(input.step_id),current=await stepsSnapshot(input);stepMutation(current,input);
+    if(!current.items.some(item=>item.id===id))throw new TaskError("Žingsnis neberastas. Atnaujink duomenis.",404);
+    requireAccount(current.list.account_id);await current.provider.request(`${current.path}/${encodeURIComponent(id)}`,{method:"DELETE"});requireAccount(current.list.account_id);
+    const result=await stepsSnapshot(input);if(result.items.some(item=>item.id===id))throw new TaskError("Žingsnio pašalinimo patvirtinti nepavyko. Atnaujink žingsnius.",502);
+    return publicSteps(result);
+  }
+  async function listProviderForGateway(source: RemoteTaskSource, provider: TaskGateway) {
     const items: Task[] = [], lists: TaskList[] = [], warnings: string[] = [];
-    const provider = source === "microsoft" ? microsoft : google;
-    if (!provider?.connected()) return {items,lists,warnings};
+    if (!provider.connected()) return {items,lists,warnings};
     let account = provider.cachedAccountId();
     try {
       account = await provider.accountId();
-      const available = await fetchLists(source,account);
+      const accountLabel=provider.label?.() ?? account;
+      const available = (await fetchLists(source,account)).map(list=>({...list,account_label:accountLabel}));
       const staged: {list:TaskList;tasks:Task[];fresh:boolean}[] = [];
       for (const list of available) {
         try {
           const path = source === "google" ? `/lists/${encodeURIComponent(list.list_id)}/tasks` : `/me/todo/lists/${encodeURIComponent(list.list_id)}/tasks`;
-          const raw = await pages(source,path,source === "google" ? "?maxResults=100&showCompleted=true&showHidden=true&showDeleted=false&showAssigned=false" : "?$top=100");
+          const raw = await pagesFor(provider,source,path,source === "google" ? "?maxResults=100&showCompleted=true&showHidden=true&showDeleted=false&showAssigned=false" : "?$top=100");
           staged.push({list,tasks:raw.filter(task=>!task.deleted && !task.assignmentInfo).map(task=>mapped(task,list)),fresh:true});
         } catch {
-          staged.push({list:{...list,stale:true},tasks:cachedTasks(account,source,list.list_id).map(task=>({...task,list_name:list.name,stale:true})),fresh:false});
-          warnings.push(`${source === "google" ? "Google" : "Microsoft"}: sąrašo „${list.name}“ atnaujinti nepavyko; duomenys gali būti pasenę.`);
+          staged.push({list:{...list,stale:true},tasks:cachedTasks(account!,source,list.list_id).map(task=>({...task,list_name:list.name,stale:true})),fresh:false});
+          warnings.push(`${source === "google" ? "Google" : "Microsoft"}: sąrašo "${list.name}" atnaujinti nepavyko; duomenys gali būti pasenę.`);
         }
       }
-      requireAccount(account, source);
+      requireAccount(account!, source);
+      const previousTasks=new Map(cachedTasks(account!,source).map(task=>[task.key,task]));
+      const pendingMoveOldKeys = source === "google"
+        ? new Set(pendingMoves(account!).map(move => move.old_key))
+        : new Set<string>();
+      const markOrphan=db.prepare(`UPDATE task_plans SET mirror_error=?,mirror_orphaned_at=COALESCE(mirror_orphaned_at,?),
+        mirror_orphan_title=COALESCE(mirror_orphan_title,?) WHERE task_key=? AND user_id=?
+        AND (mirror_event_id IS NOT NULL OR mirror_requested<>0 OR mirror_transaction_id IS NOT NULL OR mirror_create_payload IS NOT NULL)`);
+      const orphanVersion=()=>`${new Date().toISOString()}#${randomUUID()}`;
       // Commit only after all reads and account checks. Planning rows survive
       // remote deletion; a failed list never replaces its last good snapshot.
       db.exec("BEGIN IMMEDIATE");
       try {
-        db.prepare("DELETE FROM remote_task_lists WHERE source=? AND account_id=?").run(source,account);
+        db.prepare("DELETE FROM remote_task_lists WHERE user_id=? AND source=? AND account_id=?").run(userId,source,account);
         for (const entry of staged) {
-          db.prepare("INSERT INTO remote_task_lists(list_key,source,account_id,list_json) VALUES (?,?,?,?)").run(entry.list.key,source,account,JSON.stringify(entry.list));
+          db.prepare("INSERT INTO remote_task_lists(user_id,list_key,source,account_id,list_json) VALUES (?,?,?,?,?)").run(userId,entry.list.key,source,account,JSON.stringify(entry.list));
           if (entry.fresh) {
-            db.prepare("DELETE FROM remote_tasks WHERE source=? AND account_id=? AND list_id=?").run(source,account,entry.list.list_id);
+            db.prepare("DELETE FROM remote_tasks WHERE user_id=? AND source=? AND account_id=? AND list_id=?").run(userId,source,account,entry.list.list_id);
             for (const task of entry.tasks) {
+              db.prepare(`UPDATE task_plans SET mirror_orphaned_at=NULL,mirror_orphan_title=NULL,
+                mirror_error=CASE WHEN mirror_error=? THEN NULL ELSE mirror_error END WHERE task_key=? AND user_id=?`).run(ORPHAN_MIRROR_ERROR,task.key,userId);
               // A completion observed at the source must not resurrect the old
               // work block when that task is later reopened. Failed reads never
               // enter this branch, so an outage cannot erase a local plan.
-              if (task.completed) db.prepare(`UPDATE task_plans SET scheduled_at=NULL, mirror_requested=0,
-                schedule_version=schedule_version+1,
-                mirror_error=CASE WHEN mirror_event_id IS NOT NULL OR mirror_transaction_id IS NOT NULL
-                  THEN 'Užduotis užbaigta šaltinyje. Atverk ją ir išsaugok, kad pašalintum susietą Outlook bloką.' ELSE mirror_error END
-                WHERE task_key=? AND (scheduled_at IS NOT NULL OR mirror_requested<>0)`).run(task.key);
+              if (task.completed) {
+                db.prepare(`UPDATE task_plans SET scheduled_at=NULL, mirror_requested=0,
+                  schedule_version=schedule_version+1,
+                  mirror_error=CASE WHEN mirror_event_id IS NOT NULL OR mirror_transaction_id IS NOT NULL
+                    THEN 'Užduotis užbaigta šaltinyje. Atverk ją ir išsaugok, kad pašalintum susietą Outlook bloką.' ELSE mirror_error END
+                  WHERE task_key=? AND user_id=? AND (scheduled_at IS NOT NULL OR mirror_requested<>0)`).run(task.key,userId);
+                notifications.cancel(task.key);
+              } else {
+                const currentPlan=plan(task.key);
+                if (currentPlan) notifications.sync(task.key,currentPlan.scheduled_at,currentPlan.schedule_version);
+              }
               cache(task);
+            }
+            const present=new Set(entry.tasks.map(task=>task.key));
+            for (const previous of previousTasks.values()) {
+              if (previous.list_id===entry.list.list_id
+                && !present.has(previous.key)
+                && !pendingMoveOldKeys.has(previous.key)) notifications.cancel(previous.key);
             }
           }
         }
-        for (const task of cachedTasks(account,source)) if (!available.some(list=>list.list_id === task.list_id)) db.prepare("DELETE FROM remote_tasks WHERE task_key=?").run(task.key);
+        if (source === "google") reconcilePendingMoves(account!,staged,warnings);
+        for (const task of cachedTasks(account!,source)) if (!available.some(list=>list.list_id === task.list_id)) db.prepare("DELETE FROM remote_tasks WHERE task_key=? AND user_id=?").run(task.key,userId);
+        // Mark orphaned plans in the same transaction that removes their last
+        // provider snapshot. A crash can never discard the evidence first.
+        for (const entry of staged) {
+          if (!entry.fresh) continue;
+          const orphans = (db.prepare("SELECT tp.task_key FROM task_plans tp WHERE tp.user_id=? AND tp.task_key NOT IN (SELECT task_key FROM remote_tasks WHERE user_id=? AND source=? AND account_id=? AND list_id=?) AND (tp.mirror_event_id IS NOT NULL OR tp.mirror_requested<>0 OR tp.mirror_transaction_id IS NOT NULL OR tp.mirror_create_payload IS NOT NULL)").all(userId, userId, source, account, entry.list.list_id) as {task_key:string}[]).filter(row => {
+            try { const parts = JSON.parse(row.task_key); return Array.isArray(parts) && parts.length === 4 && parts[0] === source && parts[1] === account && parts[2] === entry.list.list_id; } catch { return false; }
+          });
+          for (const orphan of orphans) markOrphan.run(ORPHAN_MIRROR_ERROR,orphanVersion(),previousTasks.get(orphan.task_key)?.title ?? null,orphan.task_key,userId);
+        }
+        // A successful list catalog is authoritative. Removed lists queue every
+        // cached task that may still own an Outlook block.
+        const availableListIds=new Set(available.map(list=>list.list_id));
+        for (const task of previousTasks.values()) {
+          if (!availableListIds.has(task.list_id!)) {
+            notifications.cancel(task.key);
+            markOrphan.run(ORPHAN_MIRROR_ERROR,orphanVersion(),task.title,task.key,userId);
+          }
+        }
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
       for (const entry of staged) {lists.push(entry.list);items.push(...entry.tasks.map(decorate));}
     } catch {
       if (account && provider.connected() && provider.cachedAccountId() === account) {
         items.push(...cachedTasks(account,source).map(task=>({...task,stale:true})));
-        lists.push(...cachedLists(source,account).map(list=>({...list,stale:true})));
+        const accountLabel=provider.label?.() ?? account;
+        lists.push(...cachedLists(source,account).map(list=>({...list,account_label:accountLabel,stale:true})));
       }
       warnings.push(`${source === "google" ? "Google Tasks" : "Microsoft"} užduočių atnaujinti nepavyko. Vietinės užduotys veikia; išsaugoti duomenys gali būti pasenę.`);
     }
     return {items,lists,warnings};
   }
+  async function listProvider(source: RemoteTaskSource) {
+    const gateways = source === "microsoft" ? _msGateways : _gGateways;
+    const items: Task[] = [], lists: TaskList[] = [], warnings: string[] = [];
+    for (const provider of gateways) {
+      const r = await listProviderForGateway(source, provider);
+      items.push(...r.items);
+      lists.push(...r.lists);
+      warnings.push(...r.warnings);
+    }
+    return {items,lists,warnings};
+  }
   async function list() {
     const results = await Promise.all((["microsoft","google"] as const).map(source=>serial("task-provider:" + source,()=>listProvider(source))));
-    return {items:[...localTasks(),...results.flatMap(result=>result.items)],lists:results.flatMap(result=>result.lists),warnings:results.flatMap(result=>result.warnings)};
+    return {items:[...localTasks(),...results.flatMap(result=>result.items)],lists:results.flatMap(result=>result.lists),warnings:results.flatMap(result=>result.warnings),cleanups:mirrorCleanups()};
   }
   async function syncMirror(task: Task) {
     const current = plan(task.key);
     if (!current || (!current.mirror_requested && !current.mirror_event_id && !current.mirror_transaction_id)) return;
     try {
-      if (!microsoft.connected()) throw new Error("Paskyra neprijungta");
-      const account = await microsoft.accountId();
+      // Find the right Microsoft gateway for this mirror
+      let msGateway: TaskGateway | undefined;
+      if (current.mirror_account_id) {
+        msGateway = _msGateways.find(g => g.connected() && g.cachedAccountId() === current.mirror_account_id);
+      } else {
+        const connected = _msGateways.filter(g => g.connected());
+        if (connected.length === 1) msGateway = connected[0];
+        else if (connected.length > 1) {
+          db.prepare("UPDATE task_plans SET mirror_error=? WHERE task_key=? AND user_id=?")
+            .run("Pasirink Microsoft paskyrą Outlook blokui.", task.key, userId);
+          return;
+        }
+      }
+      if (!msGateway || !msGateway.connected()) throw new Error("Paskyra neprijungta");
+      const account = await msGateway.accountId();
+      const connectionId = msGateway.connectionId?.() ?? null;
       requireAccount(account);
       if (current.mirror_account_id && current.mirror_account_id !== account) throw new Error("Kita paskyra");
+      if (current.mirror_connection_id && current.mirror_connection_id !== connectionId) throw new Error("Kitas prisijungimas");
       if (!current.mirror_requested || !current.scheduled_at || task.completed) {
         // An uncertain create must be resolved with its persisted transactionId
         // before deletion, so retries do not leave an orphan free block.
         if (!current.mirror_event_id && current.mirror_create_payload) {
-          const recovered = await microsoft.request("/me/events", {method:"POST", body: current.mirror_create_payload});
+          const recovered = await msGateway.request("/me/events", {method:"POST", body: current.mirror_create_payload});
           if (!recovered?.id) throw new Error("Nepavyko nustatyti bloko");
           current.mirror_event_id = recovered.id;
-          db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=?").run(recovered.id, task.key);
+          db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=? AND user_id=?").run(recovered.id, task.key, userId);
         }
-        if (current.mirror_event_id) await microsoft.request(`/me/events/${encodeURIComponent(current.mirror_event_id)}`, { method: "DELETE" });
-        db.prepare("UPDATE task_plans SET mirror_event_id=NULL, mirror_account_id=NULL, mirror_transaction_id=NULL, mirror_create_payload=NULL, mirror_error=NULL WHERE task_key=?").run(task.key);
+        if (current.mirror_event_id) {
+          try {
+            await msGateway.request(`/me/events/${encodeURIComponent(current.mirror_event_id)}`, { method: "DELETE" });
+          } catch (e) {
+            if (!(e instanceof ProviderError && e.status === 404)) throw e;
+          }
+        }
+        db.prepare("UPDATE task_plans SET mirror_event_id=NULL, mirror_account_id=NULL, mirror_connection_id=NULL, mirror_transaction_id=NULL, mirror_create_payload=NULL, mirror_error=NULL WHERE task_key=? AND user_id=?").run(task.key, userId);
         return;
       }
       const transactionId = current.mirror_transaction_id || randomUUID();
-      db.prepare("UPDATE task_plans SET mirror_account_id=?, mirror_transaction_id=? WHERE task_key=?").run(account, transactionId, task.key);
+      db.prepare("UPDATE task_plans SET mirror_account_id=?, mirror_connection_id=?, mirror_transaction_id=? WHERE task_key=? AND user_id=?").run(account, connectionId, transactionId, task.key, userId);
       const start = new Date(current.scheduled_at);
-      const payload = { subject: `✓ ${task.title}`, body: {contentType: "text", content: "Dienos planas: pasirenkamas užduoties darbo laikas."},
+      const payload = { subject: `✓ ${task.title}`, body: {contentType: "text", content: OUTLOOK_MIRROR_BODY},
         start: {dateTime: start.toISOString().replace(/Z$/, ""), timeZone:"UTC"},
         end: {dateTime: new Date(start.getTime() + current.duration_minutes * 60000).toISOString().replace(/Z$/, ""), timeZone:"UTC"},
         showAs: "free", isReminderOn: false };
       let eventId = current.mirror_event_id;
       if (!eventId) {
         const createPayload = current.mirror_create_payload || JSON.stringify({...payload, transactionId});
-        db.prepare("UPDATE task_plans SET mirror_create_payload=? WHERE task_key=?").run(createPayload, task.key);
-        const result = await microsoft.request("/me/events", {method:"POST", body:createPayload});
+        db.prepare("UPDATE task_plans SET mirror_create_payload=? WHERE task_key=? AND user_id=?").run(createPayload, task.key, userId);
+        const result = await msGateway.request("/me/events", {method:"POST", body:createPayload});
         eventId = result?.id;
-        if (eventId) db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=?").run(eventId, task.key);
+        if (eventId) db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=? AND user_id=?").run(eventId, task.key, userId);
       }
       if (!eventId) throw new Error("Nėra įvykio ID");
-      await microsoft.request(`/me/events/${encodeURIComponent(eventId)}`, {method:"PATCH",body:JSON.stringify(payload)});
-      db.prepare("UPDATE task_plans SET mirror_event_id=?, mirror_error=NULL WHERE task_key=?").run(eventId, task.key);
+      await msGateway.request(`/me/events/${encodeURIComponent(eventId)}`, {method:"PATCH",body:JSON.stringify(payload)});
+      db.prepare("UPDATE task_plans SET mirror_event_id=?, mirror_error=NULL WHERE task_key=? AND user_id=?").run(eventId, task.key, userId);
     } catch {
-      db.prepare("UPDATE task_plans SET mirror_error=? WHERE task_key=?").run("Vietinis planas išsaugotas, bet Outlook bloko sinchronizuoti nepavyko. Prijunk tą pačią paskyrą ir pakartok.", task.key);
+      db.prepare("UPDATE task_plans SET mirror_error=? WHERE task_key=? AND user_id=?").run("Vietinis planas išsaugotas, bet Outlook bloko sinchronizuoti nepavyko. Prijunk tą pačią paskyrą ir pakartok.", task.key, userId);
     }
   }
   async function create(input: Input) {
@@ -482,15 +826,30 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     if (source === "google" && input.due_at) throw new TaskError("Google Tasks palaiko tik dieną. Naudok due_date, ne due_at.");
     if (source !== "google" && input.due_date !== undefined) throw new TaskError("Šiam šaltiniui naudok due_at.");
     const dueDate = source === "google" ? dateOnly(input.due_date ?? null) : null;
+    const scheduledAt = input.scheduled_at === undefined ? null : dateValue(input.scheduled_at, true);
     const values = { title: title(input.title), notes: text(input.notes ?? ""), due_at: input.due_at ? dateValue(input.due_at, true) : null,
       duration_minutes: duration(input.duration_minutes ?? 30), project: text(input.project ?? (source === "local" ? "Asmeniniai" : source === "google" ? "Google Tasks" : "Microsoft To Do"), 200),
       priority: priority(input.priority ?? "normal"), tags: text(input.tags ?? "", 1000), energy: text(input.energy ?? "medium", 30) };
     if (source === "local") {
-      const result = db.prepare("INSERT INTO tasks(title, notes, due_at, duration_minutes, project, priority, tags, energy) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(values.title, values.notes, values.due_at, values.duration_minutes, values.project, values.priority, values.tags, values.energy);
-      return get({ id: Number(result.lastInsertRowid), source });
+      db.exec("BEGIN IMMEDIATE");
+      let id:number,task:Task,undo:ActionSummary|undefined;
+      try{
+        const result = db.prepare("INSERT INTO tasks(user_id, title, notes, due_at, duration_minutes, project, priority, tags, energy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(userId, values.title, values.notes, values.due_at, values.duration_minutes, values.project, values.priority, values.tags, values.energy);
+        id=Number(result.lastInsertRowid);task=get({id,source});ensurePlan(task);
+        if(scheduledAt){
+          db.prepare("UPDATE task_plans SET scheduled_at=?,duration_minutes=? WHERE task_key=? AND user_id=?").run(scheduledAt,values.duration_minutes,task.key,userId);
+          notifications.sync(task.key,scheduledAt,0);
+        }
+        task=get({id,source});undo=actions.recordCreated(task);
+        db.exec("COMMIT");
+      }catch(error){db.exec("ROLLBACK");throw error;}
+      return {...get({id:id!,source}),...(undo?{undo}:{})};
     }
-    const provider = gateway(source), account = await provider.accountId();
+    const requestedAccount=input.account_id===undefined?null:identifier(input.account_id);
+    const requestedConnection=input.connection_id===undefined?undefined:Number(input.connection_id);
+    if(requestedConnection!==undefined&&(!Number.isSafeInteger(requestedConnection)||requestedConnection<=0))throw new TaskError("Neteisingas užduočių jungties ID.");
+    const provider = requestedAccount?gatewayForAccount(source,requestedAccount,requestedConnection):gateway(source), account = await provider.accountId();
     // Explicit destinations are bound to the account displayed when selected.
     if (input.list_id !== undefined || input.account_id !== undefined || source === "google") {
       identifier(input.list_id); identifier(input.account_id);
@@ -508,14 +867,21 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
     const body = source === "google" ? {title:values.title,notes:values.notes,...(dueDate ? {due:dueDate + "T00:00:00.000Z"} : {})} : {title:values.title,body:{content:values.notes,contentType:"text"},importance:values.priority,...(values.due_at ? {dueDateTime:{dateTime:values.due_at.replace(/Z$/,""),timeZone:"UTC"}} : {})};
     const result = await provider.request(path,{method:"POST",body:JSON.stringify(body)});
     requireAccount(account,source);
-    const task = mapped(result, destination); cache(task); ensurePlan(task);
-    db.prepare("UPDATE task_plans SET duration_minutes=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=?").run(values.duration_minutes, values.project, values.tags, values.energy, source === "google" ? values.priority : null, task.key);
+    const task = mapped(result, destination);
+    db.exec("BEGIN IMMEDIATE");
+    try{
+      cache(task);ensurePlan(task);
+      db.prepare("UPDATE task_plans SET scheduled_at=?, duration_minutes=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=? AND user_id=?").run(scheduledAt,values.duration_minutes, values.project, values.tags, values.energy, source === "google" ? values.priority : null, task.key, userId);
+      if(scheduledAt)notifications.sync(task.key,scheduledAt,0);
+      db.exec("COMMIT");
+    }
+    catch(error){db.exec("ROLLBACK");throw error;}
     return decorate(task);
   }
   async function update(input: Input) {
     const key = reference(input);
     return serial(key, async () => {
-      const current = get(input); const changes: Input = {};
+      const current = get(input); const beforeAction=actions.capture(current); const changes: Input = {};
       if (input.title !== undefined) changes.title = title(input.title);
       if (input.notes !== undefined) changes.notes = text(input.notes);
       if (current.source === "google") {
@@ -532,7 +898,8 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
         changes.completed = input.completed ? 1 : 0;
       }
       if (input.duration_minutes !== undefined) changes.duration_minutes = duration(input.duration_minutes);
-      const scheduling = input.scheduled_at !== undefined || input.duration_minutes !== undefined || input.mirror_requested !== undefined;
+      const scheduling = input.scheduled_at !== undefined || input.duration_minutes !== undefined || input.mirror_requested !== undefined || input.mirror_account_id !== undefined || input.mirror_connection_id !== undefined;
+      if (current.source === "local" && input.schedule_version !== current.schedule_version) throw new TaskError("Užduotis jau pakeista. Atnaujink duomenis ir bandyk dar kartą.", 409);
       if (scheduling && input.schedule_version !== current.schedule_version) throw new TaskError("Planas jau pakeistas. Atnaujink duomenis ir bandyk dar kartą.", 409);
       if (input.scheduled_at !== undefined) changes.scheduled_at = dateValue(input.scheduled_at, true);
       if (input.mirror_requested !== undefined && typeof input.mirror_requested !== "boolean") throw new TaskError("Neteisingas Outlook bloko pasirinkimas.");
@@ -540,7 +907,7 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
       if (next.completed && input.scheduled_at) throw new TaskError("Atliktos užduoties planuoti negalima.");
       if (current.readonly_reason && ["title","notes","due_at","due_date","priority","completed"].some(field=>changes[field] !== undefined)) throw new TaskError(current.readonly_reason,403);
       if (current.source !== "local") {
-        const provider = gateway(current.source);
+        const provider = gatewayForAccount(current.source as RemoteTaskSource, current.account_id!,current.connection_id);
         const patch: Input = {};
         if (changes.title !== undefined) patch.title = changes.title;
         if (current.source === "google") {
@@ -557,43 +924,283 @@ export function createTaskService(db: DatabaseSync, microsoft: TaskGateway, goog
         const path = `${current.source === "google" ? "/lists" : "/me/todo/lists"}/${encodeURIComponent(current.list_id!)}/tasks/${encodeURIComponent(String(current.id))}`;
         if (Object.keys(patch).length) await provider.request(path, {method:"PATCH", body:JSON.stringify(patch)});
         requireAccount(current.account_id!,current.source);
-        cache(next);
-      } else {
-        db.prepare("UPDATE tasks SET title=?, notes=?, due_at=?, duration_minutes=?, completed=?, project=?, priority=?, energy=?, tags=? WHERE id=?")
-          .run(next.title, next.notes, next.due_at, next.duration_minutes, next.completed, next.project, next.priority, next.energy, next.tags, Number(next.id));
       }
-      const extra = ensurePlan(current);
-      const scheduledAt = next.completed ? null : next.scheduled_at;
-      const mirror = scheduledAt ? (input.mirror_requested === undefined ? extra.mirror_requested : Number(input.mirror_requested)) : 0;
-      db.prepare("UPDATE task_plans SET scheduled_at=?, duration_minutes=?, schedule_version=schedule_version+1, legacy_schedule=?, mirror_requested=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=?")
-        .run(scheduledAt, next.duration_minutes, input.scheduled_at !== undefined ? 0 : extra.legacy_schedule, mirror, next.project, next.tags, next.energy, next.source === "google" ? next.priority : null, key);
+      let undo:ActionSummary|undefined;
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        if (current.source !== "local") cache(next);
+        else db.prepare("UPDATE tasks SET title=?, notes=?, due_at=?, duration_minutes=?, completed=?, project=?, priority=?, energy=?, tags=? WHERE id=? AND user_id=?")
+          .run(next.title, next.notes, next.due_at, next.duration_minutes, next.completed, next.project, next.priority, next.energy, next.tags, Number(next.id), userId);
+        const extra = ensurePlan(current);
+        const scheduledAt = next.completed ? null : next.scheduled_at;
+        const mirror = scheduledAt ? (input.mirror_requested === undefined ? extra.mirror_requested : Number(input.mirror_requested)) : 0;
+        let mirrorAccount=extra.mirror_account_id,mirrorConnection=extra.mirror_connection_id;
+        if (mirror) {
+          const suppliedAccount=input.mirror_account_id===undefined?mirrorAccount:identifier(input.mirror_account_id);
+          const suppliedConnection=input.mirror_connection_id===undefined?mirrorConnection:Number(input.mirror_connection_id);
+          if (suppliedAccount!==null || suppliedConnection!==null) {
+            if (!suppliedAccount || !Number.isSafeInteger(suppliedConnection) || Number(suppliedConnection)<=0) throw new TaskError("Pasirink Microsoft paskyrą Outlook blokui.");
+            const selected=_msGateways.find(g=>g.connected()&&g.cachedAccountId()===suppliedAccount&&g.connectionId?.()===suppliedConnection);
+            if(!selected)throw new TaskError("Pasirinkta Microsoft paskyra neprijungta. Atnaujink duomenis.",409);
+            if(extra.mirror_event_id&&(extra.mirror_account_id!==suppliedAccount||extra.mirror_connection_id!==suppliedConnection))throw new TaskError("Pirmiausia išjunk esamą Outlook bloką, tada pasirink kitą Microsoft paskyrą.",409);
+            mirrorAccount=suppliedAccount;mirrorConnection=Number(suppliedConnection);
+          } else {
+            const connected=_msGateways.filter(g=>g.connected());
+            if(connected.length!==1)throw new TaskError("Pasirink Microsoft paskyrą Outlook blokui.",409);
+            mirrorAccount=connected[0].cachedAccountId();mirrorConnection=connected[0].connectionId?.()??null;
+          }
+        }
+        const planUpdate=db.prepare(`UPDATE task_plans SET scheduled_at=?, duration_minutes=?, schedule_version=schedule_version+1, legacy_schedule=?, mirror_requested=?, mirror_account_id=?, mirror_connection_id=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=? AND user_id=?${current.source === "local" ? " AND schedule_version=?" : ""}`)
+          .run(scheduledAt, next.duration_minutes, input.scheduled_at !== undefined ? 0 : extra.legacy_schedule, mirror, mirrorAccount, mirrorConnection, next.project, next.tags, next.energy, next.source === "google" ? next.priority : null, key, userId,...(current.source === "local" ? [current.schedule_version] : []));
+        if(current.source === "local"&&planUpdate.changes!==1)throw new TaskError("Užduotis jau pakeista. Atnaujink duomenis ir bandyk dar kartą.",409);
+        const updatedPlan=plan(key)!;
+        notifications.sync(key,updatedPlan.scheduled_at,updatedPlan.schedule_version);
+        undo=actions.recordUpdated(beforeAction,get(input),input);
+        db.exec("COMMIT");
+      } catch(error) {db.exec("ROLLBACK");throw error;}
       await syncMirror(next);
-      return get(input);
+      return {...get(input),...(undo?{undo}:{})};
     });
+  }
+  async function moveGoogle(input: Input) {
+    if (input.source !== "google") throw new TaskError("Tik Google užduotys gali būti perkeltos tarp sąrašų.");
+    const account = identifier(input.account_id), sourceListId = identifier(input.list_id);
+    const destinationListId = identifier(input.destination_list_id), taskId = identifier(input.id);
+    if (sourceListId === destinationListId) throw new TaskError("Pasirink kitą Google Tasks sąrašą.");
+    const provider = gatewayForAccount("google", account,input.connection_id===undefined?undefined:Number(input.connection_id)), currentAccount = await provider.accountId();
+    if (account !== currentAccount) throw new TaskError("Paskyra pasikeitė. Atnaujink duomenis.", 409);
+    requireAccount(account,"google");
+    const current = get({source:"google",account_id:account,list_id:sourceListId,id:taskId});
+    if (input.schedule_version !== current.schedule_version) throw new TaskError("Planas jau pakeistas. Atnaujink duomenis ir bandyk dar kartą.", 409);
+    const availableLists = await fetchLists("google",account);
+    const sourceList=availableLists.find(list=>list.list_id===sourceListId),destination=availableLists.find(list=>list.list_id === destinationListId);
+    if (!sourceList) throw new TaskError("Šaltinio sąrašo nebėra. Atnaujink duomenis.",409);
+    if (!destination) throw new TaskError("Paskirties sąrašo nebėra. Atnaujink duomenis.",409);
+    if (!destination.writable) throw new TaskError("Į pasirinktą sąrašą užduočių perkelti negalima.",403);
+    const sourceTasks = await pagesFor(provider,"google",`/lists/${encodeURIComponent(sourceListId)}/tasks`,"?maxResults=100&showCompleted=true&showHidden=true&showDeleted=false&showAssigned=false");
+    const providerTask = sourceTasks.find(task=>String(task?.id) === taskId);
+    if (!providerTask || providerTask.deleted || providerTask.assignmentInfo) throw new TaskError("Google užduoties šiame sąraše nebėra arba jos perkelti negalima. Atnaujink duomenis.",409);
+    if (providerTask.parent || sourceTasks.some(task=>String(task?.parent) === taskId)) {
+      throw new TaskError("Užduočių su Google hierarchija tarp sąrašų neperkeliame, kad neprarastume tėvinio ryšio.",409);
+    }
+    requireAccount(account,"google");
+
+    const oldKey = current.key, expectedKey = remoteKey(account,destinationListId,taskId,"google");
+    if (db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=? AND user_id=?").get(expectedKey,userId) || db.prepare("SELECT 1 FROM task_plans WHERE task_key=? AND user_id=?").get(expectedKey,userId)) {
+      throw new TaskError("Paskirties sąraše jau yra vietinių duomenų su šia užduoties tapatybe. Atnaujink duomenis.",409);
+    }
+    const pending: PendingGoogleMove = {setting_key:pendingMoveKey(oldKey),account_id:account,source_list_id:sourceListId,
+      destination_list_id:destinationListId,old_task_id:taskId,old_key:oldKey,schedule_version:current.schedule_version,
+      moved_id:null};
+    if (db.prepare("SELECT 1 FROM user_settings WHERE key=? AND user_id=?").get(pending.setting_key,userId)) throw new TaskError("Ankstesnis šios užduoties perkėlimas dar derinamas. Atnaujink duomenis.",409);
+    writePendingMove(pending);
+    const params = new URLSearchParams({destinationTasklist:destinationListId});
+    const raw = await provider.request(`/lists/${encodeURIComponent(sourceListId)}/tasks/${encodeURIComponent(taskId)}/move?${params}`,{method:"POST"});
+    if (!raw || typeof raw !== "object") {
+      throw new TaskError("Google perkėlė užduotį, bet negrąžino patvirtintos jos tapatybės. Atnaujink duomenis.",502);
+    }
+    let movedId: string;
+    try { movedId = identifier(raw.id); }
+    catch { throw new TaskError("Google perkėlė užduotį, bet grąžino neteisingą jos tapatybę. Atnaujink duomenis.",502); }
+    pending.moved_id=movedId;writePendingMove(pending);
+    requireAccount(account,"google");
+    const confirmed = await provider.request(`/lists/${encodeURIComponent(destinationListId)}/tasks/${encodeURIComponent(movedId)}`);
+    requireAccount(account,"google");
+    let confirmedId: string | null = null;
+    try { confirmedId = confirmed && typeof confirmed === "object" ? identifier(confirmed.id) : null; } catch { /* Invalid provider response. */ }
+    if (confirmedId !== movedId) {
+      throw new TaskError("Google perkėlimo rezultato paskirties sąraše patvirtinti nepavyko. Atnaujink duomenis.",502);
+    }
+    const moved = mapped(confirmed,destination), newKey = moved.key;
+
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const cached = db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=? AND user_id=? AND source='google' AND account_id=? AND list_id=?").get(oldKey,userId,account,sourceListId);
+      if (!cached) throw new TaskError("Užduoties vietinė kopija pasikeitė. Atnaujink duomenis.",409);
+      if (newKey !== expectedKey && (db.prepare("SELECT 1 FROM remote_tasks WHERE task_key=? AND user_id=?").get(newKey,userId) || db.prepare("SELECT 1 FROM task_plans WHERE task_key=? AND user_id=?").get(newKey,userId))) {
+        throw new TaskError("Paskirties sąrašo duomenys pasikeitė. Atnaujink duomenis.",409);
+      }
+      applyMoveRows(pending,moved,current.schedule_version);
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    return decorate(moved);
+  }
+  const googleOrderQuery="?maxResults=100&showCompleted=true&showHidden=true&showDeleted=false&showAssigned=true";
+  function googleParentBlock(raw:any):string|undefined {
+    if (raw?.assignmentInfo) return "Iš Google Docs ar Chat priskirta užduotis negali būti tėvinė.";
+    if (raw?.recurrence) return "Pasikartojanti Google užduotis negali būti tėvinė.";
+    if (raw?.hidden) return "Paslėpta Google užduotis negali būti tėvinė.";
+  }
+  function googleOrderVersion(list:TaskList,rawTasks:any[]) {
+    return fingerprint({list:list.key,tasks:rawTasks.map(raw=>({
+      id:identifier(raw.id),parent:typeof raw.parent==="string"?raw.parent:null,position:typeof raw.position==="string"?raw.position:null,
+      hidden:Boolean(raw.hidden),status:raw.status??null,assignmentInfo:raw.assignmentInfo??null,recurrence:raw.recurrence??null,
+      etag:raw.etag??null,updated:raw.updated??null,
+    })).sort((a,b)=>a.id.localeCompare(b.id))});
+  }
+  function googleOrderSnapshot(list:TaskList,rawTasks:any[],taskId:string):GoogleTaskOrderSnapshot {
+    const current=rawTasks.find(raw=>String(raw?.id)===taskId);
+    if (!current) throw new TaskError("Google užduoties šiame sąraše nebėra. Atnaujink duomenis.",404);
+    const parentId=typeof current.parent==="string"?current.parent:null;
+    const siblings=rawTasks.filter(raw=>(typeof raw.parent==="string"?raw.parent:null)===parentId);
+    const currentIndex=siblings.findIndex(raw=>String(raw.id)===taskId);
+    const previousId=currentIndex>0?identifier(siblings[currentIndex-1].id):null;
+    const items=rawTasks.map(raw=>{
+      const blocked=googleParentBlock(raw);
+      return {id:identifier(raw.id),title:typeof raw.title==="string"&&raw.title?raw.title:"Be pavadinimo",
+        parent_id:typeof raw.parent==="string"?raw.parent:null,hidden:Boolean(raw.hidden),completed:raw.status==="completed",
+        can_be_parent:!blocked,...(blocked?{parent_block_reason:blocked}:{})};
+    });
+    return {task_id:taskId,parent_id:parentId,previous_id:previousId,items,version:googleOrderVersion(list,rawTasks),
+      ...(!list.writable?{readonly_reason:"Šiame Google Tasks sąraše hierarchijos keisti negalima."}:{})};
+  }
+  async function googleOrderState(input:Input) {
+    if (input.source!=="google") throw new TaskError("Hierarchiją galima keisti tik Google Tasks užduotims.");
+    const taskId=identifier(input.id),list=await currentList(input);
+    if (list.source!=="google") throw new TaskError("Hierarchiją galima keisti tik Google Tasks užduotims.");
+    const rawTasks=(await pagesFor(gatewayForAccount("google",list.account_id,list.connection_id),"google",`/lists/${encodeURIComponent(list.list_id)}/tasks`,googleOrderQuery)).filter(raw=>!raw?.deleted);
+    requireAccount(list.account_id,"google");
+    const seen=new Set<string>();
+    for (const raw of rawTasks) {const id=identifier(raw?.id);if(seen.has(id))throw new TaskError("Google grąžino pasikartojančią užduoties tapatybę. Atnaujink duomenis.",502);seen.add(id);}
+    const snapshot=googleOrderSnapshot(list,rawTasks,taskId);
+    return {list,rawTasks,snapshot};
+  }
+  async function readGoogleOrder(input:Input) {return (await googleOrderState(input)).snapshot;}
+  async function updateGoogleOrder(input:Input) {
+    if (typeof input.version!=="string"||!input.version) throw new TaskError("Pirmiausia atnaujink Google hierarchiją.");
+    const current=await googleOrderState(input),taskId=current.snapshot.task_id;
+    if (current.snapshot.readonly_reason) throw new TaskError(current.snapshot.readonly_reason,403);
+    if (input.version!==current.snapshot.version) throw new TaskError("Google hierarchija jau pasikeitė. Atnaujink duomenis.",409);
+    const parentId=input.parent_id===null?null:identifier(input.parent_id);
+    const previousId=input.previous_id===null?null:identifier(input.previous_id);
+    const byId=new Map(current.rawTasks.map(raw=>[identifier(raw.id),raw])),task=byId.get(taskId)!;
+    if (parentId===taskId||previousId===taskId) throw new TaskError("Užduotis negali būti savo tėvinė ar ankstesnė užduotis.");
+    if (parentId) {
+      const parent=byId.get(parentId);
+      if (!parent) throw new TaskError("Pasirinktos tėvinės užduoties nebėra. Atnaujink duomenis.",409);
+      const blocked=googleParentBlock(parent);if(blocked)throw new TaskError(blocked,409);
+      if (task.assignmentInfo||task.recurrence) throw new TaskError("Priskirta arba pasikartojanti Google užduotis negali tapti pavaldžiąja.",409);
+      const visited=new Set<string>([taskId]);let cursor:any=parent;
+      while(cursor){const id=identifier(cursor.id);if(visited.has(id))throw new TaskError("Pasirinkta hierarchija sudarytų ciklą.",409);visited.add(id);cursor=typeof cursor.parent==="string"?byId.get(cursor.parent):undefined;}
+    }
+    if (previousId) {
+      const previous=byId.get(previousId);
+      if (!previous||previous.hidden) throw new TaskError("Ankstesnės užduoties nebėra arba ji paslėpta. Atnaujink duomenis.",409);
+      const previousParent=typeof previous.parent==="string"?previous.parent:null;
+      if (previousParent!==parentId) throw new TaskError("Ankstesnė užduotis turi būti tame pačiame hierarchijos lygyje.",409);
+    }
+    if (task.status==="completed"&&task.hidden&&(parentId||previousId)) throw new TaskError("Paslėptą atliktą Google užduotį galima perkelti tik į sąrašo pradžią.",409);
+    if (parentId===current.snapshot.parent_id&&previousId===current.snapshot.previous_id)return current.snapshot;
+    const params=new URLSearchParams();if(parentId)params.set("parent",parentId);if(previousId)params.set("previous",previousId);
+    const provider=gatewayForAccount("google",current.list.account_id,current.list.connection_id);requireAccount(current.list.account_id,"google");
+    const suffix=params.size?`?${params}`:"";
+    const moved=await provider.request(`/lists/${encodeURIComponent(current.list.list_id)}/tasks/${encodeURIComponent(taskId)}/move${suffix}`,{method:"POST"});
+    requireAccount(current.list.account_id,"google");
+    let movedId:string|null=null;try{movedId=moved&&typeof moved==="object"?identifier(moved.id):null;}catch{/* Invalid provider response. */}
+    if (movedId!==taskId||(typeof moved?.parent==="string"?moved.parent:null)!==parentId)
+      throw new TaskError("Google hierarchijos pakeitimo patvirtinti nepavyko. Atnaujink duomenis.",502);
+    const confirmed=await googleOrderState(input);
+    if (confirmed.snapshot.parent_id!==parentId||confirmed.snapshot.previous_id!==previousId)
+      throw new TaskError("Google eilės pakeitimo patvirtinti nepavyko. Atnaujink duomenis.",502);
+    cache(mapped(confirmed.rawTasks.find(raw=>String(raw.id)===taskId),confirmed.list));
+    return confirmed.snapshot;
+  }
+  async function cleanupMirror(input:Input) {
+    if (Object.keys(input).some(key=>!["task_key","orphaned_at","mirror_event_id"].includes(key))
+      || typeof input.task_key!=="string" || !input.task_key || input.task_key.length>4096
+      || typeof input.orphaned_at!=="string" || !input.orphaned_at
+      || (input.mirror_event_id!==null && typeof input.mirror_event_id!=="string")) throw new TaskError("Neteisingi Outlook bloko valymo duomenys.");
+    const taskKey=input.task_key,orphanedAt=input.orphaned_at,eventSnapshot=input.mirror_event_id;
+    let source:RemoteTaskSource;
+    try {
+      const parts=JSON.parse(taskKey);
+      if (!Array.isArray(parts) || parts.length!==4 || (parts[0]!=="google"&&parts[0]!=="microsoft")) throw new Error();
+      source=parts[0];
+    } catch {throw new TaskError("Neteisinga Outlook bloko užduoties tapatybė.");}
+    const operation=()=>serial("task-provider:microsoft",()=>serial("mirror-cleanup:"+taskKey,async()=>{
+      let current=plan(taskKey);
+      if (!current || !current.mirror_orphaned_at) return {ok:true};
+      if (current.mirror_orphaned_at!==orphanedAt || current.mirror_event_id!==eventSnapshot)
+        throw new TaskError("Valymo įrašas jau pasikeitė. Atnaujink duomenis.",409);
+      try {
+        let eventId=current.mirror_event_id;
+        const needsProvider=Boolean(eventId || current.mirror_create_payload || current.mirror_transaction_id);
+        if (needsProvider) {
+          if (!current.mirror_account_id) throw new TaskError("Trūksta susietos Outlook paskyros. Šio bloko automatiškai pašalinti negalima.",409);
+          const msGateway = _msGateways.find(g => g.connected() && g.cachedAccountId() === current!.mirror_account_id);
+          if (!msGateway || !msGateway.connected()) {
+            // If any gateway is connected but with a different account, give the targeted error
+            if (_msGateways.some(g => g.connected())) throw new TaskError("Prijunk tą Microsoft paskyrą, kurioje buvo sukurtas blokas.",409);
+            throw new TaskError("Prijunk susietą Microsoft paskyrą ir bandyk dar kartą.",409);
+          }
+          const account=await msGateway.accountId();requireAccount(account);
+          if (account!==current.mirror_account_id) throw new TaskError("Prijunk tą Microsoft paskyrą, kurioje buvo sukurtas blokas.",409);
+          if (current.mirror_connection_id && msGateway.connectionId?.()!==current.mirror_connection_id)
+            throw new TaskError("Prijunk tą Microsoft jungtį, kurioje buvo sukurtas blokas.",409);
+          if (!eventId) {
+            if (!current.mirror_create_payload) throw new TaskError("Nepakanka duomenų nebaigtam Outlook blokui saugiai nustatyti.",409);
+            const recovered=await msGateway.request("/me/events",{method:"POST",body:current.mirror_create_payload});requireAccount(account);
+            if (!recovered?.id) throw new TaskError("Outlook nepatvirtino nebaigto bloko tapatybės.",502);
+            current=plan(taskKey);
+            if (!current || current.mirror_orphaned_at!==orphanedAt || current.mirror_event_id!==eventSnapshot)
+              throw new TaskError("Valymo įrašas pasikeitė. Atnaujink duomenis.",409);
+            eventId=String(recovered.id);
+            db.prepare("UPDATE task_plans SET mirror_event_id=? WHERE task_key=? AND user_id=? AND mirror_orphaned_at=?").run(eventId,taskKey,userId,orphanedAt);
+          }
+          try {await msGateway.request(`/me/events/${encodeURIComponent(eventId)}`,{method:"DELETE"});}
+          catch(error) {if (!(error instanceof ProviderError && error.status===404)) throw error;}
+          requireAccount(account);
+        }
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          notifications.cancel(taskKey);
+          const removed=db.prepare("DELETE FROM task_plans WHERE task_key=? AND user_id=? AND mirror_orphaned_at=?").run(taskKey,userId,orphanedAt);
+          if (removed.changes!==1 && plan(taskKey)) throw new TaskError("Valymo įrašas jau pasikeitė. Atnaujink duomenis.",409);
+          db.exec("COMMIT");
+        } catch(error) {db.exec("ROLLBACK");throw error;}
+        return {ok:true};
+      } catch(error) {
+        db.prepare("UPDATE task_plans SET mirror_error=? WHERE task_key=? AND user_id=? AND mirror_orphaned_at=?")
+          .run("Outlook bloko pašalinti nepavyko. Patikrink paskyrą ir pakartok valymą.",taskKey,userId,orphanedAt);
+        throw error;
+      }
+    }));
+    return source==="google" ? serial("task-provider:google",operation) : operation();
   }
   async function remove(input: Input) {
     return serial(reference(input), async () => {
       const task = get(input); const extra = ensurePlan(task);
       if (task.readonly_reason) throw new TaskError(task.readonly_reason,403);
-      db.prepare("UPDATE task_plans SET mirror_requested=0 WHERE task_key=?").run(task.key);
+      db.prepare("UPDATE task_plans SET mirror_requested=0 WHERE task_key=? AND user_id=?").run(task.key, userId);
       await syncMirror(task);
       if (plan(task.key)?.mirror_error) {
-        db.prepare("UPDATE task_plans SET mirror_requested=? WHERE task_key=?").run(extra.mirror_requested, task.key);
+        db.prepare("UPDATE task_plans SET mirror_requested=? WHERE task_key=? AND user_id=?").run(extra.mirror_requested, task.key, userId);
         throw new TaskError("Pirmiausia pakartok susieto Outlook bloko pašalinimą.", 409);
       }
       if (task.source !== "local") {
         requireAccount(task.account_id!,task.source);
-        await gateway(task.source).request(`${task.source === "google" ? "/lists" : "/me/todo/lists"}/${encodeURIComponent(task.list_id!)}/tasks/${encodeURIComponent(String(task.id))}`, {method:"DELETE"});
+        await gatewayForAccount(task.source as RemoteTaskSource,task.account_id!,task.connection_id).request(`${task.source === "google" ? "/lists" : "/me/todo/lists"}/${encodeURIComponent(task.list_id!)}/tasks/${encodeURIComponent(String(task.id))}`, {method:"DELETE"});
         requireAccount(task.account_id!,task.source);
-        db.prepare("DELETE FROM remote_tasks WHERE task_key=?").run(task.key);
-      } else db.prepare("DELETE FROM tasks WHERE id=?").run(Number(task.id));
-      db.prepare("DELETE FROM task_plans WHERE task_key=?").run(task.key);
+      }
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        notifications.cancel(task.key);
+        if (task.source !== "local") db.prepare("DELETE FROM remote_tasks WHERE task_key=? AND user_id=?").run(task.key, userId);
+        else db.prepare("DELETE FROM tasks WHERE id=? AND user_id=?").run(Number(task.id), userId);
+        db.prepare("DELETE FROM task_plans WHERE task_key=? AND user_id=?").run(task.key, userId);
+        db.exec("COMMIT");
+      } catch(error) {db.exec("ROLLBACK");throw error;}
     });
   }
   // Prevent a slow read from replacing a just-written remote cache snapshot.
   function mutation<T>(input: Input, operation: () => Promise<T>) {return input.source === "google" || input.source === "microsoft" ? serial("task-provider:" + input.source,operation) : operation();}
   return { list, listCatalog, readReminder:(input:Input)=>mutation(input,()=>readReminder(input)), updateReminder:(input:Input)=>mutation(input,()=>updateReminder(input)),
+    readRecurrence:(input:Input)=>mutation(input,()=>readRecurrence(input)), updateRecurrence:(input:Input)=>mutation(input,()=>updateRecurrence(input)),
+    readSteps:(input:Input)=>mutation(input,()=>readSteps(input)),createStep:(input:Input)=>mutation(input,()=>createStep(input)),
+    updateStep:(input:Input)=>mutation(input,()=>updateStep(input)),deleteStep:(input:Input)=>mutation(input,()=>deleteStep(input)),
     createList:(input:Input)=>mutation(input,()=>createList(input)), renameList:(input:Input)=>mutation(input,()=>renameList(input)),
     previewListDeletion:(input:Input)=>mutation(input,()=>previewListDeletion(input)), deleteList:(input:Input)=>mutation(input,()=>deleteList(input)),
-    create:(input:Input)=>mutation(input,()=>create(input)), update:(input:Input)=>mutation(input,()=>update(input)), remove:(input:Input)=>mutation(input,()=>remove(input)) };
+    create:(input:Input)=>mutation(input,()=>create(input)), update:(input:Input)=>mutation(input,()=>update(input)),
+    moveGoogle:(input:Input)=>mutation(input,()=>moveGoogle(input)),readGoogleOrder:(input:Input)=>mutation(input,()=>readGoogleOrder(input)),
+    updateGoogleOrder:(input:Input)=>mutation(input,()=>updateGoogleOrder(input)),cleanupMirror,remove:(input:Input)=>mutation(input,()=>remove(input)) };
 }

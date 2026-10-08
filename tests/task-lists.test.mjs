@@ -3,10 +3,12 @@ import {test} from "node:test";
 import {DatabaseSync} from "node:sqlite";
 import {createTaskService,migrateTaskPlanning} from "../lib/task-service.ts";
 
+const TEST_USER_ID = 1;
 function fixture(t) {
   const db=new DatabaseSync(":memory:");
   db.exec(`CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-    CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,notes TEXT DEFAULT '',due_at TEXT,
+    CREATE TABLE user_settings(user_id INTEGER NOT NULL,key TEXT NOT NULL,value TEXT NOT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(user_id,key));
+    CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL DEFAULT ${TEST_USER_ID},title TEXT NOT NULL,notes TEXT DEFAULT '',due_at TEXT,
     duration_minutes INTEGER DEFAULT 30,completed INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     project TEXT DEFAULT 'Asmeniniai',priority TEXT DEFAULT 'normal',energy TEXT DEFAULT 'medium',tags TEXT DEFAULT '');`);
   migrateTaskPlanning(db);t.after(()=>db.close());
@@ -40,7 +42,7 @@ function fixture(t) {
         throw Error(`Unexpected fixture request ${method} ${raw}`);
       }};
   }
-  return {db,...adapters,service:createTaskService(db,adapters.microsoft,adapters.google)};
+  return {db,...adapters,service:createTaskService(db,TEST_USER_ID,[adapters.microsoft],[adapters.google])};
 }
 const ref=list=>({source:list.source,account_id:list.account_id,list_id:list.list_id,version:list.version});
 const deletion=preview=>({...ref(preview.list),confirmation:preview.confirmation,confirm_name:preview.list.name});

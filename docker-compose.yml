@@ -1,0 +1,57 @@
+# Paleidimas:   docker compose up -d
+# Sustabdymas:  docker compose down
+# Atnaujinimas: docker compose pull && docker compose up -d --build
+# Žurnalai:     docker compose logs -f
+# Atsarginė:    programėlėje atverk Nustatymai → Duomenys → Pilna kopija
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        APP_VERSION: "0.1.0"
+    image: kalendorius:0.1.0
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Duomenų bazė išlieka tarp perkrovimų
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      # APP_ORIGIN turi atitikti viešą URL (pvz. https://planner.example.com)
+      # PUBLIC_SIGNUP — true leidžia naujam žmogui pačiam susikurti paskyrą per OIDC
+      # INITIAL_ADMIN_EMAIL — pirmojo administratoriaus Google / Microsoft adresas
+      # TOKEN_ENCRYPTION_KEY — 64 hex simboliai (openssl rand -hex 32)
+      # VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY — vieną kartą sugeneruoti Web Push raktai
+      # VAPID_SUBJECT — administratoriaus mailto: adresas arba HTTPS URL
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  notifications:
+    image: kalendorius:0.1.0
+    restart: unless-stopped
+    init: true
+    command: ["node", "notification-worker.mjs"]
+    stop_grace_period: 20s
+    depends_on:
+      app:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "node", "-e", "const fs=require('fs');const v=JSON.parse(fs.readFileSync('/app/data/notification-worker-health.json','utf8'));if(!v.ok||Date.now()-Date.parse(v.at)>60000)process.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3

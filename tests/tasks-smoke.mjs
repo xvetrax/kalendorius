@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
 import {mkdtempSync,rmSync} from "node:fs";
 import {tmpdir} from "node:os";
-import {DatabaseSync} from "node:sqlite";
 import {createServer} from "node:net";
 import {setTimeout as delay} from "node:timers/promises";
 import path from "node:path";
@@ -12,11 +11,12 @@ const preview=process.argv.includes("--preview"),temp=mkdtempSync(path.join(tmpd
 const reservation=createServer();await new Promise((r,j)=>reservation.once("error",j).listen(preview?3102:0,"127.0.0.1",r));const port=reservation.address().port;await new Promise(r=>reservation.close(r));
 const origin=`http://127.0.0.1:${port}`,database=path.join(temp,"test.db");
 process.env.TOKEN_ENCRYPTION_KEY="ac".repeat(32);
-const db=new DatabaseSync(database);db.exec("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT DEFAULT CURRENT_TIMESTAMP)");
-const insert=db.prepare("INSERT INTO settings(key,value) VALUES (?,?)");
-for(const provider of ["google","microsoft"]){insert.run(`${provider}_refresh_token`,encrypt("synthetic-refresh"));insert.run(`${provider}_account_id`,`${provider}-account`);insert.run(`${provider}_account`,"Testinė paskyra");insert.run(`${provider}_connection_generation`,`${provider}-fixture`);}
-insert.run("google_granted_scopes","https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/calendar");db.close();
-const env={...process.env,DATABASE_PATH:database,APP_ORIGIN:origin,PORT:String(port),HOSTNAME:"127.0.0.1",TASKS_TEST_FIXTURE:"isolated"};
+process.env.DATABASE_PATH=database;process.env.MULTI_USER_DATABASE_PATH=database;
+const {db,createSession,SESSION_COOKIE}=await import("../lib/db-multi.ts");
+const user=db.prepare("INSERT INTO users(display_name,primary_email,role,status) VALUES (?,?,'admin','active')").run("Tasks fixture","tasks@example.test");const userId=Number(user.lastInsertRowid);
+for(const provider of ["google","microsoft"]){db.prepare("INSERT INTO oauth_connections(user_id,provider,provider_account_id,provider_email,encrypted_refresh_token,scopes,status) VALUES (?,?,?,?,?,?,'active')").run(userId,provider,`${provider}-account`,"fixture@example.test",encrypt("synthetic-refresh"),provider==="google"?"https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/tasks":"Calendars.ReadWrite Tasks.ReadWrite");}
+const {rawToken}=createSession(userId),sessionCookie=`${SESSION_COOKIE}=${rawToken}`,nativeFetch=globalThis.fetch;globalThis.fetch=(input,init={})=>{const headers=new Headers(init.headers);headers.set("Cookie",sessionCookie);return nativeFetch(input,{...init,headers});};
+const env={...process.env,DATABASE_PATH:database,MULTI_USER_DATABASE_PATH:database,APP_ORIGIN:origin,PORT:String(port),HOSTNAME:"127.0.0.1",TASKS_TEST_FIXTURE:"isolated"};
 for(const provider of ["GOOGLE","MICROSOFT"]){env[`${provider}_CLIENT_ID`]="synthetic-client";env[`${provider}_CLIENT_SECRET`]="synthetic-secret";env[`${provider}_REDIRECT_URI`]=`${origin}/api/${provider.toLowerCase()}/callback`;}
 const child=spawn(process.execPath,["--import",path.resolve("tests/fixtures/tasks-upstream.mjs"),"scripts/start.mjs"],{env,stdio:"ignore"});
 const stopped=new Promise(r=>child.once("exit",r));

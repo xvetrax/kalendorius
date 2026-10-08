@@ -1,48 +1,6 @@
-import { DatabaseSync } from "node:sqlite";
-import fs from "node:fs";
-import path from "node:path";
-import { migrateTaskPlanning } from "@/lib/task-service";
+import { db } from "@/lib/db-multi";
 
-const isBuild = process.env.NEXT_PHASE === "phase-production-build";
-const dbPath = isBuild ? ":memory:" : (process.env.DATABASE_PATH || path.join(process.cwd(), "data", "planner.db"));
-if (!isBuild) fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-
-const globalDb = globalThis as typeof globalThis & { plannerDb?: DatabaseSync };
-export const db = globalDb.plannerDb ?? new DatabaseSync(dbPath);
-if (process.env.NODE_ENV !== "production") globalDb.plannerDb = db;
-
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA busy_timeout = 5000;
-  CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    notes TEXT NOT NULL DEFAULT '',
-    due_at TEXT,
-    duration_minutes INTEGER NOT NULL DEFAULT 30,
-    completed INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE INDEX IF NOT EXISTS idx_tasks_due_at ON tasks(due_at);
-  CREATE INDEX IF NOT EXISTS idx_tasks_open ON tasks(completed) WHERE completed = 0;
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-`);
-
-const taskColumns = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((column) => column.name));
-const migrations = [
-  ["project", "ALTER TABLE tasks ADD COLUMN project TEXT NOT NULL DEFAULT 'Asmeniniai'"],
-  ["priority", "ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'"],
-  ["energy", "ALTER TABLE tasks ADD COLUMN energy TEXT NOT NULL DEFAULT 'medium'"],
-  ["tags", "ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT ''"],
-] as const;
-for (const [column, sql] of migrations) {
-  if (!taskColumns.has(column)) db.exec(sql);
-}
-migrateTaskPlanning(db);
+export { db };
 
 export function setting(key: string) {
   return (db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value?: string } | undefined)?.value;
@@ -65,4 +23,37 @@ export function deleteSettings(...keys: string[]) {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-user settings (multi-user schema: user_settings table)
+// ---------------------------------------------------------------------------
+
+export function userSetting(userId: number, key: string): string | undefined {
+  return (db.prepare("SELECT value FROM user_settings WHERE user_id = ? AND key = ?").get(userId, key) as { value: string } | undefined)?.value;
+}
+
+export function saveUserSetting(userId: number, key: string, value: string): void {
+  db.prepare(`
+    INSERT INTO user_settings (user_id, key, value, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+  `).run(userId, key, value);
+}
+
+export function deleteUserSettings(userId: number, ...keys: string[]): void {
+  const statement = db.prepare("DELETE FROM user_settings WHERE user_id = ? AND key = ?");
+  db.exec("BEGIN");
+  try {
+    for (const key of keys) statement.run(userId, key);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function reserveCalendarEventCreate(provider:string,accountId:string,connectionId:string,calendarId:string,operationId:string,fingerprint:string,userId:number){
+  db.prepare(`INSERT OR IGNORE INTO calendar_event_creates(user_id,provider,account_id,connection_id,calendar_id,operation_id,fingerprint) VALUES (?,?,?,?,?,?,?)`).run(userId,provider,accountId,connectionId,calendarId,operationId,fingerprint);
+  const stored=db.prepare(`SELECT fingerprint FROM calendar_event_creates WHERE user_id=? AND provider=? AND account_id=? AND connection_id=? AND calendar_id=? AND operation_id=?`).get(userId,provider,accountId,connectionId,calendarId,operationId) as {fingerprint?:string}|undefined;
+  return stored?.fingerprint===fingerprint;
 }
