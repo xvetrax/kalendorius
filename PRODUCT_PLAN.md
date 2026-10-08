@@ -214,14 +214,14 @@ Kiekvienas punktas yra atskiras darbo paketas su tiksliniais testais darbo metu,
 Detalus „Mano dienos“, greito įvedimo, saugaus atšaukimo, darbo / asmeninių režimų, paaiškinamų planavimo pasiūlymų, savaitės apžvalgos, vizualinio poliravimo ir white-label pagrindo planas pateiktas [DAILY_EXPERIENCE_PLAN.md](DAILY_EXPERIENCE_PLAN.md).
 
 1. [x] **DX-1:** „Mano diena“, bendra greito įvedimo forma ir komandų paletė. Užbaigta ir pilnai patikrinta 2026-10-07.
-2. [ ] **DX-2:** versijuotas saugių veiksmų atšaukimas ir riboto galiojimo veiksmų žurnalas.
+2. [ ] **DX-2:** vietinių užduočių versijuotas atšaukimas ir riboto galiojimo žurnalas įgyvendinti; liko DX-2b Google / Microsoft perkėlimų kompensacijos tik ten, kur tiekėjo ETag leidžia saugiai patikrinti versiją.
 3. [ ] **DX-3:** darbo, asmeniniai ir fokusavimo režimai su darbo valandomis bei kalendorių / sąrašų atranka.
 4. [ ] **DX-4:** deterministiniai, paaiškinami ir tik po patvirtinimo pritaikomi dienos planavimo pasiūlymai.
 5. [ ] **DX-5:** dienos uždarymas ir savaitės apžvalga be darbuotojų stebėjimo metrikų.
 6. [ ] **DX-6:** dizaino tokenai, tankio režimai, nuoseklios būsenos ir PWA nuorodos / ženkleliai / Wake Lock.
 7. [ ] **DX-7:** vieno diegimo white-label konfigūracija; kelių nuomininkų SaaS ir mokėjimai lieka atskiras etapas.
 
-Kitas vykdomas paketas yra DX-2: saugus „Atšaukti“ ir veiksmų žurnalas. Jo DB, idempotentiškumo ir backup / restore sutartis turi būti suprojektuota prieš UI pakeitimus.
+Kitas vykdomas paketas yra DX-2b: tiekėjų objektų perkėlimo atšaukimo galimybių patikra ir įgyvendinimas tik su autoritetinga versija. Vietinių užduočių 15 sekundžių atšaukimas, veiksmų istorija, naudotojų izoliacija ir backup / restore sutartis jau įgyvendinti.
 
 ## Darbo eiga ir ribos
 

@@ -116,7 +116,7 @@ try {
   response=await patch({scheduled_at:null}); task=await response.json();
   assert.equal(task.scheduled_at,null); assert.equal(task.due_at,deadline);
   assert.equal((await patch({duration_minutes:0})).status,400);
-  const updated = await fetch(`${origin}/api/tasks`, { method: "PATCH", headers, body: JSON.stringify({ id, completed: true }) });
+  const updated = await patch({completed:true});
   assert.equal(updated.status, 200);
   const tasks = await (await fetch(`${origin}/api/tasks`)).json();
   assert.equal(tasks.find((task) => task.id === id).completed, 1);

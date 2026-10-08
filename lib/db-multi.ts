@@ -287,6 +287,27 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_task_plans_mirror ON task_plans(user_id, mirror_orphaned_at)
     WHERE mirror_orphaned_at IS NOT NULL;
 
+  CREATE TABLE IF NOT EXISTS action_journal (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    operation_id    TEXT    NOT NULL,
+    action_type     TEXT    NOT NULL CHECK(action_type IN ('local_task_created','local_task_completed','local_task_planned','local_task_moved','local_task_resized','local_task_unplanned')),
+    entity_type     TEXT    NOT NULL CHECK(entity_type = 'local_task'),
+    entity_key      TEXT    NOT NULL,
+    label           TEXT    NOT NULL,
+    before_json     TEXT,
+    after_json      TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'available' CHECK(status IN ('available','undone','conflict')),
+    undo_expires_at TEXT    NOT NULL,
+    retained_until  TEXT    NOT NULL,
+    created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    applied_at      TEXT,
+    UNIQUE(user_id, operation_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_action_journal_user_created ON action_journal(user_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_action_journal_retention ON action_journal(retained_until);
+
   CREATE TABLE IF NOT EXISTS remote_tasks (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -345,7 +366,8 @@ db.exec(`
 // v3: OAuth data-consent operations persist add/re-consent intent.
 // v4: encrypted, user-scoped Web Push subscriptions and persistent send throttles.
 // v5: notification preferences, durable jobs and per-device delivery state.
-export const DATABASE_SCHEMA_VERSION = 5;
+// v6: user-scoped local-task action history with short-lived undo capabilities.
+export const DATABASE_SCHEMA_VERSION = 6;
 
 type SqliteColumn = { name: string };
 type SqliteIndex = { name: string; unique: number };
@@ -691,6 +713,27 @@ function migrateMultiAccountSchema(): void {
 
       CREATE INDEX IF NOT EXISTS idx_calendar_preferences_connection
         ON calendar_preferences(user_id, connection_id);
+
+      CREATE TABLE IF NOT EXISTS action_journal (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        operation_id    TEXT    NOT NULL,
+        action_type     TEXT    NOT NULL CHECK(action_type IN ('local_task_created','local_task_completed','local_task_planned','local_task_moved','local_task_resized','local_task_unplanned')),
+        entity_type     TEXT    NOT NULL CHECK(entity_type = 'local_task'),
+        entity_key      TEXT    NOT NULL,
+        label           TEXT    NOT NULL,
+        before_json     TEXT,
+        after_json      TEXT    NOT NULL,
+        status          TEXT    NOT NULL DEFAULT 'available' CHECK(status IN ('available','undone','conflict')),
+        undo_expires_at TEXT    NOT NULL,
+        retained_until  TEXT    NOT NULL,
+        created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        applied_at      TEXT,
+        UNIQUE(user_id, operation_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_action_journal_user_created ON action_journal(user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_action_journal_retention ON action_journal(retained_until);
 
       CREATE TABLE IF NOT EXISTS calendar_preference_sets (
         user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

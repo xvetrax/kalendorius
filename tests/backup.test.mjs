@@ -47,6 +47,7 @@ describe("backup", { concurrency: false }, () => {
       DELETE FROM notification_deliveries;
       DELETE FROM notification_jobs;
       DELETE FROM notification_preferences;
+      DELETE FROM action_journal;
       DELETE FROM calendar_event_creates;
       DELETE FROM remote_task_lists;
       DELETE FROM remote_tasks;
@@ -82,6 +83,10 @@ describe("backup", { concurrency: false }, () => {
     db.prepare(
       "INSERT INTO task_plans (user_id, task_key, scheduled_at, duration_minutes, project, tags, energy, mirror_orphaned_at, mirror_orphan_title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(testUserId, `local:${taskId}`, "2026-10-01T08:00:00.000Z", 45, "Darbas", "audit", "high", "2026-09-23 10:00:00", "Likęs blokas");
+
+    const now=new Date(),expires=new Date(now.getTime()+15_000).toISOString(),retained=new Date(now.getTime()+86_400_000).toISOString();
+    db.prepare(`INSERT INTO action_journal(user_id,operation_id,action_type,entity_type,entity_key,label,before_json,after_json,undo_expires_at,retained_until,created_at)
+      VALUES (?,?, 'local_task_created','local_task',?,?,NULL,?,?,?,?)`).run(testUserId,"00000000-0000-4000-8000-000000000099",`local:${taskId}`,"Sukurta užduotis",JSON.stringify({task:{id:taskId}}),expires,retained,now.toISOString());
 
     db.prepare(
       "INSERT INTO remote_tasks (user_id, task_key, account_id, list_id, task_json, source) VALUES (?, ?, ?, ?, ?, ?)"
@@ -165,6 +170,7 @@ describe("backup", { concurrency: false }, () => {
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_jobs WHERE scenario = 'focus_end'").get().count, 0, "restore must clear old operational notification jobs");
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_jobs WHERE scenario = 'task_start' AND cancelled_at IS NULL").get().count, 1, "restore must rebuild task-start jobs from restored plans");
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_jobs WHERE scenario IN ('morning_plan', 'evening_close') AND cancelled_at IS NULL").get().count, 2, "restore must rebuild future daily ritual jobs");
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM action_journal").get().count,0,"restore must invalidate transient undo capabilities");
     assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
 
     // DB must remain writable after restore
@@ -187,7 +193,8 @@ describe("backup", { concurrency: false }, () => {
       assert.equal(backed.prepare("SELECT encrypted_subscription FROM push_subscriptions").get().encrypted_subscription, "iv.tag.encrypted-push-capability");
       assert.equal(backed.prepare("SELECT enabled FROM notification_preferences").get().enabled, 1);
       assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'notification_jobs'").get().count, 0);
-      assert.equal(backed.prepare("PRAGMA user_version").get().user_version, 5);
+      assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM action_journal").get().count,1);
+      assert.equal(backed.prepare("PRAGMA user_version").get().user_version, 6);
     } finally {
       backed.close();
     }
@@ -203,6 +210,7 @@ describe("backup", { concurrency: false }, () => {
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM task_plans").get().count, 1);
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM remote_tasks").get().count, 1);
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM remote_task_lists").get().count, 1);
+      assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM action_journal").get().count,1);
 
       // Authentication and integration-secret tables must NOT exist in user export
       const tables = exported.prepare(
@@ -231,6 +239,14 @@ describe("backup", { concurrency: false }, () => {
     db.prepare(
       "INSERT INTO tasks (user_id, title) VALUES (?, ?)"
     ).run(otherUserId, "Other user task");
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 60_000).toISOString();
+    db.prepare(`INSERT INTO action_journal(user_id,operation_id,action_type,entity_type,entity_key,label,before_json,after_json,undo_expires_at,retained_until,created_at)
+      VALUES (?,?,'local_task_created','local_task','local:expired','Expired',NULL,'{}',?,?,?)`)
+      .run(testUserId,"00000000-0000-4000-8000-000000000097",past,past,past);
+    db.prepare(`INSERT INTO action_journal(user_id,operation_id,action_type,entity_type,entity_key,label,before_json,after_json,undo_expires_at,retained_until,created_at)
+      VALUES (?,?,'local_task_created','local_task','local:other','Other user',NULL,'{}',?,?,?)`)
+      .run(otherUserId,"00000000-0000-4000-8000-000000000098",future,future,new Date().toISOString());
 
     const exportFile = path.join(temp, "isolation-export.db");
     writeFileSync(exportFile, createUserExport(testUserId), { mode: 0o600 });
@@ -239,6 +255,10 @@ describe("backup", { concurrency: false }, () => {
       // Only testUserId's task should appear
       assert.equal(exported.prepare("SELECT COUNT(*) AS count FROM tasks").get().count, 1);
       assert.equal(exported.prepare("SELECT title FROM tasks").get()?.title, "Backup task");
+      assert.deepEqual(
+        exported.prepare("SELECT operation_id FROM action_journal ORDER BY operation_id").all().map(row=>row.operation_id),
+        ["00000000-0000-4000-8000-000000000099"],
+      );
     } finally {
       exported.close();
     }
@@ -297,7 +317,7 @@ describe("backup", { concurrency: false }, () => {
     assert.equal(JSON.stringify(db.prepare("SELECT title FROM tasks").all()), JSON.stringify([{ title: "Keep me" }]));
   });
 
-  it("schema v5 backup must include notification preferences", () => {
+  it("schema v6 backup must include notification preferences", () => {
     seedUserTables();
     const incompletePath = path.join(temp, "missing-notification-preferences.db");
     writeFileSync(incompletePath, createBackup(), { mode: 0o600 });
@@ -310,7 +330,21 @@ describe("backup", { concurrency: false }, () => {
     );
   });
 
-  it("schema v5 backup rejects malformed enabled daily ritual time settings", () => {
+  it("schema v6 backup must include the action journal", () => {
+    seedUserTables();
+    const backup = createBackup();
+    const malformed = path.join(temp, "missing-action-journal.db");
+    writeFileSync(malformed, backup);
+    const incoming = new DatabaseSync(malformed);
+    incoming.exec("DROP TABLE action_journal");
+    incoming.close();
+    assert.throws(
+      () => restoreBackup(readFileSync(malformed)),
+      error => error instanceof BackupError && /veiksmų istorijos lentelės/.test(error.message)
+    );
+  });
+
+  it("schema v6 backup rejects malformed enabled daily ritual time settings", () => {
     seedUserTables();
     db.prepare("INSERT INTO notification_preferences (user_id, scenario, enabled, local_time, time_zone) VALUES (?, 'morning_plan', 1, '08:00', 'Europe/Vilnius')").run(testUserId);
     const invalidPath = path.join(temp, "invalid-daily-ritual.db");

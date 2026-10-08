@@ -81,12 +81,13 @@ after(() => {
   rmSync(temp, { recursive: true, force: true });
 });
 
-test("schema v5 sukuria patvarų pranešimų registrą", () => {
-  assert.equal(DATABASE_SCHEMA_VERSION, 5);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 5);
+test("schema v6 sukuria patvarų pranešimų ir veiksmų registrą", () => {
+  assert.equal(DATABASE_SCHEMA_VERSION, 6);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 6);
   for (const table of ["notification_preferences", "notification_jobs", "notification_deliveries", "notification_runtime"]) {
     assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
   }
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'action_journal'").get());
 });
 
 test("nuostatos ir fokusavimo API yra apsaugoti nuo CSRF ir atskirti pagal naudotoją", async () => {

@@ -4,6 +4,7 @@ import { graphRecurrence, parseTaskRecurrence, providerRecurrence, sameTaskRecur
 import { ProviderError } from "./provider-error.ts";
 import { OUTLOOK_MIRROR_BODY } from "./outlook-mirror-link.ts";
 import type { TaskStartNotificationHooks } from "./notification-jobs.ts";
+import type { ActionJournalHooks, ActionSummary } from "./action-journal.ts";
 
 export type RemoteTaskSource = "microsoft" | "google";
 export type TaskList = { key: string; source: RemoteTaskSource; account_id: string; connection_id?: number; account_label?: string; list_id: string; name: string; writable: boolean; stale?: boolean;
@@ -16,6 +17,7 @@ export type Task = {
   tags: string; energy: string; schedule_version: number; legacy_schedule: number;
   mirror_requested: number; mirror_event_id: string | null; mirror_account_id: string | null;
   mirror_connection_id: number | null; mirror_error: string | null; stale?: boolean;
+  undo?: ActionSummary;
 };
 export type TaskStep = { id:string; displayName:string; isChecked:boolean };
 export type GoogleTaskOrderItem = {
@@ -166,6 +168,7 @@ export function createTaskService(
   microsoftGateways: TaskGateway | TaskGateway[],
   googleGateways?: TaskGateway | TaskGateway[],
   taskStartNotifications?: TaskStartNotificationHooks,
+  actionJournal?: ActionJournalHooks,
 ) {
   const _msGateways: TaskGateway[] = Array.isArray(microsoftGateways) ? microsoftGateways : [microsoftGateways];
   const _gGateways: TaskGateway[] = Array.isArray(googleGateways) ? googleGateways : (googleGateways ? [googleGateways] : []);
@@ -173,6 +176,11 @@ export function createTaskService(
     sync() {},
     cancel() {},
     move() {},
+  };
+  const actions: ActionJournalHooks = actionJournal ?? {
+    capture() { return null; },
+    recordCreated() { return undefined; },
+    recordUpdated() { return undefined; },
   };
   function gatewayForAccount(source: RemoteTaskSource, accountId: string, connectionId?: number): TaskGateway {
     const gateways = source === "microsoft" ? _msGateways : _gGateways;
@@ -824,19 +832,19 @@ export function createTaskService(
       priority: priority(input.priority ?? "normal"), tags: text(input.tags ?? "", 1000), energy: text(input.energy ?? "medium", 30) };
     if (source === "local") {
       db.exec("BEGIN IMMEDIATE");
-      let id:number,task:Task;
+      let id:number,task:Task,undo:ActionSummary|undefined;
       try{
         const result = db.prepare("INSERT INTO tasks(user_id, title, notes, due_at, duration_minutes, project, priority, tags, energy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
           .run(userId, values.title, values.notes, values.due_at, values.duration_minutes, values.project, values.priority, values.tags, values.energy);
-        id=Number(result.lastInsertRowid);task=get({id,source});
+        id=Number(result.lastInsertRowid);task=get({id,source});ensurePlan(task);
         if(scheduledAt){
-          ensurePlan(task);
           db.prepare("UPDATE task_plans SET scheduled_at=?,duration_minutes=? WHERE task_key=? AND user_id=?").run(scheduledAt,values.duration_minutes,task.key,userId);
           notifications.sync(task.key,scheduledAt,0);
         }
+        task=get({id,source});undo=actions.recordCreated(task);
         db.exec("COMMIT");
       }catch(error){db.exec("ROLLBACK");throw error;}
-      return get({id:id!,source});
+      return {...get({id:id!,source}),...(undo?{undo}:{})};
     }
     const requestedAccount=input.account_id===undefined?null:identifier(input.account_id);
     const requestedConnection=input.connection_id===undefined?undefined:Number(input.connection_id);
@@ -873,7 +881,7 @@ export function createTaskService(
   async function update(input: Input) {
     const key = reference(input);
     return serial(key, async () => {
-      const current = get(input); const changes: Input = {};
+      const current = get(input); const beforeAction=actions.capture(current); const changes: Input = {};
       if (input.title !== undefined) changes.title = title(input.title);
       if (input.notes !== undefined) changes.notes = text(input.notes);
       if (current.source === "google") {
@@ -891,6 +899,7 @@ export function createTaskService(
       }
       if (input.duration_minutes !== undefined) changes.duration_minutes = duration(input.duration_minutes);
       const scheduling = input.scheduled_at !== undefined || input.duration_minutes !== undefined || input.mirror_requested !== undefined || input.mirror_account_id !== undefined || input.mirror_connection_id !== undefined;
+      if (current.source === "local" && input.schedule_version !== current.schedule_version) throw new TaskError("Užduotis jau pakeista. Atnaujink duomenis ir bandyk dar kartą.", 409);
       if (scheduling && input.schedule_version !== current.schedule_version) throw new TaskError("Planas jau pakeistas. Atnaujink duomenis ir bandyk dar kartą.", 409);
       if (input.scheduled_at !== undefined) changes.scheduled_at = dateValue(input.scheduled_at, true);
       if (input.mirror_requested !== undefined && typeof input.mirror_requested !== "boolean") throw new TaskError("Neteisingas Outlook bloko pasirinkimas.");
@@ -916,6 +925,7 @@ export function createTaskService(
         if (Object.keys(patch).length) await provider.request(path, {method:"PATCH", body:JSON.stringify(patch)});
         requireAccount(current.account_id!,current.source);
       }
+      let undo:ActionSummary|undefined;
       db.exec("BEGIN IMMEDIATE");
       try {
         if (current.source !== "local") cache(next);
@@ -940,14 +950,16 @@ export function createTaskService(
             mirrorAccount=connected[0].cachedAccountId();mirrorConnection=connected[0].connectionId?.()??null;
           }
         }
-        db.prepare("UPDATE task_plans SET scheduled_at=?, duration_minutes=?, schedule_version=schedule_version+1, legacy_schedule=?, mirror_requested=?, mirror_account_id=?, mirror_connection_id=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=? AND user_id=?")
-          .run(scheduledAt, next.duration_minutes, input.scheduled_at !== undefined ? 0 : extra.legacy_schedule, mirror, mirrorAccount, mirrorConnection, next.project, next.tags, next.energy, next.source === "google" ? next.priority : null, key, userId);
+        const planUpdate=db.prepare(`UPDATE task_plans SET scheduled_at=?, duration_minutes=?, schedule_version=schedule_version+1, legacy_schedule=?, mirror_requested=?, mirror_account_id=?, mirror_connection_id=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=? AND user_id=?${current.source === "local" ? " AND schedule_version=?" : ""}`)
+          .run(scheduledAt, next.duration_minutes, input.scheduled_at !== undefined ? 0 : extra.legacy_schedule, mirror, mirrorAccount, mirrorConnection, next.project, next.tags, next.energy, next.source === "google" ? next.priority : null, key, userId,...(current.source === "local" ? [current.schedule_version] : []));
+        if(current.source === "local"&&planUpdate.changes!==1)throw new TaskError("Užduotis jau pakeista. Atnaujink duomenis ir bandyk dar kartą.",409);
         const updatedPlan=plan(key)!;
         notifications.sync(key,updatedPlan.scheduled_at,updatedPlan.schedule_version);
+        undo=actions.recordUpdated(beforeAction,get(input),input);
         db.exec("COMMIT");
       } catch(error) {db.exec("ROLLBACK");throw error;}
       await syncMirror(next);
-      return get(input);
+      return {...get(input),...(undo?{undo}:{})};
     });
   }
   async function moveGoogle(input: Input) {

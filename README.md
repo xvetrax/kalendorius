@@ -22,6 +22,7 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 - pasirinktinai susieti užduotį su Outlook `Show as: Free` bloku, jį atnaujinti perplanuojant ir pašalinti užbaigus užduotį šioje programėlėje;
 - tempti neplanuotas užduotis į dienos / savaitės kalendorių, perkelti suplanuotas tarp dienų ir keisti trukmę tempiant apatinį kraštą;
 - redaguoti užduoties pavadinimą, pastabas, terminą, prioritetą ir planą; trukmę keisti ir klaviatūros rodyklėmis;
+- per 15 sekundžių atšaukti vietinės užduoties sukūrimą, užbaigimą arba plano pakeitimą; paskutinių veiksmų būseną matyti nustatymuose;
 - rodyti vietines užduotis ir prijungus abi išorines paskyras; pasirinkti naujos užduoties šaltinį bei sąrašą;
 - naudoti dienos, darbo savaitės, savaitės ir mėnesio rodinius;
 - suskleisti dešinę užduočių juostą, pasirinkti šviesią / tamsią / įrenginio temą ir išsaugoti pasirinkimus naršyklėje;
@@ -87,7 +88,7 @@ npm run worker
 
 ## Atsarginės kopijos ir atkūrimas
 
-Atverk **Nustatymai → Duomenys**. Administratoriaus **Pilna kopija** išsaugo visą kelių naudotojų DB: paskyras, savininkams priskirtas užduotis ir planus, tiekėjų talpyklą, sesijų būseną, pranešimų nuostatas, kalendoriaus kūrimo operacijų registrą, užšifruotus OAuth atnaujinimo žetonus bei užšifruotas push prenumeratas. Failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju naudotojai turi iš naujo prijungti paskyras. Atkūrimas pristabdo workerį ir tyčia pašalina push prenumeratas bei seną operacinę pranešimų eilę, kad nukopijuotas diegimas nepradėtų siųsti į seno serverio įrenginius. Iš atkurtų galiojančių užduočių planų iš naujo sudaromi būsimi užduočių pradžios darbai, tačiau jie nesiunčiami, kol naudotojas naujame diegime vėl neprijungia įrenginio. Paprasto naudotojo **Eksportuoti (be žetonų)** įtraukia tik jo darbo duomenis, be OAuth ar push paslapčių ir kitų naudotojų eilučių.
+Atverk **Nustatymai → Duomenys**. Administratoriaus **Pilna kopija** išsaugo visą kelių naudotojų DB: paskyras, savininkams priskirtas užduotis ir planus, galiojančią veiksmų istoriją, tiekėjų talpyklą, sesijų būseną, pranešimų nuostatas, kalendoriaus kūrimo operacijų registrą, užšifruotus OAuth atnaujinimo žetonus bei užšifruotas push prenumeratas. Failą laikyk kaip slaptažodį. Perkėlus pilną kopiją į kitą diegimą žetonams reikia to paties `TOKEN_ENCRYPTION_KEY`; kitu atveju naudotojai turi iš naujo prijungti paskyras. Atkūrimas pristabdo workerį ir tyčia pašalina trumpalaikes atšaukimo galimybes, push prenumeratas bei seną operacinę pranešimų eilę, kad nukopijuotas diegimas nepradėtų siųsti į seno serverio įrenginius. Iš atkurtų galiojančių užduočių planų iš naujo sudaromi būsimi užduočių pradžios darbai, tačiau jie nesiunčiami, kol naudotojas naujame diegime vėl neprijungia įrenginio. Paprasto naudotojo **Eksportuoti (be žetonų)** įtraukia tik jo darbo duomenis, be OAuth ar push paslapčių ir kitų naudotojų eilučių.
 
 **Atkurti iš kopijos** priima iki 100 MB SQLite failą. Prieš pakeisdama duomenis programa patikrina failo vientisumą, lenteles ir stulpelius, tada vienoje transakcijoje pakeičia visų programos lentelių duomenis. Klaidinga ar naujesnės nepalaikomos schemos kopija esamų duomenų nekeičia. Po sėkmingo atkūrimo puslapis persikrauna. Prieš programos atnaujinimą parsisiųsk pilną kopiją.
 

@@ -39,6 +39,7 @@ const ALL_TABLES = [
   "security_events",
   "tasks",
   "task_plans",
+  "action_journal",
   "remote_tasks",
   "remote_task_lists",
   "calendar_event_creates",
@@ -54,6 +55,7 @@ type AllTable = (typeof ALL_TABLES)[number];
 const USER_DATA_TABLES = [
   "tasks",
   "task_plans",
+  "action_journal",
   "remote_tasks",
   "remote_task_lists",
 ] as const;
@@ -110,6 +112,10 @@ const REQUIRED_COLUMNS: Record<AllTable, readonly string[]> = {
     "legacy_schedule", "mirror_requested", "mirror_event_id", "mirror_account_id",
     "mirror_transaction_id", "mirror_error", "project", "tags", "energy",
   ],
+  action_journal: [
+    "id", "user_id", "operation_id", "action_type", "entity_type", "entity_key", "label",
+    "before_json", "after_json", "status", "undo_expires_at", "retained_until", "created_at", "applied_at",
+  ],
   remote_tasks: ["task_key", "user_id", "account_id", "list_id", "task_json"],
   remote_task_lists: ["list_key", "user_id", "source", "account_id", "list_json"],
   calendar_event_creates: [
@@ -133,6 +139,7 @@ const PRIMARY_KEYS: Record<AllTable, readonly string[]> = {
   security_events: ["id"],
   tasks: ["id"],
   task_plans: ["id"],
+  action_journal: ["id"],
   remote_tasks: ["id"],
   remote_task_lists: ["id"],
   calendar_event_creates: ["id"],
@@ -244,6 +251,7 @@ function copyAllTablesTo(destination: string) {
 export function createBackup(): Buffer {
   const temporary = makeTempPath("planner-backup");
   try {
+    db.prepare("DELETE FROM action_journal WHERE retained_until <= ?").run(new Date().toISOString());
     copyAllTablesTo(temporary);
     return fs.readFileSync(temporary);
   } finally {
@@ -290,9 +298,10 @@ export function createUserExport(userId: number): Buffer {
             .filter(c => !SENSITIVE_KEYS.includes(c));
 
           const colList = columns.map(c => `"${c.replaceAll('"', '""')}"`).join(",");
+          const retention = tableName === "action_journal" ? " AND datetime(retained_until) > datetime('now')" : "";
           db.exec(
             `INSERT INTO export_target.${tableName} (${colList})
-             SELECT ${colList} FROM main.${tableName} WHERE user_id = ${Number(userId)}`
+             SELECT ${colList} FROM main.${tableName} WHERE user_id = ${Number(userId)}${retention}`
           );
         }
         // Copy non-system indexes for exported tables
@@ -388,6 +397,9 @@ function validateBackup(database: DatabaseSync): string[] {
   }
   if (incomingVersion >= 5 && !tableNames.has("notification_preferences")) {
     throw new BackupError("Atsarginėje kopijoje trūksta pranešimų nuostatų lentelės.");
+  }
+  if (incomingVersion >= 6 && !tableNames.has("action_journal")) {
+    throw new BackupError("Atsarginėje kopijoje trūksta veiksmų istorijos lentelės.");
   }
 
   // Column compatibility checks
@@ -506,6 +518,7 @@ export function restoreBackup(data: Buffer): { tablesRestored: number } {
         // A restored browser session would let a copied bearer cookie survive
         // the restore boundary. Force every user to authenticate again.
         db.exec(`
+          DELETE FROM action_journal;
           DELETE FROM notification_deliveries;
           DELETE FROM notification_jobs;
           DELETE FROM auth_operations;

@@ -78,4 +78,23 @@ test.describe("task CRUD", () => {
     await page.waitForLoadState("networkidle");
     await expect(page.getByText(edited, { exact: true })).toHaveCount(0);
   });
+
+  test("undoes local task creation once and records the action",async({page})=>{
+    await page.goto("/");await page.waitForLoadState("networkidle");
+    const title=`E2E-undo-${Date.now()}`,input=page.locator('input[placeholder*="Pridėti"]');
+    await input.fill(title);await input.press("Enter");
+    const dialog=page.getByRole("dialog",{name:"Nauja užduotis"});
+    await dialog.getByRole("button",{name:"Sukurti",exact:true}).click();
+    const undo=page.locator(".undoToast");
+    await expect(undo).toContainText(title);
+    const response=page.waitForResponse(value=>value.url().endsWith("/api/actions")&&value.request().method()==="POST");
+    await undo.getByRole("button",{name:"Atšaukti",exact:true}).click();
+    expect((await response).status()).toBe(200);
+    await expect(page.getByText(title,{exact:true})).toHaveCount(0);
+    await page.getByRole("button",{name:"Nustatymai",exact:true}).click();
+    const history=page.getByRole("region",{name:"Paskutiniai veiksmai"});
+    const entry=history.locator("li").filter({hasText:title});
+    await expect(entry).toContainText("Atšaukta");
+    await expect(entry.getByRole("button",{name:"Atšaukti",exact:true})).toHaveCount(0);
+  });
 });

@@ -1,6 +1,6 @@
 # Kasdienės patirties ir išmanaus planavimo įgyvendinimo planas
 
-Atnaujinta: 2026-10-08. Būsena: **DX-1 / paketas A įgyvendintas ir patikrintas; kitas etapas – DX-2**.
+Atnaujinta: 2026-10-08. Būsena: **DX-1 ir DX-2 vietinių užduočių paketas įgyvendinti; vykdoma DX-2 tiekėjų veiksmų dalis**.
 
 ## Tikslas
 
@@ -59,6 +59,10 @@ PWA neprisijungusio plano ekranas tikrina tikrą programėlės serverio būseną
 ## DX-2 — saugus „Atšaukti“ ir veiksmų istorija
 
 **Prioritetas:** antras. **Priklausomybė:** DX-1 bendri veiksmų komponentai.
+
+**Būsena:** vietinių užduočių dalis įgyvendinta 2026-10-08. Vietinės užduoties sukūrimas, užbaigimas, planavimas, perkėlimas, trukmės keitimas ir išplanavimas turi 15 sekundžių atšaukimo veiksmą. Žurnalas yra patvarus, izoliuotas pagal naudotoją, ribojamas iki 50 įrašų ir saugomas septynias dienas. Pakartotas atšaukimas idempotentiškas, pasikeitusi versija grąžina konfliktą, o atkurta plano versija didinama. Nustatymuose rodoma metaduomenų istorija.
+
+Išorinių Google / Microsoft objektų bei vietinių užduočių su Outlook veidrodžiu atšaukimas sąmoningai paliktas DX-2b. Pirmiausia kiekvienam veiksmui reikia patikimo tiekėjo ETag / versijos ir kompensuojančio API veiksmo; iki tol sąsaja tokiems veiksmams „Atšaukti“ nesiūlo. Pilna kopija įtraukia galiojančią istoriją, naudotojo eksportas — tik jo nepasibaigusius įrašus, o atkūrimas panaikina trumpalaikes atšaukimo galimybes.
 
 ### Apimtis
 
@@ -185,7 +189,7 @@ PWA neprisijungusio plano ekranas tikrina tikrą programėlės serverio būseną
 | Paketas | Apimtis | Pilno testavimo vartai |
 | --- | --- | --- |
 | ✅ A | DX-1 „Mano diena“, bendra greito įvedimo forma ir komandų paletė | praėjo: typecheck, 382 Node, build, 79 E2E, HTTP, kalendorių, užduočių ir Docker smoke |
-| B | DX-2 atšaukimas ir veiksmų žurnalas | papildomai idempotentiškumo, versijų lenktynių, backup/restore ir gyvų paskyrų ribotas bandymas |
+| 🟡 B | DX-2 atšaukimas ir veiksmų žurnalas | vietinė dalis patikrinta automatiškai; DX-2b tiekėjų ETag kompensacijos ir gyvų paskyrų ribotas bandymas liko |
 | C | DX-3 režimai ir darbo laiko nuostatos | papildomai kelių paskyrų izoliacija, pašalintų jungčių valymas ir DST |
 | D | DX-4 planavimo peržiūra bei atominiu būdu pritaikomi pasiūlymai | papildomai deterministinio algoritmo, konfliktų, 23/25 val. dienų ir neaiškios baigties testai |
 | E | DX-5 apžvalgos ir DX-6 galutinis vizualinis / PWA poliravimas | papildomai realūs macOS, Windows, Android bei iPhone prieinamumo ir PWA scenarijai |
@@ -204,4 +208,4 @@ Kiekvienas paketas įgyvendinamas didesne vientisa apimtimi, o pilnas testų rin
 
 ## Kitas vykdomas žingsnis
 
-Pradėti **paketą B / DX-2**: riboto laiko „Atšaukti“ veiksmus ir naudotojui priklausantį veiksmų žurnalą. Pirmiausia suprojektuoti idempotentišką serverio sutartį ir backup / restore įtaką, tik tada jungti pranešimo veiksmą sąsajoje.
+Tęsti **DX-2b**: atskirai suprojektuoti Google / Microsoft užduoties ar įvykio perkėlimo kompensaciją su autoritetingu ETag patikrinimu. Trinimas, RSVP, serijos skaidymas ir neaiškios tiekėjo baigtys lieka neatšaukiami. Jei tiekėjo sutartis negali garantuoti saugaus grąžinimo, pereiti prie DX-3, neimituojant klaidinančio „Atšaukti“.
