@@ -24,6 +24,7 @@ import { db } from "@/lib/db";
 import { microsoftCalendarCatalogForConnection, outlookDefaultCalendarSetting } from "../calendars/route.ts";
 import { allSettledLimited, calendarAccountError } from "@/lib/calendar-multi";
 import { resolveCalendarAccountColors } from "@/lib/calendar-colors";
+import { createCalendarActionJournalHooks } from "@/lib/action-journal";
 
 export const runtime = "nodejs";
 
@@ -41,8 +42,10 @@ function makeMicrosoftCalendarService(userId: number, conn: OAuthConnectionRow) 
       const c = getConnectionById(userId, conn.id, "microsoft");
       return c && c.id === conn.id && c.status === "active" ? connectionId : null;
     },
+    accountId:()=>accountId,
     request: (path: string, init?: RequestInit) =>
       graphFetchForUser(userId, conn, path, init),
+    recordUpdated:createCalendarActionJournalHooks(db,userId).recordUpdated,
     mirrorTaskKey: (raw: any, calendarId: string) => {
       const defaultCalSetting = userSetting(userId, outlookDefaultCalendarSetting(connectionId)) || userSetting(userId, OUTLOOK_DEFAULT_CALENDAR_SETTING);
       const defaultCalId = outlookDefaultCalendarId(defaultCalSetting, accountId, connectionId);

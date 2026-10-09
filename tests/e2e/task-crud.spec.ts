@@ -97,4 +97,24 @@ test.describe("task CRUD", () => {
     await expect(entry).toContainText("Atšaukta");
     await expect(entry.getByRole("button",{name:"Atšaukti",exact:true})).toHaveCount(0);
   });
+
+  test("keeps an ambiguous provider undo recoverable after its normal deadline",async({page})=>{
+    const operationId="44444444-4444-4444-8444-444444444444";let posts=0;
+    await page.route("**/api/actions",async route=>{
+      if(route.request().method()==="POST"){
+        posts+=1;
+        if(posts===1)return route.fulfill({status:502,json:{error:"Tiekėjo atsakymas neaiškus. Bandyk tęsti atšaukimą."}});
+        return route.fulfill({json:{alreadyUndone:false,action:{operationId,actionType:"provider_event_moved",label:"Perkeltas įvykis „Susitikimas“",createdAt:"2026-10-08T08:00:00.000Z",undoExpiresAt:"2026-10-08T08:00:15.000Z",status:"undone",canUndo:false}}});
+      }
+      return route.fulfill({json:{items:[{operationId,actionType:"provider_event_moved",label:"Perkeltas įvykis „Susitikimas“",createdAt:"2026-10-08T08:00:00.000Z",undoExpiresAt:"2026-10-08T08:00:15.000Z",status:"applying",canUndo:true}]}});
+    });
+    await page.goto("/");await page.getByRole("button",{name:"Nustatymai",exact:true}).click();
+    const history=page.getByRole("region",{name:"Paskutiniai veiksmai"}),entry=history.locator("li").filter({hasText:"Susitikimas"});
+    await expect(entry).toContainText("Atšaukimą reikia užbaigti");
+    await entry.getByRole("button",{name:"Tęsti atšaukimą",exact:true}).click();
+    await expect.poll(()=>posts).toBe(1);await expect(history.getByRole("alert")).toContainText("atsakymas neaiškus");
+    await expect(entry).toContainText("Atšaukimą reikia užbaigti");
+    await entry.getByRole("button",{name:"Tęsti atšaukimą",exact:true}).click();
+    await expect.poll(()=>posts).toBe(2);await expect(entry).toContainText("Atšaukta");
+  });
 });

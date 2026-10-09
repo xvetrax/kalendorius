@@ -67,6 +67,23 @@ legacy.exec(`
     local_priority TEXT,
     UNIQUE(user_id, task_key)
   );
+  CREATE TABLE action_journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    operation_id TEXT NOT NULL,
+    action_type TEXT NOT NULL CHECK(action_type IN ('local_task_created','local_task_completed','local_task_planned','local_task_moved','local_task_resized','local_task_unplanned')),
+    entity_type TEXT NOT NULL CHECK(entity_type = 'local_task'),
+    entity_key TEXT NOT NULL,
+    label TEXT NOT NULL,
+    before_json TEXT,
+    after_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available','undone','conflict')),
+    undo_expires_at TEXT NOT NULL,
+    retained_until TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    applied_at TEXT,
+    UNIQUE(user_id, operation_id)
+  );
   INSERT INTO users (id, display_name, primary_email, role, status)
     VALUES (7, 'Legacy user', 'legacy@example.test', 'admin', 'active');
   INSERT INTO oauth_connections
@@ -82,6 +99,9 @@ legacy.exec(`
     (user_id, task_key, scheduled_at, mirror_requested, mirror_event_id,
      mirror_account_id, mirror_transaction_id)
     VALUES (7, 'legacy-mirror', '2026-09-30T09:00:00Z', 1, 'event-1', 'microsoft-old', 'transaction-1');
+  INSERT INTO action_journal
+    (user_id, operation_id, action_type, entity_type, entity_key, label, before_json, after_json, status, undo_expires_at, retained_until, created_at)
+    VALUES (7, '11111111-1111-4111-8111-111111111111', 'local_task_planned', 'local_task', 'local:1', 'Senas veiksmas', '{}', '{}', 'available', '2099-01-01T00:00:00Z', '2099-01-08T00:00:00Z', '2026-09-30T09:00:00Z');
   PRAGMA user_version = 0;
 `);
 legacy.close();
@@ -146,6 +166,15 @@ test("legacy schema migrates without changing connection identity or encrypted d
   );
   assert.equal(microsoft.id, 42);
   assert.equal(db.prepare("PRAGMA foreign_key_check").all().length, 0);
+});
+
+test("v7 action journal migration preserves local history and accepts durable provider states", () => {
+  const preserved=db.prepare("SELECT operation_id,action_type,entity_type,status FROM action_journal WHERE user_id=7").get();
+  assert.deepEqual({...preserved},{operation_id:"11111111-1111-4111-8111-111111111111",action_type:"local_task_planned",entity_type:"local_task",status:"available"});
+  db.prepare(`INSERT INTO action_journal
+    (user_id,operation_id,action_type,entity_type,entity_key,label,before_json,after_json,status,undo_expires_at,retained_until)
+    VALUES (7,'22222222-2222-4222-8222-222222222222','provider_event_moved','provider_event','event:key','Atstatoma','{}','{}','applying','2099-01-01T00:00:00Z','2099-01-08T00:00:00Z')`).run();
+  assert.equal(db.prepare("SELECT status FROM action_journal WHERE operation_id='22222222-2222-4222-8222-222222222222'").get().status,"applying");
 });
 
 test("full backup works after oauth_connections was rebuilt by the legacy migration", () => {

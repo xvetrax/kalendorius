@@ -950,9 +950,10 @@ export function createTaskService(
             mirrorAccount=connected[0].cachedAccountId();mirrorConnection=connected[0].connectionId?.()??null;
           }
         }
-        const planUpdate=db.prepare(`UPDATE task_plans SET scheduled_at=?, duration_minutes=?, schedule_version=schedule_version+1, legacy_schedule=?, mirror_requested=?, mirror_account_id=?, mirror_connection_id=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=? AND user_id=?${current.source === "local" ? " AND schedule_version=?" : ""}`)
-          .run(scheduledAt, next.duration_minutes, input.scheduled_at !== undefined ? 0 : extra.legacy_schedule, mirror, mirrorAccount, mirrorConnection, next.project, next.tags, next.energy, next.source === "google" ? next.priority : null, key, userId,...(current.source === "local" ? [current.schedule_version] : []));
-        if(current.source === "local"&&planUpdate.changes!==1)throw new TaskError("Užduotis jau pakeista. Atnaujink duomenis ir bandyk dar kartą.",409);
+        const requiresPlanCas=current.source === "local"||scheduling;
+        const planUpdate=db.prepare(`UPDATE task_plans SET scheduled_at=?, duration_minutes=?, schedule_version=schedule_version+1, legacy_schedule=?, mirror_requested=?, mirror_account_id=?, mirror_connection_id=?, project=?, tags=?, energy=?, local_priority=? WHERE task_key=? AND user_id=?${requiresPlanCas ? " AND schedule_version=?" : ""}`)
+          .run(scheduledAt, next.duration_minutes, input.scheduled_at !== undefined ? 0 : extra.legacy_schedule, mirror, mirrorAccount, mirrorConnection, next.project, next.tags, next.energy, next.source === "google" ? next.priority : null, key, userId,...(requiresPlanCas ? [current.schedule_version] : []));
+        if(requiresPlanCas&&planUpdate.changes!==1)throw new TaskError("Užduotis jau pakeista. Atnaujink duomenis ir bandyk dar kartą.",409);
         const updatedPlan=plan(key)!;
         notifications.sync(key,updatedPlan.scheduled_at,updatedPlan.schedule_version);
         undo=actions.recordUpdated(beforeAction,get(input),input);

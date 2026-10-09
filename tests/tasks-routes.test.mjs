@@ -36,6 +36,7 @@ const route=await import("../app/api/tasks/route.ts");
 const moveRoute=await import("../app/api/tasks/move/route.ts");
 const orderRoute=await import("../app/api/tasks/order/route.ts");
 const cleanupRoute=await import("../app/api/tasks/mirror-cleanup/route.ts");
+const actionsRoute=await import("../app/api/actions/route.ts");
 
 // Bootstrap a test user in the multi-user DB and create a session
 let testUserId, sessionCookie;
@@ -58,7 +59,7 @@ bootstrapTestUser();
 const taskScope="https://www.googleapis.com/auth/tasks";
 function connect() {
   // Clear multi-user tables for this user
-  multiDb.exec(`DELETE FROM notification_deliveries WHERE job_id IN (SELECT id FROM notification_jobs WHERE user_id=${testUserId});DELETE FROM notification_jobs WHERE user_id=${testUserId};DELETE FROM notification_preferences WHERE user_id=${testUserId};DELETE FROM push_subscriptions WHERE user_id=${testUserId};DELETE FROM tasks WHERE user_id=${testUserId};DELETE FROM remote_tasks WHERE user_id=${testUserId};DELETE FROM remote_task_lists WHERE user_id=${testUserId};DELETE FROM task_plans WHERE user_id=${testUserId};DELETE FROM oauth_connections WHERE user_id=${testUserId};`);
+  multiDb.exec(`DELETE FROM notification_deliveries WHERE job_id IN (SELECT id FROM notification_jobs WHERE user_id=${testUserId});DELETE FROM notification_jobs WHERE user_id=${testUserId};DELETE FROM notification_preferences WHERE user_id=${testUserId};DELETE FROM push_subscriptions WHERE user_id=${testUserId};DELETE FROM action_journal WHERE user_id=${testUserId};DELETE FROM tasks WHERE user_id=${testUserId};DELETE FROM remote_tasks WHERE user_id=${testUserId};DELETE FROM remote_task_lists WHERE user_id=${testUserId};DELETE FROM task_plans WHERE user_id=${testUserId};DELETE FROM oauth_connections WHERE user_id=${testUserId};`);
   // Insert per-user oauth_connections (replaces legacy saveSetting for tokens)
   multiDb.prepare(`
     INSERT INTO oauth_connections (user_id, provider, provider_account_id, provider_email, encrypted_refresh_token, scopes, generation, status)
@@ -141,6 +142,31 @@ test("scheduling a remote task, moving it and resizing it sends no provider writ
   assert.equal(upstream.writes(source).length,0);
   const stale=await route.PATCH(request("PATCH",{...ref(original),scheduled_at:"2026-11-03T08:00:00.000Z"})); assert.equal(stale.status,409);
   }
+});
+
+test("provider task planning undo is local-only and idempotent",async()=>{
+  for(const source of ["microsoft","google"]){
+    let task=item(await (await list()).json(),source),originalVersion=task.schedule_version;
+    const scheduled=await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2026-11-02T08:00:00.000Z",duration_minutes:60}));
+    assert.equal(scheduled.status,200);task=await scheduled.json();assert.equal(task.undo?.actionType,"provider_task_planned");
+    const undoRequest=()=>new Request("http://localhost:3000/api/actions",{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({operationId:task.undo.operationId})});
+    const providerCalls=upstream.calls.length;
+    const undone=await actionsRoute.POST(undoRequest());assert.equal(undone.status,200);assert.equal((await undone.json()).alreadyUndone,false);
+    assert.equal(upstream.calls.length,providerCalls);
+    const refreshed=item(await (await list()).json(),source);assert.equal(refreshed.scheduled_at,null);assert.equal(refreshed.schedule_version,originalVersion+2);
+    const repeated=await actionsRoute.POST(undoRequest());assert.equal(repeated.status,200);assert.equal((await repeated.json()).alreadyUndone,true);
+  }
+});
+
+test("provider task planning undo rejects a later local plan change",async()=>{
+  let task=item(await (await list()).json(),"google");
+  task=await (await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2026-11-02T09:00:00.000Z"}))).json();
+  const firstUndo=task.undo.operationId;
+  const changed=await route.PATCH(request("PATCH",{...ref(task),scheduled_at:"2026-11-02T11:00:00.000Z"}));assert.equal(changed.status,200);
+  const providerCalls=upstream.calls.length;
+  const response=await actionsRoute.POST(new Request("http://localhost:3000/api/actions",{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({operationId:firstUndo})}));
+  assert.equal(response.status,409);assert.match((await response.json()).error,/planas jau pasikeitė/);assert.equal(upstream.calls.length,providerCalls);
+  const plan=multiDb.prepare("SELECT scheduled_at FROM task_plans WHERE user_id=? AND task_key=?").get(testUserId,task.key);assert.equal(plan.scheduled_at,"2026-11-02T11:00:00.000Z");
 });
 
 test("task routes atomically replace and cancel task-start notification jobs",async()=>{

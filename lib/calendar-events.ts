@@ -1,6 +1,7 @@
 import {isCalendarTimeZone,matchingCalendarTimeZone,unambiguousZonedProviderDateTime} from "./calendar-time-zone.ts";
 import {calendarRecurrenceWeekdays,graphCalendarRecurrence,googleCalendarRecurrence,parseCalendarRecurrence,parseGoogleCalendarRecurrence,parseGraphCalendarRecurrence,splitCalendarRecurrence,type CalendarRecurrence,type CalendarRecurrenceContext} from "./calendar-recurrence.ts";
 import {calendarCreateIdentity,calendarCreateOperationId} from "./calendar-create.ts";
+import type {ActionSummary} from "./action-journal.ts";
 
 export type CalendarProvider = "google" | "outlook";
 export type CalendarResponseStatus = "needsAction" | "accepted" | "tentative" | "declined";
@@ -8,6 +9,7 @@ export type CalendarVisibility = "default" | "public" | "private" | "personal" |
 export type CalendarReminder = {mode:"default"|"none"|"minutes"|"custom";minutes?:number};
 export type CalendarEvent = {
   id:string; key:string; provider:CalendarProvider; connectionId:string; version:string;
+  conditionalVersion?:string; providerAccountId?:string;
   calendarId:string; calendarName?:string; calendarColor?:string; accountLabel?:string; accountEmail?:string;
   mirrorTaskKey?:string|null;
   summary:string; description?:string; location?:string; start:{dateTime?:string;date?:string}; end:{dateTime?:string;date?:string};
@@ -17,6 +19,7 @@ export type CalendarEvent = {
   originalStart?:{dateTime?:string;date?:string};
   canRespond:boolean; responseStatus?:CalendarResponseStatus;
   showAs:"free"|"tentative"|"busy"|"oof"|"workingElsewhere"|"unknown"; visibility:CalendarVisibility; reminder:CalendarReminder; timeZone?:string;
+  undo?:ActionSummary;
 };
 export class CalendarError extends Error {
   status:number;
@@ -24,7 +27,7 @@ export class CalendarError extends Error {
 }
 export type CalendarSeriesSnapshot={seriesId:string;version:string;startDate:string;recurrence:CalendarRecurrence|null;supported:boolean;readonlyReason?:string};
 export type CalendarSeriesSplitResult=CalendarSeriesSnapshot&{previousSeriesId:string;newSeriesId:string;exceptionsReset:true};
-type Gateway = {connection:()=>string|null;request:(path:string,init?:RequestInit)=>Promise<any>;mirrorTaskKey?:(raw:any,calendarId:string)=>string|null};
+type Gateway = {connection:()=>string|null;accountId?:()=>string|null;request:(path:string,init?:RequestInit)=>Promise<any>;mirrorTaskKey?:(raw:any,calendarId:string)=>string|null;recordUpdated?:(before:CalendarEvent,after:CalendarEvent,input:Record<string,unknown>)=>ActionSummary|undefined};
 const locks=new Map<string,Promise<unknown>>();
 function instant(value:unknown) {
   if (typeof value !== "string" || !/(Z|[+-]\d{2}:\d{2})$/i.test(value) || !Number.isFinite(Date.parse(value))) throw new CalendarError("Pateik teisingą laiką su laiko zona.");
@@ -98,6 +101,7 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
   const seriesId=recurringInstance&&typeof rawSeriesId==="string"&&rawSeriesId?rawSeriesId:recurringMaster?String(raw.id):undefined;
   const originalStart=recurringInstance?(google?(raw.originalStartTime?.date?{date:String(raw.originalStartTime.date)}:raw.originalStartTime?.dateTime?{dateTime:instant(raw.originalStartTime.dateTime)}:undefined):typeof raw.originalStart==="string"&&raw.originalStart?(allDay?{date:raw.originalStart.slice(0,10)}:{dateTime:instant(raw.originalStart)}):undefined):undefined;
   const version=String((google ? raw.etag : raw["@odata.etag"] || raw.changeKey) || "");
+  const conditionalVersion=String((google ? raw.etag : raw["@odata.etag"]) || "");
   const owner=google ? raw.organizer?.self === true : raw.isOrganizer === true;
   const special=google && ((raw.eventType && raw.eventType !== "default") || raw.locked);
   const cancelled=google ? raw.status === "cancelled" : raw.isCancelled;
@@ -122,7 +126,7 @@ export function normalizeEvent(provider:CalendarProvider,raw:any,connectionId:st
   const attendees=rawAttendees.length ? rawAttendees.map((a:any)=>google
     ? {email:String(a.email||""),name:a.displayName||undefined,self:Boolean(a.self),responseStatus:a.responseStatus||"needsAction"}
     : {email:String(a.emailAddress?.address||""),name:a.emailAddress?.name||undefined,self:false,responseStatus:a.status?.response==="accepted"?"accepted":a.status?.response==="declined"?"declined":a.status?.response==="tentativelyAccepted"?"tentative":"needsAction"}) : undefined;
-  return {id:raw.id,key:calendarEventKey(provider,connectionId,calendarId,raw.id),provider,connectionId,version,calendarId,...(calendarName ? {calendarName} : {}),...(calendarColor ? {calendarColor} : {}),summary:(google ? raw.summary : raw.subject) || "Be pavadinimo",
+  return {id:raw.id,key:calendarEventKey(provider,connectionId,calendarId,raw.id),provider,connectionId,version,...(conditionalVersion?{conditionalVersion}:{}),calendarId,...(calendarName ? {calendarName} : {}),...(calendarColor ? {calendarColor} : {}),summary:(google ? raw.summary : raw.subject) || "Be pavadinimo",
     ...(description ? {description} : {}),
     ...(location ? {location} : {}),
     start:google ? raw.start : allDay ? {date:graphDate(raw.start)} : {dateTime:graphTime(raw.start)},end:google ? raw.end : allDay ? {date:graphDate(raw.end)} : {dateTime:graphTime(raw.end)},
@@ -136,7 +140,8 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
   function normalize(raw:any,connectionId:string,calendarId:string,calendarName?:string,calendarColor?:string) {
     const event=normalizeEvent(provider,raw,connectionId,calendarId,calendarName,calendarColor);
     // Explicit null also clears a previously confirmed link after a PATCH.
-    return {...event,mirrorTaskKey:google ? null : gateway.mirrorTaskKey?.(raw,calendarId) ?? null};
+    const providerAccountId=gateway.accountId?.();
+    return {...event,...(providerAccountId?{providerAccountId}:{}),mirrorTaskKey:google ? null : gateway.mirrorTaskKey?.(raw,calendarId) ?? null};
   }
   const headers={Prefer:'outlook.timezone="UTC"'};
   function connected(id?:unknown) {
@@ -218,6 +223,13 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     const pages=await Promise.all(calendars.map(c=>listOne(times.start,times.end,c.id,c.name,c.color,connectionId)));
     return pages.flat();
   }
+  async function read(input:Record<string,unknown>) {
+    if(!input||typeof input!=="object"||Array.isArray(input)||Object.keys(input).some(key=>!["id","calendarId","connectionId"].includes(key)))throw new CalendarError("Neteisinga įvykio nuoroda.");
+    const eventId=identifier(input.id,"įvykio ID"),calendarId=calendarIdentifier(input.calendarId),connectionId=connected(input.connectionId);
+    const raw=await gateway.request(eventPath(calendarId,eventId),{headers});connected(connectionId);
+    if(raw?.id!==eventId)throw new CalendarError("Tiekėjas grąžino kito įvykio duomenis.",502);
+    return normalize(raw,connectionId,calendarId);
+  }
   async function update(input:Record<string,unknown>) {
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new CalendarError("Neteisingi įvykio duomenys.");
     const allowed=new Set(["id","calendarId","connectionId","version","start","end","allDay","timeZone","summary","description","location","attendees","confirmAttendees","showAs","visibility","reminder"]);
@@ -259,7 +271,7 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       const base=eventPath(calendarId,eventId);
       const raw=await gateway.request(base,{headers});connected(connectionId);
       if (raw?.id!==eventId) throw new CalendarError("Tiekėjas grąžino kito įvykio duomenis. Atnaujink kalendorių.",502);
-      const current=normalizeEvent(provider,raw,connectionId,calendarId);
+      const current=normalize(raw,connectionId,calendarId);
       if (!current.editable) throw new CalendarError(current.readOnlyReason,403);
       if (current.version !== input.version) throw new CalendarError("Įvykis jau pakeistas kitur. Atnaujink kalendorių ir peržiūrėk laiką.",409);
       const modeChanged=current.allDay!==allDayInput;
@@ -299,7 +311,10 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
       const updated=await gateway.request(base+(google ? "?sendUpdates=all&conferenceDataVersion=1" : ""),{method:"PATCH",headers:{...headers,...((google || raw["@odata.etag"]) ? {"If-Match":current.version} : {})},body:JSON.stringify(patch)});
       connected(connectionId);
       if (updated?.id!==eventId) throw new CalendarError("Tiekėjas nepatvirtino pasirinkto įvykio pakeitimo. Atnaujink kalendorių.",502);
-      return normalize(updated,connectionId,calendarId);
+      const normalized=normalize(updated,connectionId,calendarId);
+      let undo:ActionSummary|undefined;
+      try{undo=gateway.recordUpdated?.(current,normalized,input);}catch{/* Provider mutation succeeded; journal failure must not turn it into an ambiguous retry. */}
+      return {...normalized,...(undo?{undo}:{})};
     });
     locks.set(key,operation);
     try {return await operation;} finally {if (locks.get(key)===operation) locks.delete(key);}
@@ -432,5 +447,5 @@ export function createCalendarService(provider:CalendarProvider,gateway:Gateway)
     locks.set(key,operation);
     try{return await operation;}finally{if(locks.get(key)===operation)locks.delete(key);}
   }
-  return {list,update,series,updateSeries,splitSeries,remove,respond};
+  return {list,read,update,series,updateSeries,splitSeries,remove,respond};
 }

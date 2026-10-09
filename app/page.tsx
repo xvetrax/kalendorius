@@ -323,7 +323,7 @@ export default function Planner() {
     try {
       const updated=await responseJson<CalEvent>(await fetch(`/api/${event.provider==="outlook"?"microsoft":"google"}/events`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({id:event.id,calendarId:event.calendarId,connectionId:event.connectionId,version:event.version,...patch})}));
       setEvents(current=>current.map(item=>item.key===event.key ? {...item,...updated} : item));
-      setToast("Įvykio pakeitimai išsaugoti.");await load();
+      offerUndo(updated.undo);setToast("Įvykio pakeitimai išsaugoti.");await load();
     } catch(error) {await load();throw error;}
   }
   async function respondEvent(event:CalEvent,responseStatus:Exclude<CalendarResponseStatus,"needsAction">) {

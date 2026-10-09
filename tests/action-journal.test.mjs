@@ -99,6 +99,19 @@ test("journal retains at most fifty actions per user",async()=>{
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM action_journal WHERE user_id=?").get(userA).count,50);
 });
 
+test("journal retention and history limits preserve resumable provider operations",async()=>{
+  const operationId="44444444-4444-4444-8444-444444444444",expired=new Date(clock-ACTION_UNDO_TTL_MS).toISOString();
+  db.prepare(`INSERT INTO action_journal
+    (user_id,operation_id,action_type,entity_type,entity_key,label,before_json,after_json,status,undo_expires_at,retained_until,created_at)
+    VALUES (?,?,?,?,?,?,?,?,'applying',?,?,?)`).run(userA,operationId,"provider_event_moved","provider_event","event:key","Tęsiamas atšaukimas","{}","{}",expired,expired,expired);
+  const a=services();for(let index=0;index<55;index+=1)await a.tasks.create({title:`Naujesnė ${index}`});
+  const applying=db.prepare("SELECT status FROM action_journal WHERE user_id=? AND operation_id=?").get(userA,operationId);
+  assert.equal(applying.status,"applying");
+  const summary=a.actions.list().find(item=>item.operationId===operationId);
+  assert.equal(summary.status,"applying");assert.equal(summary.canUndo,true);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM action_journal WHERE user_id=? AND status<>'applying'").get(userA).count,50);
+});
+
 test("legacy local task without a plan can be changed and undone",async()=>{
   const a=services();let task=await a.tasks.create({title:"Sena vietinė"});
   db.prepare("DELETE FROM task_plans WHERE user_id=? AND task_key=?").run(userA,task.key);
@@ -117,4 +130,25 @@ test("actions API enforces authentication, origin and idempotent undo",async()=>
   assert.equal(response.status,200);assert.equal((await response.json()).alreadyUndone,false);
   const repeated=await actionsRoute.POST(request({method:"POST",body:{operationId:task.undo.operationId}}));
   assert.equal(repeated.status,200);assert.equal((await repeated.json()).alreadyUndone,true);
+});
+
+test("provider event undo survives a lost response and resumes from applying after restart",async()=>{
+  const operationId="33333333-3333-4333-8333-333333333333",base={kind:"provider_event",provider:"google",id:"event-1",key:'["google","41","primary","event-1"]',title:"Atkuriamas",accountId:"account-1",connectionId:"41",calendarId:"primary",allDay:false,timeZone:"Europe/Vilnius"};
+  const before={...base,version:'"v1"',start:{dateTime:"2099-10-08T08:00:00.000Z"},end:{dateTime:"2099-10-08T09:00:00.000Z"}};
+  const after={...base,version:'"v2"',start:{dateTime:"2099-10-08T10:00:00.000Z"},end:{dateTime:"2099-10-08T11:00:00.000Z"}};
+  db.prepare(`INSERT INTO action_journal
+    (user_id,operation_id,action_type,entity_type,entity_key,label,before_json,after_json,status,undo_expires_at,retained_until,created_at)
+    VALUES (?,?,?,?,?,?,?,?,'available',?,?,?)`).run(userA,operationId,"provider_event_moved","provider_event",after.key,"Perkeltas įvykis",JSON.stringify(before),JSON.stringify(after),new Date(clock+ACTION_UNDO_TTL_MS).toISOString(),new Date(clock+86400_000).toISOString(),new Date(clock).toISOString());
+  let live=after,reads=0,restores=0;
+  const providers={
+    async readEvent(){reads+=1;if(reads===2)throw new Error("simulated read timeout");return live;},
+    async restoreEvent(){restores+=1;live={...before,version:'"v3"'};throw new Error("simulated lost patch response");},
+  };
+  const first=createActionJournalService(db,userA,notifications,{now,providers});
+  await assert.rejects(first.undo(operationId),/lost patch response/);
+  assert.equal(db.prepare("SELECT status FROM action_journal WHERE operation_id=?").get(operationId).status,"applying");
+  clock+=ACTION_UNDO_TTL_MS+1;
+  assert.equal(first.list()[0].canUndo,true);
+  const restarted=createActionJournalService(db,userA,notifications,{now,providers});
+  const result=await restarted.undo(operationId);assert.equal(result.alreadyUndone,false);assert.equal(result.action.status,"undone");assert.equal(restores,1);
 });

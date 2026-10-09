@@ -7,6 +7,7 @@ function statusLabel(action:ActionSummary){
   if(action.status==="undone")return "Atšaukta";
   if(action.status==="conflict")return "Pasikeitė vėliau";
   if(action.status==="expired")return "Nebegalioja";
+  if(action.status==="applying")return "Atšaukimą reikia užbaigti";
   return "Galima atšaukti";
 }
 export function ActionHistoryPanel({version,online,onUndo}:{version:number;online:boolean;onUndo:(action:ActionSummary)=>Promise<void>}){
@@ -30,10 +31,16 @@ export function ActionHistoryPanel({version,online,onUndo}:{version:number;onlin
   async function undo(action:ActionSummary){
     if(busy)return;setBusy(action.operationId);setError("");
     try{await onUndo(action);setItems(current=>current.map(item=>item.operationId===action.operationId?{...item,status:"undone",canUndo:false}:item));}
-    catch(cause){setError(cause instanceof Error?cause.message:"Veiksmo atšaukti nepavyko.");}
+    catch(cause){
+      setError(cause instanceof Error?cause.message:"Veiksmo atšaukti nepavyko.");
+      try{
+        const response=await fetch("/api/actions",{cache:"no-store"}),data=await response.json().catch(()=>({}));
+        if(response.ok&&Array.isArray(data.items))setItems(data.items);
+      }catch{}
+    }
     finally{setBusy(null);}
   }
   return <section className="actionHistory" aria-label="Paskutiniai veiksmai">
-    {loading?<p className="formHint" role="status">Kraunama veiksmų istorija…</p>:error?<p className="formError" role="alert">{error}</p>:!items.length?<p className="formHint">Atšaukiamų veiksmų dar nėra.</p>:<ul>{items.map(action=>{const canUndo=action.status==="available"&&action.canUndo&&Date.parse(action.undoExpiresAt)>now,current=action.status==="available"&&!canUndo?{...action,status:"expired" as const,canUndo:false}:action;return <li key={action.operationId}><div><strong>{action.label}</strong><small>{new Date(action.createdAt).toLocaleString("lt-LT")} · {statusLabel(current)}</small></div>{canUndo&&<button type="button" disabled={!online||busy===action.operationId} onClick={()=>void undo(action)}>{busy===action.operationId?"Atšaukiama…":"Atšaukti"}</button>}</li>;})}</ul>}
+    {loading?<p className="formHint" role="status">Kraunama veiksmų istorija…</p>:<>{error&&<p className="formError" role="alert">{error}</p>}{!items.length?!error&&<p className="formHint">Atšaukiamų veiksmų dar nėra.</p>:<ul>{items.map(action=>{const canUndo=action.canUndo&&(action.status==="applying"||(action.status==="available"&&Date.parse(action.undoExpiresAt)>now)),current=action.status==="available"&&!canUndo?{...action,status:"expired" as const,canUndo:false}:action;return <li key={action.operationId}><div><strong>{action.label}</strong><small>{new Date(action.createdAt).toLocaleString("lt-LT")} · {statusLabel(current)}</small></div>{canUndo&&<button type="button" disabled={!online||busy===action.operationId} onClick={()=>void undo(action)}>{busy===action.operationId?"Atšaukiama…":action.status==="applying"?"Tęsti atšaukimą":"Atšaukti"}</button>}</li>;})}</ul>}</>}
   </section>;
 }

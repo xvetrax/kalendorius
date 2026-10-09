@@ -251,7 +251,7 @@ function copyAllTablesTo(destination: string) {
 export function createBackup(): Buffer {
   const temporary = makeTempPath("planner-backup");
   try {
-    db.prepare("DELETE FROM action_journal WHERE retained_until <= ?").run(new Date().toISOString());
+    db.prepare("DELETE FROM action_journal WHERE status <> 'applying' AND retained_until <= ?").run(new Date().toISOString());
     copyAllTablesTo(temporary);
     return fs.readFileSync(temporary);
   } finally {

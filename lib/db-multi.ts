@@ -291,13 +291,13 @@ db.exec(`
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     operation_id    TEXT    NOT NULL,
-    action_type     TEXT    NOT NULL CHECK(action_type IN ('local_task_created','local_task_completed','local_task_planned','local_task_moved','local_task_resized','local_task_unplanned')),
-    entity_type     TEXT    NOT NULL CHECK(entity_type = 'local_task'),
+    action_type     TEXT    NOT NULL CHECK(action_type IN ('local_task_created','local_task_completed','local_task_planned','local_task_moved','local_task_resized','local_task_unplanned','provider_task_planned','provider_task_moved','provider_task_resized','provider_task_unplanned','provider_event_moved','provider_event_resized')),
+    entity_type     TEXT    NOT NULL CHECK(entity_type IN ('local_task','provider_task','provider_event')),
     entity_key      TEXT    NOT NULL,
     label           TEXT    NOT NULL,
     before_json     TEXT,
     after_json      TEXT    NOT NULL,
-    status          TEXT    NOT NULL DEFAULT 'available' CHECK(status IN ('available','undone','conflict')),
+    status          TEXT    NOT NULL DEFAULT 'available' CHECK(status IN ('available','applying','undone','conflict')),
     undo_expires_at TEXT    NOT NULL,
     retained_until  TEXT    NOT NULL,
     created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -367,7 +367,8 @@ db.exec(`
 // v4: encrypted, user-scoped Web Push subscriptions and persistent send throttles.
 // v5: notification preferences, durable jobs and per-device delivery state.
 // v6: user-scoped local-task action history with short-lived undo capabilities.
-export const DATABASE_SCHEMA_VERSION = 6;
+// v7: provider-task planning and provider-calendar move undo journal entries.
+export const DATABASE_SCHEMA_VERSION = 7;
 
 type SqliteColumn = { name: string };
 type SqliteIndex = { name: string; unique: number };
@@ -718,13 +719,13 @@ function migrateMultiAccountSchema(): void {
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         operation_id    TEXT    NOT NULL,
-        action_type     TEXT    NOT NULL CHECK(action_type IN ('local_task_created','local_task_completed','local_task_planned','local_task_moved','local_task_resized','local_task_unplanned')),
-        entity_type     TEXT    NOT NULL CHECK(entity_type = 'local_task'),
+        action_type     TEXT    NOT NULL CHECK(action_type IN ('local_task_created','local_task_completed','local_task_planned','local_task_moved','local_task_resized','local_task_unplanned','provider_task_planned','provider_task_moved','provider_task_resized','provider_task_unplanned','provider_event_moved','provider_event_resized')),
+        entity_type     TEXT    NOT NULL CHECK(entity_type IN ('local_task','provider_task','provider_event')),
         entity_key      TEXT    NOT NULL,
         label           TEXT    NOT NULL,
         before_json     TEXT,
         after_json      TEXT    NOT NULL,
-        status          TEXT    NOT NULL DEFAULT 'available' CHECK(status IN ('available','undone','conflict')),
+        status          TEXT    NOT NULL DEFAULT 'available' CHECK(status IN ('available','applying','undone','conflict')),
         undo_expires_at TEXT    NOT NULL,
         retained_until  TEXT    NOT NULL,
         created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -778,6 +779,38 @@ function migrateMultiAccountSchema(): void {
     }
     if (!notificationRuntimeColumns.includes("pause_owner")) {
       db.exec("ALTER TABLE notification_runtime ADD COLUMN pause_owner TEXT");
+    }
+
+    if (currentVersion < 7) {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_action_journal_user_created;
+        DROP INDEX IF EXISTS idx_action_journal_retention;
+        ALTER TABLE action_journal RENAME TO action_journal_v6;
+        CREATE TABLE action_journal (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          operation_id    TEXT    NOT NULL,
+          action_type     TEXT    NOT NULL CHECK(action_type IN ('local_task_created','local_task_completed','local_task_planned','local_task_moved','local_task_resized','local_task_unplanned','provider_task_planned','provider_task_moved','provider_task_resized','provider_task_unplanned','provider_event_moved','provider_event_resized')),
+          entity_type     TEXT    NOT NULL CHECK(entity_type IN ('local_task','provider_task','provider_event')),
+          entity_key      TEXT    NOT NULL,
+          label           TEXT    NOT NULL,
+          before_json     TEXT,
+          after_json      TEXT    NOT NULL,
+          status          TEXT    NOT NULL DEFAULT 'available' CHECK(status IN ('available','applying','undone','conflict')),
+          undo_expires_at TEXT    NOT NULL,
+          retained_until  TEXT    NOT NULL,
+          created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          applied_at      TEXT,
+          UNIQUE(user_id, operation_id)
+        );
+        INSERT INTO action_journal
+          (id,user_id,operation_id,action_type,entity_type,entity_key,label,before_json,after_json,status,undo_expires_at,retained_until,created_at,applied_at)
+        SELECT id,user_id,operation_id,action_type,entity_type,entity_key,label,before_json,after_json,status,undo_expires_at,retained_until,created_at,applied_at
+        FROM action_journal_v6;
+        DROP TABLE action_journal_v6;
+        CREATE INDEX idx_action_journal_user_created ON action_journal(user_id, created_at DESC);
+        CREATE INDEX idx_action_journal_retention ON action_journal(retained_until);
+      `);
     }
 
     if (currentVersion < 2) {

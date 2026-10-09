@@ -81,9 +81,9 @@ after(() => {
   rmSync(temp, { recursive: true, force: true });
 });
 
-test("schema v6 sukuria patvarų pranešimų ir veiksmų registrą", () => {
-  assert.equal(DATABASE_SCHEMA_VERSION, 6);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 6);
+test("schema v7 sukuria patvarų pranešimų ir veiksmų registrą", () => {
+  assert.equal(DATABASE_SCHEMA_VERSION, 7);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 7);
   for (const table of ["notification_preferences", "notification_jobs", "notification_deliveries", "notification_runtime"]) {
     assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
   }

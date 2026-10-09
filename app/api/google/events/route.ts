@@ -8,7 +8,7 @@ import {
 import { calendarCreateIdentity, calendarCreateOperationId } from "@/lib/calendar-create";
 import { googleCalendarRecurrence, parseCalendarRecurrence } from "@/lib/calendar-recurrence";
 import { isCalendarTimeZone } from "@/lib/calendar-time-zone";
-import { requireUserContext } from "@/lib/db-multi";
+import { db, requireUserContext } from "@/lib/db-multi";
 import { googleFetchForUser } from "@/lib/google";
 import { apiError, assertSameOrigin } from "@/lib/http";
 import { calendarSelectionVersion } from "@/lib/calendar-selection";
@@ -16,6 +16,7 @@ import { getConnection, getConnectionById, listConnections, type OAuthConnection
 import { googleCalendarCatalogForConnection } from "../calendars/route.ts";
 import { allSettledLimited, calendarAccountError } from "@/lib/calendar-multi";
 import { resolveCalendarAccountColors } from "@/lib/calendar-colors";
+import { createCalendarActionJournalHooks } from "@/lib/action-journal";
 
 export const runtime = "nodejs";
 
@@ -32,8 +33,10 @@ function makeGoogleCalendarService(userId: number, conn: OAuthConnectionRow) {
       const c = getConnectionById(userId, conn.id, "google");
       return c && c.id === conn.id && c.status === "active" ? connectionId : null;
     },
+    accountId:()=>conn.provider_account_id,
     request: (path: string, init?: RequestInit) =>
       googleFetchForUser(userId, conn, path, init),
+    recordUpdated:createCalendarActionJournalHooks(db,userId).recordUpdated,
   });
 }
 

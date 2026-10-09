@@ -57,6 +57,7 @@ for(const provider of ["google","microsoft"]){
 
 const routes={google:await import("../app/api/google/events/route.ts"),microsoft:await import("../app/api/microsoft/events/route.ts")};
 const calendarCatalogs={google:await import("../app/api/google/calendars/route.ts"),microsoft:await import("../app/api/microsoft/calendars/route.ts")};
+const actionsRoute=await import("../app/api/actions/route.ts");
 const microsoftCalendars=calendarCatalogs.microsoft;
 after(()=>{globalThis.fetch=originalFetch;db.close();hooks.deregister();rmSync(temp,{recursive:true,force:true});});
 const inputFor=e=>({id:e.id,calendarId:e.calendarId,version:e.version,connectionId:e.connectionId,start:e.start.dateTime,end:e.end.dateTime});
@@ -68,6 +69,7 @@ for(const provider of ["google","microsoft"]){
   const route=routes[provider],url=`http://localhost:3000/api/${provider}/events`;
   const patch=(body,origin="http://localhost:3000")=>route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:origin,"Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify(body)}));
   const post=(body,origin="http://localhost:3000")=>route.POST(new Request(url,{method:"POST",headers:{Origin:origin,"Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({operationId:body.operationId||operationId(),...body})}));
+  const undo=(operation)=>actionsRoute.POST(new Request("http://localhost:3000/api/actions",{method:"POST",headers:{Origin:"http://localhost:3000","Content-Type":"application/json",Cookie:sessionCookie},body:JSON.stringify({operationId:operation})}));
   test(`${provider} actual routes: normalized list, move, duration, source reload and conflict status`,async()=>{
     const listed=await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}));assert.equal(listed.status,200);assert.equal(listed.headers.get("cache-control"),"no-store");
     const event=(await listed.json()).items.find(e=>e.editable&&!e.attendeeCount);assert.ok(event);
@@ -82,6 +84,37 @@ for(const provider of ["google","microsoft"]){
   test(`${provider} actual routes: malformed input and arbitrary provider patch are rejected`,async()=>{
     for(const input of [null,[],{}, {id:".."}, {id:"x",patch:{attendees:[]}}])assert.equal((await patch(input)).status,400);
     const broken=await route.PATCH(new Request(url,{method:"PATCH",headers:{Origin:"http://localhost:3000",Cookie:sessionCookie},body:"{"}));assert.equal(broken.status,400);
+  });
+  test(`${provider} event move undo restores the provider object once`,async()=>{
+    const event=(await (await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items.find(item=>item.editable&&!item.attendeeCount&&!item.recurring&&!item.allDay);assert.ok(event);
+    const original={start:event.start.dateTime,end:event.end.dateTime},delta=2*3600_000;
+    const response=await patch({...inputFor(event),start:new Date(Date.parse(original.start)+delta).toISOString(),end:new Date(Date.parse(original.end)+delta).toISOString()});assert.equal(response.status,200);
+    const moved=await response.json();assert.equal(moved.undo?.actionType,"provider_event_moved");
+    const first=await undo(moved.undo.operationId);assert.equal(first.status,200);assert.equal((await first.json()).alreadyUndone,false);
+    const restored=(await (await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items.find(item=>item.key===event.key);assert.equal(restored.start.dateTime,original.start);assert.equal(restored.end.dateTime,original.end);
+    const repeated=await undo(moved.undo.operationId);assert.equal(repeated.status,200);assert.equal((await repeated.json()).alreadyUndone,true);
+  });
+  test(`${provider} concurrent event undo requests restore once and converge`,async()=>{
+    const event=(await (await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items.find(item=>item.editable&&!item.attendeeCount&&!item.recurring&&!item.allDay);assert.ok(event);
+    const original={start:event.start.dateTime,end:event.end.dateTime},delta=3*3600_000;
+    const moved=await (await patch({...inputFor(event),start:new Date(Date.parse(original.start)+delta).toISOString(),end:new Date(Date.parse(original.end)+delta).toISOString()})).json();assert.ok(moved.undo);
+    const responses=await Promise.all([undo(moved.undo.operationId),undo(moved.undo.operationId)]);assert.deepEqual(responses.map(response=>response.status),[200,200]);
+    const results=await Promise.all(responses.map(response=>response.json()));assert.deepEqual(results.map(result=>result.alreadyUndone).sort(),[false,true]);
+    const restored=(await (await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items.find(item=>item.key===event.key);assert.equal(restored.start.dateTime,original.start);assert.equal(restored.end.dateTime,original.end);
+  });
+  test(`${provider} event move undo rejects a later provider change`,async()=>{
+    const event=(await (await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items.find(item=>item.editable&&!item.attendeeCount&&!item.recurring&&!item.allDay);assert.ok(event);
+    const movedResponse=await patch({...inputFor(event),start:new Date(Date.parse(event.start.dateTime)+3600_000).toISOString(),end:new Date(Date.parse(event.end.dateTime)+3600_000).toISOString()});assert.equal(movedResponse.status,200);const moved=await movedResponse.json();assert.ok(moved.undo);
+    const external=await patch({...inputFor(moved),summary:`${provider} pakeista vėliau`});assert.equal(external.status,200);
+    const undoResponse=await undo(moved.undo.operationId);assert.equal(undoResponse.status,409);assert.match((await undoResponse.json()).error,/pakeistas kitur/);
+    const current=(await (await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items.find(item=>item.key===event.key);assert.equal(current.start.dateTime,moved.start.dateTime);
+  });
+  test(`${provider} mixed and recurring event edits do not expose unsafe undo`,async()=>{
+    const events=(await (await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items;
+    const ordinary=events.find(item=>item.editable&&!item.attendeeCount&&!item.recurring&&!item.allDay);assert.ok(ordinary);
+    const mixed=await patch({...inputFor(ordinary),summary:`${provider} mišrus pakeitimas`,start:new Date(Date.parse(ordinary.start.dateTime)+3600_000).toISOString(),end:new Date(Date.parse(ordinary.end.dateTime)+3600_000).toISOString()});assert.equal(mixed.status,200);assert.equal((await mixed.json()).undo,undefined);
+    const recurring=events.find(item=>item.editable&&item.recurring&&!item.allDay);assert.ok(recurring);
+    const recurringChanged=await patch({...inputFor(recurring),start:new Date(Date.parse(recurring.start.dateTime)+3600_000).toISOString(),end:new Date(Date.parse(recurring.end.dateTime)+3600_000).toISOString()});assert.equal(recurringChanged.status,200);assert.equal((await recurringChanged.json()).undo,undefined);
   });
   test(`${provider} actual routes: detailed timed properties persist and reload`,async()=>{
     const event=(await (await route.GET(new Request(url,{headers:{Cookie:sessionCookie}}))).json()).items.find(item=>item.editable&&!item.attendeeCount&&!item.recurring);assert.ok(event);

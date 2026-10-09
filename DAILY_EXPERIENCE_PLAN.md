@@ -1,6 +1,6 @@
 # Kasdienės patirties ir išmanaus planavimo įgyvendinimo planas
 
-Atnaujinta: 2026-10-08. Būsena: **DX-1 ir DX-2 vietinių užduočių paketas įgyvendinti; vykdoma DX-2 tiekėjų veiksmų dalis**.
+Atnaujinta: 2026-10-09. Būsena: **DX-1 ir DX-2 automatinė apimtis įgyvendinta; liko ribota DX-2 gyvų paskyrų priėmimo patikra**.
 
 ## Tikslas
 
@@ -60,9 +60,11 @@ PWA neprisijungusio plano ekranas tikrina tikrą programėlės serverio būseną
 
 **Prioritetas:** antras. **Priklausomybė:** DX-1 bendri veiksmų komponentai.
 
-**Būsena:** vietinių užduočių dalis įgyvendinta 2026-10-08. Vietinės užduoties sukūrimas, užbaigimas, planavimas, perkėlimas, trukmės keitimas ir išplanavimas turi 15 sekundžių atšaukimo veiksmą. Žurnalas yra patvarus, izoliuotas pagal naudotoją, ribojamas iki 50 įrašų ir saugomas septynias dienas. Pakartotas atšaukimas idempotentiškas, pasikeitusi versija grąžina konfliktą, o atkurta plano versija didinama. Nustatymuose rodoma metaduomenų istorija.
+**Būsena:** automatinė apimtis užbaigta 2026-10-09. Vietinės užduoties sukūrimas, užbaigimas, planavimas, perkėlimas, trukmės keitimas ir išplanavimas turi 15 sekundžių atšaukimo veiksmą. Tą patį vietinio plano atšaukimą gauna Google Tasks ir Microsoft To Do užduoties planavimas, perkėlimas, trukmės keitimas bei išplanavimas; atšaukimas nekeičia tiekėjo užduoties, nes tikslus darbo laikas saugomas tik `task_plans`.
 
-Išorinių Google / Microsoft objektų bei vietinių užduočių su Outlook veidrodžiu atšaukimas sąmoningai paliktas DX-2b. Pirmiausia kiekvienam veiksmui reikia patikimo tiekėjo ETag / versijos ir kompensuojančio API veiksmo; iki tol sąsaja tokiems veiksmams „Atšaukti“ nesiūlo. Pilna kopija įtraukia galiojančią istoriją, naudotojo eksportas — tik jo nepasibaigusius įrašus, o atkūrimas panaikina trumpalaikes atšaukimo galimybes.
+Vienkartinio, redaguojamo, dalyvių ir Outlook veidrodžio neturinčio Google arba Microsoft kalendoriaus įvykio laiko perkėlimas bei trukmės pakeitimas atšaukiamas tik su autoritetingu tiekėjo ETag. Žurnalo `applying` būsena išlieka po neaiškaus tinklo atsakymo, o pakartojimas iš naujo perskaito įvykį ir arba užbaigia jau įvykusį atkūrimą, arba saugiai pritaiko jį vieną kartą. Vėlesnis išorinis pakeitimas, kita paskyra, kalendorius ar jungtis grąžina konfliktą.
+
+Žurnalas yra patvarus, izoliuotas pagal naudotoją, ribojamas iki 50 įrašų ir saugomas septynias dienas. Pakartotas atšaukimas idempotentiškas, pasikeitusi versija grąžina konfliktą, o atkurta plano versija didinama. Nustatymuose rodoma metaduomenų istorija. Pilna kopija įtraukia galiojančią istoriją, naudotojo eksportas — tik jo nepasibaigusius įrašus, o atkūrimas panaikina trumpalaikes atšaukimo galimybes.
 
 ### Apimtis
 
@@ -189,7 +191,7 @@ Išorinių Google / Microsoft objektų bei vietinių užduočių su Outlook veid
 | Paketas | Apimtis | Pilno testavimo vartai |
 | --- | --- | --- |
 | ✅ A | DX-1 „Mano diena“, bendra greito įvedimo forma ir komandų paletė | praėjo: typecheck, 382 Node, build, 79 E2E, HTTP, kalendorių, užduočių ir Docker smoke |
-| 🟡 B | DX-2 atšaukimas ir veiksmų žurnalas | vietinė dalis patikrinta automatiškai; DX-2b tiekėjų ETag kompensacijos ir gyvų paskyrų ribotas bandymas liko |
+| 🟡 B | DX-2 atšaukimas ir veiksmų žurnalas | automatinė vietinių planų ir tiekėjų ETag kompensacijų apimtis praėjo; liko ribotas gyvų Google / Microsoft paskyrų bandymas |
 | C | DX-3 režimai ir darbo laiko nuostatos | papildomai kelių paskyrų izoliacija, pašalintų jungčių valymas ir DST |
 | D | DX-4 planavimo peržiūra bei atominiu būdu pritaikomi pasiūlymai | papildomai deterministinio algoritmo, konfliktų, 23/25 val. dienų ir neaiškios baigties testai |
 | E | DX-5 apžvalgos ir DX-6 galutinis vizualinis / PWA poliravimas | papildomai realūs macOS, Windows, Android bei iPhone prieinamumo ir PWA scenarijai |
@@ -208,4 +210,4 @@ Kiekvienas paketas įgyvendinamas didesne vientisa apimtimi, o pilnas testų rin
 
 ## Kitas vykdomas žingsnis
 
-Tęsti **DX-2b**: atskirai suprojektuoti Google / Microsoft užduoties ar įvykio perkėlimo kompensaciją su autoritetingu ETag patikrinimu. Trinimas, RSVP, serijos skaidymas ir neaiškios tiekėjo baigtys lieka neatšaukiami. Jei tiekėjo sutartis negali garantuoti saugaus grąžinimo, pereiti prie DX-3, neimituojant klaidinančio „Atšaukti“.
+Su gyvomis Google ir Microsoft paskyromis ribotai patikrinti DX-2b vienkartinio įvykio perkėlimą, trukmės pakeitimą, atšaukimą ir išorinės versijos konfliktą. Patvirtinus ETag elgseną pereiti prie **DX-3** režimų bei darbo laiko nuostatų. Trinimas, RSVP, serijos skaidymas, mišrūs įvykio pakeitimai ir Outlook veidrodį turinčių užduočių veiksmai lieka sąmoningai neatšaukiami.

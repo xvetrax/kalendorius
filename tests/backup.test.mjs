@@ -194,10 +194,24 @@ describe("backup", { concurrency: false }, () => {
       assert.equal(backed.prepare("SELECT enabled FROM notification_preferences").get().enabled, 1);
       assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'notification_jobs'").get().count, 0);
       assert.equal(backed.prepare("SELECT COUNT(*) AS count FROM action_journal").get().count,1);
-      assert.equal(backed.prepare("PRAGMA user_version").get().user_version, 6);
+      assert.equal(backed.prepare("PRAGMA user_version").get().user_version, 7);
     } finally {
       backed.close();
     }
+  });
+
+  it("full backup cleanup preserves an expired provider undo that still needs reconciliation", () => {
+    const operationId="44444444-4444-4444-8444-444444444444",expired="2000-01-01T00:00:00.000Z";
+    db.prepare(`INSERT INTO action_journal
+      (user_id,operation_id,action_type,entity_type,entity_key,label,before_json,after_json,status,undo_expires_at,retained_until,created_at)
+      VALUES (?,?,?,?,?,?,?,?,'applying',?,?,?)`).run(testUserId,operationId,"provider_event_moved","provider_event","event:key","Tęsiamas atšaukimas","{}","{}",expired,expired,expired);
+    const backupFile=path.join(temp,"check-applying-backup.db");
+    writeFileSync(backupFile,createBackup(),{mode:0o600});
+    const backed=new DatabaseSync(backupFile,{readOnly:true});
+    try{
+      assert.equal(db.prepare("SELECT status FROM action_journal WHERE operation_id=?").get(operationId)?.status,"applying");
+      assert.equal(backed.prepare("SELECT status FROM action_journal WHERE operation_id=?").get(operationId)?.status,"applying");
+    }finally{backed.close();}
   });
 
   it("user export contains only own work data without any secret columns", () => {
