@@ -44,6 +44,10 @@ Aktualus auditas, funkcijų spragos ir įgyvendinimo etapai: [produkto planas](P
 
 ## Paleidimas
 
+Pilna pakartojama Proxmox VM, Ubuntu, Docker, Tailscale Funnel, OAuth,
+atnaujinimo, DB kopijos ir rollback instrukcija pateikta
+[Proxmox diegimo vadove](docs/PROXMOX_DEPLOYMENT.md).
+
 1. „Microsoft Entra admin center“ užregistruok aplikaciją ir pridėk abu Web redirect URI: `http://localhost:3000/api/auth/microsoft-oidc/callback` prisijungimui ir `http://localhost:3000/api/microsoft/callback` kalendoriaus bei užduočių ryšiui.
 2. Pridėk delegated leidimus: `User.Read`, `Calendars.ReadWrite`, `Tasks.ReadWrite` ir `offline_access`; sukurk Client Secret.
 3. Nukopijuok `.env.example` į `.env`, įrašyk Microsoft Client ID, Client Secret, `INITIAL_ADMIN_EMAIL` ir 64 simbolių šifravimo raktą (`openssl rand -hex 32`).
